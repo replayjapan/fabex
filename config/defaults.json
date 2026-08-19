@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "models": {
+    "codex": {
+      "model": null,
+      "reasoningEffort": "high"
+    },
+    "operational": "sonnet"
+  },
+  "collaboration": {
+    "jointByDefault": true
+  }
+}

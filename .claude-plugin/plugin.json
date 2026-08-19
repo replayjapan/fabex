@@ -1,0 +1,9 @@
+{
+  "name": "fabex",
+  "version": "1.0.0",
+  "description": "Built for Fable: Claude and Codex think independently, converge honestly, and Codex writes the code — stretching your Fable tokens.",
+  "author": {
+    "name": "rePlay, LLC"
+  },
+  "license": "MIT"
+}
