@@ -9,10 +9,11 @@ export const PROJECT_CONFIG_RELATIVE_PATH = '.fabex/config.json';
 export const CODEX_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 export const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const KEYS = {
-  '': new Set(['schemaVersion', 'models', 'collaboration']),
+  '': new Set(['schemaVersion', 'models', 'collaboration', 'display']),
   models: new Set(['claudePrimary', 'codex', 'operational']),
   'models.codex': new Set(['model', 'reasoningEffort']),
-  collaboration: new Set(['jointByDefault'])
+  collaboration: new Set(['jointByDefault']),
+  display: new Set(['replyModeBadge'])
 };
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -74,6 +75,16 @@ function mergeLayer(base, overlay, warnings, name) {
       if ('jointByDefault' in overlay.collaboration) {
         if (typeof overlay.collaboration.jointByDefault === 'boolean') result.collaboration.jointByDefault = overlay.collaboration.jointByDefault;
         else warnings.push('collaboration.jointByDefault must be boolean; using the lower-precedence value');
+      }
+    }
+  }
+  if ('display' in overlay) {
+    if (!isPlainObject(overlay.display)) warnings.push('display must be an object; using the lower-precedence display value');
+    else {
+      warnUnknown(overlay.display, 'display', warnings);
+      if ('replyModeBadge' in overlay.display) {
+        if (['always', 'changes', 'off'].includes(overlay.display.replyModeBadge)) result.display.replyModeBadge = overlay.display.replyModeBadge;
+        else warnings.push('display.replyModeBadge must be always, changes, or off; using the lower-precedence value');
       }
     }
   }

@@ -23,6 +23,8 @@ export function initialState(identity) {
     generation: 0,
     project: { id: identity.projectId, canonicalRoot: identity.canonicalRoot },
     route: 'normal',
+    participants: 'both',
+    returnTo: null,
     task: { id: null, status: null, label: null, joint: { required: false, status: null, decisionId: null } },
     partner: {
       transport: 'official-codex-plugin',
@@ -98,12 +100,40 @@ async function releaseLock(paths) {
 }
 
 async function loadValidated(paths) {
-  const state = await parseJsonFile(paths.stateFile);
+  const parsed = await parseJsonFile(paths.stateFile);
+  const migrated = parsed?.schemaVersion === 1;
+  const state = migrated ? { ...parsed, schemaVersion: STATE_SCHEMA_VERSION, participants: 'both', returnTo: null } : parsed;
   try { validateState(state, paths); } catch (error) {
     const code = error.details?.some((item) => item.includes('schemaVersion')) ? 'schema-mismatch' : 'corrupt';
     throw new StateStoreError(code, error.details?.join('; ') || error.message, error);
   }
-  return state;
+  return { state, migrated };
+}
+
+async function persistMigration(paths) {
+  let locked = false;
+  let temp = null;
+  try {
+    await acquireLock(paths, 'schema-v1-to-v2');
+    locked = true;
+    if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
+    const loaded = await loadValidated(paths);
+    if (!loaded.migrated) return loaded.state;
+    const migrated = { ...loaded.state, generation: loaded.state.generation + 1 };
+    validateState(migrated, paths);
+    temp = `${paths.stateFile}.tmp.${process.pid}.${randomUUID()}`;
+    await writeJsonSynced(paths.transactionFile, migrated, 'wx');
+    await writeJsonSynced(temp, migrated, 'wx');
+    await rename(temp, paths.stateFile);
+    temp = null;
+    await fsyncDirectory(paths.projectDir);
+    await unlink(paths.transactionFile);
+    await fsyncDirectory(paths.projectDir);
+    return migrated;
+  } finally {
+    if (temp) await unlink(temp).catch(() => {});
+    if (locked) await releaseLock(paths).catch(() => {});
+  }
 }
 
 export async function initializeState(root, env = process.env, { recoverUnresolved = false } = {}) {
@@ -115,7 +145,8 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
     if (await exists(paths.lockDir)) throw new StateStoreError('lock-contention', 'state lock is held');
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete state transaction requires recovery');
     if (await exists(paths.stateFile)) {
-      const state = await loadValidated(paths);
+      const loaded = await loadValidated(paths);
+      const state = loaded.migrated ? await persistMigration(paths) : loaded.state;
       const hasRunning = state.operations.some((operation) => operation.status === 'running') || state.partner.status === 'running';
       if (!recoverUnresolved || !hasRunning) return { ok: true, state, health: 'healthy', paths };
       return updateState(root, (draft) => {
@@ -129,7 +160,7 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
     }
     await acquireLock(paths, 'initialize');
     locked = true;
-    if (await exists(paths.stateFile)) return { ok: true, state: await loadValidated(paths), health: 'healthy', paths };
+    if (await exists(paths.stateFile)) return { ok: true, state: (await loadValidated(paths)).state, health: 'healthy', paths };
     const state = initialState(paths);
     const temp = `${paths.stateFile}.tmp.${process.pid}.${randomUUID()}`;
     await writeJsonSynced(paths.transactionFile, state, 'wx');
@@ -153,7 +184,8 @@ export async function readState(root, env = process.env, { checkLock = true } = 
     if (checkLock && await exists(paths.lockDir)) throw new StateStoreError('lock-contention', 'state lock is held');
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete state transaction requires recovery');
     if (!(await exists(paths.stateFile))) return initializeState(root, env);
-    return { ok: true, state: await loadValidated(paths), health: 'healthy', paths };
+    const loaded = await loadValidated(paths);
+    return { ok: true, state: loaded.migrated ? await persistMigration(paths) : loaded.state, health: 'healthy', paths };
   } catch (error) {
     const wrapped = error instanceof StateStoreError ? error : new StateStoreError('unwritable', 'state cannot be read safely', error);
     return { ok: false, state: recoveryState(paths), health: wrapped.code, error: wrapped, paths };
@@ -169,7 +201,7 @@ export async function updateState(root, mutator, { expectedGeneration, purpose =
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     if (!(await exists(paths.stateFile))) throw new StateStoreError('missing-during-update', 'state disappeared during update');
-    const current = await loadValidated(paths);
+    const current = (await loadValidated(paths)).state;
     if (expectedGeneration !== undefined && current.generation !== expectedGeneration) throw new StateStoreError('generation-conflict', 'state generation changed concurrently');
     const proposed = await mutator(structuredClone(current));
     if (!proposed || proposed.generation !== current.generation + 1) throw new StateStoreError('generation-conflict', 'next state must advance generation exactly once');
@@ -230,7 +262,7 @@ export async function resolveTransaction(root, action, env = process.env) {
     const transaction = await parseJsonFile(paths.transactionFile);
     try { validateState(transaction, paths); } catch (error) { throw new StateStoreError('transaction-invalid', error.details?.join('; ') || error.message, error); }
     const statePresent = await exists(paths.stateFile);
-    const current = statePresent ? await loadValidated(paths) : null;
+    const current = statePresent ? (await loadValidated(paths)).state : null;
     const isInitialWrite = !statePresent && transaction.generation === 0;
     const isNextGeneration = statePresent && transaction.generation === current.generation + 1;
     const isInstalledTransaction = statePresent && transaction.generation === current.generation && isDeepStrictEqual(transaction, current);

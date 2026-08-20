@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverCompanionRuntime } from './lib/codex-adapter.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
+import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
 import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
@@ -26,21 +27,28 @@ async function mutate(root, purpose, fn) {
   return updated.state;
 }
 
-async function mode(root, target) {
+async function mode(root, target, participants = 'both') {
   if (!['normal', 'discussion', 'ask-once'].includes(target)) throw new ValidationError('mode must be normal, discussion, or ask-once');
+  if (!PARTICIPANTS.has(participants)) throw new ValidationError('participants must be both, claude, or codex');
+  if (!isValidMode(target, participants)) throw new ValidationError(`unsupported mode combination: ${target}/${participants}`);
   const current = await currentState(root);
   if (current.state.route === 'recovery-read-only') throw new ValidationError('mode changes are unavailable in recovery-read-only; use recover');
-  if (target === 'ask-once' && current.state.route === 'discussion') {
-    process.stdout.write('already read-only (discussion)\n');
+  const from = { route: current.state.route, participants: current.state.participants };
+  const to = { route: target, participants };
+  if (from.route === to.route && from.participants === to.participants) {
+    process.stdout.write(`${formatModeTransition(from, to)}\n`);
     return;
   }
-  if (current.state.route === target) {
-    process.stdout.write(`Route unchanged: ${target}.\n`);
-    return;
-  }
-  const previous = current.state.route;
-  await mutate(root, `mode-${target}`, (state) => { state.route = target; });
-  process.stdout.write(`Route changed: ${previous} → ${target}\nNative permissions and sandbox: unchanged\n`);
+  await mutate(root, `mode-${target}-${participants}`, (state) => {
+    const leavingDiscussionCodex = state.route === 'discussion' && state.participants === 'codex' && !(target === 'discussion' && participants === 'codex');
+    const enteringDiscussionCodex = target === 'discussion' && participants === 'codex' && !(state.route === 'discussion' && state.participants === 'codex');
+    if (target === 'ask-once' && state.route !== 'ask-once') state.returnTo = { route: state.route, participants: state.participants };
+    if (target !== 'ask-once') state.returnTo = null;
+    if (leavingDiscussionCodex || enteringDiscussionCodex) state.partner.threadId = null;
+    state.route = target;
+    state.participants = participants;
+  });
+  process.stdout.write(`${formatModeTransition(from, to)}\nNative permissions and sandbox: unchanged.\n`);
 }
 
 async function status(root) {
@@ -48,6 +56,9 @@ async function status(root) {
   process.stdout.write(`${JSON.stringify({
     health: result.health,
     route: result.state.route,
+    participants: result.state.participants,
+    returnTo: result.state.returnTo,
+    label: formatMode(result.state.route, result.state.participants),
     generation: result.state.generation,
     project: result.state.project,
     task: result.state.task,
@@ -104,6 +115,8 @@ async function recover(root, args) {
       if (!unresolvedOperation(state, id)) throw new ValidationError('partner operation is no longer unresolved');
       state.operations = state.operations.filter((item) => item.id !== id);
       state.route = 'normal';
+      state.participants = 'both';
+      state.returnTo = null;
       state.task.status = 'partner-unavailable';
       state.task.joint.status = 'unavailable';
       state.partner.status = 'unavailable';
@@ -128,7 +141,7 @@ async function diagnose(root) {
     node: process.version,
     platform: { value: platform(), support: platform() === 'darwin' ? 'macOS supported' : platform() === 'win32' ? 'Windows experimental' : 'not documented as supported' },
     hooks: { configPresentAndValidJson: hooksValid },
-    state: { health: state.health, route: state.state.route, transaction },
+    state: { health: state.health, route: state.state.route, participants: state.state.participants, label: formatMode(state.state.route, state.state.participants), transaction },
     codex: { companionRuntimeAvailable: Boolean(companionRoot), location: companionRoot }
   }, null, 2)}\n`);
 }
@@ -137,6 +150,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
   const root = await rootFromControlCwd(cwd);
   const [command, ...args] = argv;
   if (command === 'mode' && args.length === 1) return mode(root, args[0]);
+  if (command === 'mode' && args.length === 3 && args[1] === '--participants') return mode(root, args[0], args[2]);
   if (command === 'status' && args.length === 0) return status(root);
   if (command === 'diagnose' && args.length === 0) return diagnose(root);
   if (command === 'config' && args.length === 0) return config(root);

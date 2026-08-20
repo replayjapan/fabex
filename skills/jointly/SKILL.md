@@ -15,9 +15,9 @@ You MUST delegate every image or screenshot inspection, GitHub or `gh` command s
 
 - **Implement lane (default):** Use for build, fix, change, implement, create, or update requests that have explicit acceptance criteria or are mechanical fixes. Do not form or state an independent implementation analysis.
 - **Decide lane:** Use when the request requires choosing an approach, architecture, design, or tradeoff, or asks a substantive judgment question. If code is also requested, keep both views complete but brief and about the approach only; after convergence, enter the Implement lane.
-- **Pure questions:** Use the Decide lane for substantive questions. Skip this skill for greetings and trivial lookups. `/askClaude` and `/askCodex` remain the explicit single-AI escapes.
+- **Pure questions:** Use the Decide lane for substantive questions. Skip this skill for greetings and trivial lookups. `/ask` is joint; `/askClaude` and `/askCodex` are the explicit single-AI escapes.
 
-From the project root, run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs config`, `status`, and `diagnose`. Use the canonical project root, companion location, and configured Codex arguments: include `--model <model>` only when the model is non-null, then `--effort <reasoningEffort>`.
+From the project root, run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs config`, `status`, and `diagnose`. If status reports `participants: claude`, explicitly switch the current persistent route to `--participants both` before any companion invocation; invoking `/fabex:jointly` authorizes that participant transition. Never implement while a read-only route is active: ask the user to invoke `/work` or `/workClaude` first. Use the canonical project root, companion location, and configured Codex arguments: include `--model <model>` only when the model is non-null, then `--effort <reasoningEffort>`.
 
 ## Implement lane
 

@@ -51,8 +51,14 @@ test('exact controls parse and composed lookalikes do not', async (t) => {
   const control = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
   for (const command of [
     `node ${control} status`, `node ${control} config`, `node ${control} diagnose`,
-    `node ${control} mode normal`, `node ${control} mode discussion`, `node ${control} mode ask-once`
+    `node ${control} mode normal`, `node ${control} mode discussion`, `node ${control} mode ask-once`,
+    `node ${control} mode normal --participants both`,
+    `node ${control} mode normal --participants claude`,
+    `node ${control} mode discussion --participants codex`,
+    `node ${control} mode ask-once --participants claude`
   ]) assert.equal(await decision(ctx, 'Bash', { command }), 'defer', command);
+  assert.equal(parseControlCommand(`node ${control} mode discussion --participants neither`), null);
+  assert.equal(parseControlCommand(`node ${control} mode discussion --participants both extra`), null);
   assert.equal(parseControlCommand(`node ${control} mode normal extra`), null);
   assert.equal(await decision(ctx, 'Bash', { command: `node ${control} status; node other.mjs` }), 'deny');
 });
@@ -99,6 +105,24 @@ test('read-only routes accept only canonical read-only companion forms', async (
     assert.equal(await decision(ctx, 'Bash', { command: `node ${script} task --json --cwd ${join(ctx.root, 'other')} --fresh 'question'` }), 'deny');
     assert.equal(await decision(ctx, 'Bash', { command: `node ${script} task --json --cwd ${ctx.root} --fresh --effort 'bad value' 'question'` }), 'deny');
   }
+});
+
+test('Claude-only participants deny companion invocations even in normal mode', async (t) => {
+  const ctx = await fixture(t);
+  const companionRoot = join(ctx.root, 'companion');
+  const script = join(companionRoot, 'scripts', 'codex-companion.mjs');
+  await mkdir(join(companionRoot, 'scripts'), { recursive: true });
+  await writeFile(script, '');
+  const before = process.env.FABEX_CODEX_PLUGIN_ROOT;
+  process.env.FABEX_CODEX_PLUGIN_ROOT = companionRoot;
+  t.after(() => before === undefined ? delete process.env.FABEX_CODEX_PLUGIN_ROOT : process.env.FABEX_CODEX_PLUGIN_ROOT = before);
+  ctx.state.participants = 'claude';
+  const command = `node ${script} task --json --cwd ${ctx.root} --fresh 'question'`;
+  assert.equal(await decision(ctx, 'Bash', { command }), 'deny');
+  ctx.state.route = 'discussion';
+  assert.equal(await decision(ctx, 'Bash', { command }), 'deny');
+  ctx.state.participants = 'both';
+  assert.equal(await decision(ctx, 'Bash', { command }), 'defer');
 });
 
 test('recovery route denies ordinary Bash and unknown tools', async (t) => {

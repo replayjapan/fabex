@@ -1,4 +1,6 @@
-export const STATE_SCHEMA_VERSION = 1;
+import { isValidMode, PARTICIPANTS } from './mode.mjs';
+
+export const STATE_SCHEMA_VERSION = 2;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -31,13 +33,19 @@ function nullableString(value) {
 
 export function validateState(state, identity) {
   const errors = [];
-  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'task', 'partner', 'operations'])) errors.push('state has unexpected or missing top-level fields');
+  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'operations'])) errors.push('state has unexpected or missing top-level fields');
   if (state?.schemaVersion !== STATE_SCHEMA_VERSION) errors.push('state schemaVersion is incompatible');
   if (!Number.isSafeInteger(state?.generation) || state.generation < 0) errors.push('generation must be a non-negative integer');
   if (!hasExactKeys(state?.project, ['id', 'canonicalRoot'])) errors.push('project shape is invalid');
   if (identity && state?.project?.id !== identity.projectId) errors.push('project id does not match the canonical root');
   if (identity && state?.project?.canonicalRoot !== identity.canonicalRoot) errors.push('canonical root does not match state ownership');
   if (!ROUTES.has(state?.route)) errors.push('route is invalid');
+  if (!PARTICIPANTS.has(state?.participants)) errors.push('participants is invalid');
+  if (ROUTES.has(state?.route) && PARTICIPANTS.has(state?.participants) && !isValidMode(state.route, state.participants)) errors.push('route and participants combination is invalid');
+  if (state?.returnTo !== null) {
+    if (!hasExactKeys(state?.returnTo, ['route', 'participants']) || !['normal', 'discussion'].includes(state.returnTo?.route) || !PARTICIPANTS.has(state.returnTo?.participants) || !isValidMode(state.returnTo?.route, state.returnTo?.participants)) errors.push('returnTo is invalid');
+  }
+  if (state?.route !== 'ask-once' && state?.returnTo !== null) errors.push('returnTo is only valid in ask-once mode');
   if (!hasExactKeys(state?.task, ['id', 'status', 'label', 'joint'])) errors.push('task shape is invalid');
   if (!nullableString(state?.task?.id) || !nullableString(state?.task?.status) || !nullableString(state?.task?.label) || !TASK_STATUSES.has(state?.task?.status)) errors.push('task fields are invalid');
   if (!hasExactKeys(state?.task?.joint, ['required', 'status', 'decisionId'])) errors.push('joint task shape is invalid');

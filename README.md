@@ -1,8 +1,19 @@
 # Fabex
 
-Fabex uses independent Claude and Codex views where judgment matters, converges honestly, and gives implementation to Codex without duplicating mechanical analysis.
+Keep the quality of a Claude-led Fable workflow while Codex carries the coding load.
 
-Built for Fable. Fabex can be installed with every Claude model; compliance with its advisory behavior varies by model and context.
+Fabex is for Fable users who also have Codex access through a ChatGPT plan. It puts both your subscriptions to work and reduces pressure on your Claude limits during heavy coding. It is designed to route coding to Codex while Claude leads the workflow.
+
+Pick the mode that fits the moment:
+
+- `work`: the flagship mode, with both AIs working together.
+- `workClaude`: normal conversation without copying Codex on everything; Codex still does all coding.
+- `discussion`: both AIs talk, and nothing executes.
+- `discussionClaude` / `discussionCodex`: read-only discussion with one AI.
+- `ask`: one joint question.
+- `askClaude` / `askCodex`: one question for one AI, without it spinning into implementation.
+
+Mode labels and an optional status-line badge make it clear where you are. Some behavior is mechanically enforced and some is advisory; see [Enforced and advisory behavior](#enforced-and-advisory-behavior).
 
 ## How it works
 
@@ -27,7 +38,9 @@ The Decide lane remains auditable in the conversation: Claude states its complet
 | Read-only blocking in discussion and ask-once modes | Question discipline |
 | Validated controls only in discussion and ask-once modes | Jointly invocation and lane selection |
 | Fail-closed routing when state is unhealthy | Codex-only edits in normal mode |
-| Ask-once auto-revert after the next user prompt | Independent verification and blindness ordering |
+| Ask-once restoration after the next user prompt | Independent verification and blindness ordering |
+| Codex companion denial while participants are `claude` | Participant behavior beyond that companion denial |
+| Deterministic, read-only status-line rendering | Reply labels and badges |
 |  | Operational delegation and cheaper-model selection |
 
 Advisory compliance varies with the model and context.
@@ -72,23 +85,42 @@ claude plugin install fabex@fabex
 ## Try it
 
 - `/jointly` runs the two-lane protocol explicitly.
-- `/ask` answers once in read-only mode.
+- `/ask` asks both AIs once in read-only mode.
 - `/askClaude` or `/askCodex` selects one AI for a read-only answer.
-- `/discussion` enters persistent read-only discussion.
-- `/work` returns to normal work.
+- `/discussion` enters persistent joint read-only discussion.
+- `/discussionClaude` and `/discussionCodex` select a single participant; the Codex variant relays one continuous Codex thread per entry.
+- `/work` returns to joint normal work; `/workClaude` returns to normal Claude conversation without automatic Codex consultation.
 - `/status` and `/diagnose` report routing and health.
 
 Normal mode is the default. With joint-by-default enabled, clear implementation requests use Implement, substantive judgments use Decide, and greetings and trivial lookups skip the protocol.
+
+### Modes and labels
+
+Route and participants are stored separately, while every supported combination has one canonical display label:
+
+| Skill | Route | Participants | Label | Effects |
+| --- | --- | --- | --- | --- |
+| `/work` | normal | both | `work` | Normal permissions; joint routing |
+| `/workClaude` | normal | claude | `workClaude` | Normal permissions; no automatic Codex consultation for questions |
+| `/discussion` | discussion | both | `discussion` | Persistent read-only; both AIs |
+| `/discussionClaude` | discussion | claude | `discussionClaude` | Persistent read-only; Claude only |
+| `/discussionCodex` | discussion | codex | `discussionCodex` | Persistent read-only; attributed Codex relay |
+| `/ask` | ask-once | both | `ask` | One read-only joint answer, then restore |
+| `/askClaude` | ask-once | claude | `askClaude` | One read-only Claude answer, then restore |
+| `/askCodex` | ask-once | codex | `askCodex` | One read-only Codex answer, then restore |
+
+Codex always performs implementation. In `workClaude`, a build, fix, change, create, update, or implement request still invokes `/jointly`, explicitly switches participants to `both`, and routes edits to a write-enabled Codex task.
 
 ## Configuration
 
 No configuration is required. The main Claude model is always the user's `/model` choice.
 
-Fabex exposes two Codex dials and one operational-agent model:
+Fabex exposes two Codex dials, one operational-agent model, and a reply-label setting:
 
 - `models.codex.model`: Codex model token, or `null` to let the companion choose.
 - `models.codex.reasoningEffort`: reasoning-effort token.
 - `models.operational`: Claude model used for bounded image, GitHub, and log chores.
+- `display.replyModeBadge`: `always`, `changes`, or `off`; defaults to `always`.
 
 Configuration merges field by field in this order:
 
@@ -110,11 +142,31 @@ Copy and adjust this JSON at either override location:
   },
   "collaboration": {
     "jointByDefault": true
+  },
+  "display": {
+    "replyModeBadge": "always"
   }
 }
 ```
 
 Unknown reasoning-effort tokens pass through with a warning so newer companion values do not break older Fabex releases. Run `/status`, then the Fabex `config` control described by `/diagnose`, to inspect effective values, sources, and warnings.
+
+### Optional status line
+
+Fabex ships `scripts/status-line.mjs`, a strictly read-only renderer for Claude Code's status-line JSON input. It canonicalizes the supplied working directory, honors `FABEX_HOME`, and prints labels such as `Fabex: discussionCodex · read-only`. Missing, locked, unsettled, or invalid state prints `Fabex: state?`; it never guesses `work`.
+
+Installation is opt-in. First inspect your user or project Claude settings and do not overwrite an existing `statusLine`. Copy `scripts/status-line.mjs` and its `scripts/lib/mode.mjs` dependency into a stable directory that preserves that layout. Do not reference a plugin-cache path, because updates can replace it. Then merge a command like this into the appropriate settings file, substituting your stable path:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node \"$HOME/.local/share/fabex-status-line/scripts/status-line.mjs\""
+  }
+}
+```
+
+Fabex does not set `refreshInterval` by default.
 
 ## Token economics
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 - 2026-08-20
+
+- Added `workClaude`, `discussionClaude`, and `discussionCodex`, plus participant selection across the eight supported work, discussion, and ask modes.
+- Changed `/ask` and `/discussion` to consult both Claude and Codex. This can add latency and consumes Codex usage compared with 1.0.x; use the Claude- or Codex-specific variants when desired.
+- Added canonical mode labels, configurable reply badges, and an opt-in deterministic read-only status-line renderer.
+- Migrated persisted state automatically and atomically from schema v1 to v2, adding `participants` and one-shot `returnTo` state without sending existing installs into recovery.
+- Made ask-once restore the exact prior persistent route and participants instead of always returning to normal joint work.
+
 ## 1.0.1 - 2026-08-20
 
 - Strengthened normal-session operational delegation with an imperative rule for image and screenshot inspection, GitHub and `gh` command sequences, and log-dump analysis.

@@ -15,9 +15,30 @@ async function fixture(t) {
 
 test('initial state is schema-versioned with the compact Fabex shape', () => {
   const state = initialState({ projectId: '0000000000000000', canonicalRoot: '/synthetic/project' });
-  assert.equal(state.schemaVersion, 1);
+  assert.equal(state.schemaVersion, 2);
   assert.equal(state.route, 'normal');
-  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'partner', 'project', 'route', 'schemaVersion', 'task'].sort());
+  assert.equal(state.participants, 'both');
+  assert.equal(state.returnTo, null);
+  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'project', 'returnTo', 'route', 'schemaVersion', 'task'].sort());
+});
+
+test('schema v1 state migrates atomically in place on load', async (t) => {
+  const { project, env } = await fixture(t);
+  const initialized = await initializeState(project, env);
+  const v1 = structuredClone(initialized.state);
+  v1.schemaVersion = 1;
+  delete v1.participants;
+  delete v1.returnTo;
+  await writeFile(initialized.paths.stateFile, `${JSON.stringify(v1)}\n`);
+  const loaded = await readState(project, env);
+  assert.equal(loaded.ok, true);
+  assert.equal(loaded.health, 'healthy');
+  assert.equal(loaded.state.schemaVersion, 2);
+  assert.equal(loaded.state.participants, 'both');
+  assert.equal(loaded.state.returnTo, null);
+  assert.equal(loaded.state.generation, v1.generation + 1);
+  assert.deepEqual(JSON.parse(await readFile(initialized.paths.stateFile, 'utf8')), loaded.state);
+  await assert.rejects(access(initialized.paths.transactionFile));
 });
 
 test('readState first touch atomically initializes instead of reporting missing', async (t) => {

@@ -10,7 +10,7 @@ import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
 const SKILL_TOOLS = new Set(['Skill', 'SlashCommand']);
-const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'work', 'status', 'diagnose', 'recover']);
+const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'discussionClaude', 'discussionCodex', 'work', 'workClaude', 'status', 'diagnose', 'recover']);
 const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
 const SAFE_UNHEALTHY = new Set(['status', 'config', 'diagnose', 'clear-dead-lock', 'recover-inspect', 'recover-retry', 'recover-abandon', 'recover-resolve-transaction']);
 const JOB_ID_RE = /^task-[a-z0-9]+-[a-z0-9]+$/;
@@ -56,7 +56,10 @@ export function parseControlCommand(command) {
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
   if (['status', 'config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
-  if (args[0] === 'mode' && ['normal', 'discussion', 'ask-once'].includes(args[1]) && args.length === 2) return { kind: `mode-${args[1]}` };
+  if (args[0] === 'mode' && ['normal', 'discussion', 'ask-once'].includes(args[1])) {
+    if (args.length === 2) return { kind: `mode-${args[1]}`, participants: 'both' };
+    if (args.length === 4 && args[2] === '--participants' && ['both', 'claude', 'codex'].includes(args[3])) return { kind: `mode-${args[1]}`, participants: args[3] };
+  }
   if (args[0] === 'recover' && args[1] === 'clear-dead-lock' && args.length === 2) return { kind: 'clear-dead-lock' };
   if (args[0] === 'recover' && args[1] === 'resolve-transaction' && args.length === 3 && ['--commit', '--discard'].includes(args[2])) return { kind: 'recover-resolve-transaction' };
   if (args[0] === 'recover' && ['inspect', 'retry', 'abandon'].includes(args[1]) && args.length === 4 && args[2] === '--operation-id' && UUID_RE.test(args[3])) return { kind: `recover-${args[1]}` };
@@ -109,6 +112,13 @@ async function isReadOnlyCompanionCommand(command, paths) {
   return false;
 }
 
+async function isCompanionInvocation(command) {
+  const tokens = simpleTokens(command);
+  if (!tokens || basename(tokens[0] ?? '') !== 'node') return false;
+  const companionRoot = await discoverCompanionRuntime(process.env);
+  return Boolean(companionRoot) && resolve(tokens[1] ?? '') === resolve(companionRoot, 'scripts', 'codex-companion.mjs');
+}
+
 const deny = (reason) => ({ decision: 'deny', reason });
 const defer = () => ({ decision: 'defer' });
 
@@ -124,6 +134,7 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
 
 export async function classifyToolUse({ toolName, toolInput, state, paths }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
+  if (state.participants === 'claude' && toolName === 'Bash' && await isCompanionInvocation(toolInput.command)) return deny('Claude-only mode denies Codex companion invocations; explicitly switch participants first');
   if (state.route === 'normal') return defer();
   if (!['discussion', 'ask-once', 'recovery-read-only'].includes(state.route)) return deny('invalid route; use recover');
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();

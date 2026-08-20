@@ -9,5 +9,8 @@
   },
   "collaboration": {
     "jointByDefault": true
+  },
+  "display": {
+    "replyModeBadge": "always"
   }
 }

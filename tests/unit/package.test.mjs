@@ -22,7 +22,7 @@ test('plugin and marketplace metadata are consistent and authoritative', async (
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.0.1');
+  assert.equal(plugin.version, '1.1.0');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.name, 'fabex');
   assert.equal(marketplace.plugins.length, 1);
@@ -48,7 +48,7 @@ test('hook registration is exec-form and contains exactly the four events', asyn
 test('only the requested public skills are packaged', async () => {
   const names = (await readdir(resolve(root, 'skills'), { withFileTypes: true }))
     .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-  assert.deepEqual(names, ['ask', 'askClaude', 'askCodex', 'diagnose', 'discussion', 'jointly', 'recover', 'status', 'work'].sort());
+  assert.deepEqual(names, ['ask', 'askClaude', 'askCodex', 'diagnose', 'discussion', 'discussionClaude', 'discussionCodex', 'jointly', 'recover', 'status', 'work', 'workClaude'].sort());
 });
 
 test('jointly routes mechanical implementation without a blind analysis', async () => {
@@ -64,6 +64,38 @@ test('jointly routes mechanical implementation without a blind analysis', async 
   assert.match(skill, /--fresh --write \[--model <model>\] --effort <reasoningEffort>/);
   assert.match(skill, /Independently run the user's stated tests or criteria/);
   assert.match(skill, /choosing an approach, architecture, design, or tradeoff/);
+});
+
+test('participant skills encode joint defaults, Claude work invariant, and continuous Codex relay', async () => {
+  const workClaude = await readFile(resolve(root, 'skills', 'workClaude', 'SKILL.md'), 'utf8');
+  assert.match(workClaude, /without automatically consulting Codex/);
+  assert.match(workClaude, /Codex always does the coding/);
+  assert.match(workClaude, /invoke `\/fabex:jointly`/);
+  assert.match(workClaude, /switches participants to `both`/);
+
+  const discussion = await readFile(resolve(root, 'skills', 'discussion', 'SKILL.md'), 'utf8');
+  assert.match(discussion, /--participants both/);
+  assert.match(discussion, /user's message verbatim/);
+  const ask = await readFile(resolve(root, 'skills', 'ask', 'SKILL.md'), 'utf8');
+  assert.match(ask, /--participants both/);
+  assert.match(ask, /fresh validated read-only Codex companion task/);
+
+  const discussionCodex = await readFile(resolve(root, 'skills', 'discussionCodex', 'SKILL.md'), 'utf8');
+  assert.match(discussionCodex, /one fresh read-only Codex companion thread/);
+  assert.match(discussionCodex, /--resume-last/);
+  assert.match(discussionCodex, /stay substantively silent/);
+  assert.match(discussionCodex, /clears Fabex's recorded discussion thread/);
+});
+
+test('1.1.0 release notes disclose changed joint defaults and migration', async () => {
+  const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
+  const release = changelog.split('## 1.0.1')[0];
+  assert.match(release, /## 1\.1\.0/);
+  assert.match(release, /`\/ask` and `\/discussion` to consult both Claude and Codex/);
+  assert.match(release, /latency/);
+  assert.match(release, /Codex usage/);
+  assert.match(release, /schema v1 to v2/);
+  assert.match(release, /canonical mode labels/);
 });
 
 test('every shipped JSON file parses', async () => {

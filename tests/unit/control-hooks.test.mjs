@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { readState } from '../../scripts/lib/state.mjs';
+import { readState, updateState } from '../../scripts/lib/state.mjs';
 import { renderSessionContext } from '../../scripts/hook-session.mjs';
 
 const root = resolve(import.meta.dirname, '..', '..');
@@ -32,27 +32,85 @@ async function run(script, args, { cwd, env, input } = {}) {
   return { code, stdout, stderr };
 }
 
-test('mode controls initialize on first touch and move among healthy routes', async (t) => {
+test('mode controls reach all eight canonical modes and reject normal-codex', async (t) => {
   const { project, env } = await fixture(t);
-  const discussion = await run(control, ['mode', 'discussion'], { cwd: project, env });
-  assert.equal(discussion.code, 0, discussion.stderr);
-  assert.match(discussion.stdout, /normal → discussion/);
-  const ask = await run(control, ['mode', 'ask-once'], { cwd: project, env });
-  assert.equal(ask.stdout, 'already read-only (discussion)\n');
-  const normal = await run(control, ['mode', 'normal'], { cwd: project, env });
-  assert.equal(normal.code, 0, normal.stderr);
-  assert.equal((await readState(project, env)).state.route, 'normal');
+  const modes = [
+    [['mode', 'normal'], 'work'],
+    [['mode', 'normal', '--participants', 'claude'], 'workClaude'],
+    [['mode', 'discussion'], 'discussion'],
+    [['mode', 'discussion', '--participants', 'claude'], 'discussionClaude'],
+    [['mode', 'discussion', '--participants', 'codex'], 'discussionCodex'],
+    [['mode', 'ask-once'], 'ask'],
+    [['mode', 'ask-once', '--participants', 'claude'], 'askClaude'],
+    [['mode', 'ask-once', '--participants', 'codex'], 'askCodex']
+  ];
+  for (const [args, label] of modes) {
+    const result = await run(control, args, { cwd: project, env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`(?:-> |unchanged: )${label}\\.`), result.stdout);
+  }
+  const invalid = await run(control, ['mode', 'normal', '--participants', 'codex'], { cwd: project, env });
+  assert.equal(invalid.code, 1);
+  assert.match(invalid.stderr, /unsupported mode combination/);
+  const state = (await readState(project, env)).state;
+  assert.equal(state.route, 'ask-once');
+  assert.equal(state.participants, 'codex');
+  assert.deepEqual(state.returnTo, { route: 'discussion', participants: 'codex' });
 });
 
 test('ask-once reverts on the next user prompt, not SessionStart', async (t) => {
   const { project, env } = await fixture(t);
   await run(control, ['mode', 'ask-once'], { cwd: project, env });
   const start = await run(session, [], { cwd: project, env, input: { cwd: project, hook_event_name: 'SessionStart' } });
-  assert.match(JSON.parse(start.stdout).hookSpecificOutput.additionalContext, /ask-once/);
+  assert.match(JSON.parse(start.stdout).hookSpecificOutput.additionalContext, /Fabex mode: ask/);
   assert.equal((await readState(project, env)).state.route, 'ask-once');
   const prompt = await run(session, [], { cwd: project, env, input: { cwd: project, hook_event_name: 'UserPromptSubmit' } });
-  assert.match(JSON.parse(prompt.stdout).hookSpecificOutput.additionalContext, /route: normal/);
+  assert.match(JSON.parse(prompt.stdout).hookSpecificOutput.additionalContext, /Fabex mode: work/);
   assert.equal((await readState(project, env)).state.route, 'normal');
+});
+
+test('ask-once restores route and participants from every persistent mode', async (t) => {
+  const { directory, env } = await fixture(t);
+  const persistent = [
+    ['normal', 'both'], ['normal', 'claude'],
+    ['discussion', 'both'], ['discussion', 'claude'], ['discussion', 'codex']
+  ];
+  for (const [route, participants] of persistent) {
+    const project = join(directory, `${route}-${participants}`);
+    await mkdir(project);
+    await run(control, ['mode', route, '--participants', participants], { cwd: project, env });
+    await run(control, ['mode', 'ask-once', '--participants', 'both'], { cwd: project, env });
+    const armed = (await readState(project, env)).state;
+    assert.deepEqual(armed.returnTo, { route, participants });
+    const prompt = await run(session, [], { cwd: project, env, input: { cwd: project, hook_event_name: 'UserPromptSubmit' } });
+    assert.equal(prompt.code, 0, prompt.stderr);
+    const restored = (await readState(project, env)).state;
+    assert.equal(restored.route, route);
+    assert.equal(restored.participants, participants);
+    assert.equal(restored.returnTo, null);
+  }
+});
+
+test('discussionCodex clears its recorded thread on entry and exit', async (t) => {
+  const { project, env } = await fixture(t);
+  await run(control, ['status'], { cwd: project, env });
+  let current = await readState(project, env);
+  await updateState(project, (state) => {
+    state.partner.threadId = 'stale-thread';
+    state.generation += 1;
+    return state;
+  }, { expectedGeneration: current.state.generation }, env);
+  await run(control, ['mode', 'discussion', '--participants', 'codex'], { cwd: project, env });
+  assert.equal((await readState(project, env)).state.partner.threadId, null);
+
+  current = await readState(project, env);
+  await updateState(project, (state) => {
+    state.partner.threadId = 'discussion-thread';
+    state.generation += 1;
+    return state;
+  }, { expectedGeneration: current.state.generation }, env);
+  await run(control, ['mode', 'normal'], { cwd: project, env });
+  assert.equal((await readState(project, env)).state.partner.threadId, null);
 });
 
 test('config control prints effective config, all sources, and loaded flags', async (t) => {
@@ -68,19 +126,43 @@ test('config control prints effective config, all sources, and loaded flags', as
   assert.equal(payload.sources.projectLoaded, true);
 });
 
-test('rendered normal session context stays within 700 UTF-8 bytes', () => {
-  const config = { models: { operational: 'm'.repeat(128) }, collaboration: { jointByDefault: true } };
-  const context = renderSessionContext('normal', config);
+test('rendered normal-both session context stays within 700 UTF-8 bytes', () => {
+  const config = { models: { operational: 'm'.repeat(128) }, collaboration: { jointByDefault: true }, display: { replyModeBadge: 'always' } };
+  const context = renderSessionContext('normal', 'both', config);
   assert.ok(Buffer.byteLength(context, 'utf8') <= 700, Buffer.byteLength(context, 'utf8'));
   assert.match(context, /Questions authorize answers only; never infer implementation/);
   assert.match(context, /For ANY build, fix, change, or implement request you MUST invoke \/fabex:jointly first/);
   assert.match(context, /Codex alone edits files; never use Write\/Edit, shell, or node scripts/);
   assert.match(context, /never ask the user for write access/);
-  assert.match(context, /Design\/judgment questions: jointly gets blind independent views, then converges/);
+  assert.match(context, /Design\/judgment questions use blind independent views and convergence/);
   assert.match(context, /greetings\/trivial lookups/);
-  const delegation = 'You MUST delegate every image or screenshot inspection, GitHub or gh command sequence, and log-dump analysis to fabex-operational; do not perform any part of those in the primary session.';
-  assert.ok(context.includes(delegation));
-  assert.ok(context.indexOf(delegation) < context.indexOf('/discussion is persistent read-only'));
+  assert.match(context, /Delegate every image\/screenshot inspection, GitHub\/gh sequence, and log dump to fabex-operational/);
+  assert.match(context, /Prefix every reply with \[Fabex: work\]/);
+});
+
+test('every other mode has participant-specific bounded context and badge policy', () => {
+  const caps = new Map([
+    ['normal:claude', 650], ['discussion:both', 400], ['discussion:claude', 300],
+    ['discussion:codex', 450], ['ask-once:both', 350], ['ask-once:claude', 300],
+    ['ask-once:codex', 350], ['recovery-read-only:both', 180]
+  ]);
+  const config = { collaboration: { jointByDefault: true }, display: { replyModeBadge: 'changes' } };
+  for (const [key, cap] of caps) {
+    const [route, participants] = key.split(':');
+    const context = renderSessionContext(route, participants, config);
+    assert.ok(Buffer.byteLength(context, 'utf8') <= cap, `${key}: ${Buffer.byteLength(context, 'utf8')}`);
+    assert.match(context, /Prefix a mode-transition reply/);
+  }
+  const workClaude = renderSessionContext('normal', 'claude', config);
+  assert.match(workClaude, /Questions authorize answers only; never infer implementation/);
+  assert.match(workClaude, /Codex alone edits files/);
+  assert.match(workClaude, /Do not automatically consult Codex/);
+  assert.match(workClaude, /switches to both participants/);
+  assert.match(renderSessionContext('discussion', 'both', config), /user message verbatim/);
+  assert.match(renderSessionContext('discussion', 'codex', config), /--resume-last/);
+  assert.match(renderSessionContext('discussion', 'codex', config), /Claude stays substantively silent/);
+  assert.match(renderSessionContext('ask-once', 'both', config), /restores the prior persistent mode/);
+  assert.match(renderSessionContext('normal', 'both', { ...config, display: { replyModeBadge: 'off' } }), /Do not add a Fabex reply badge/);
 });
 
 test('session and guard resolve payload cwd to the same canonical project root', async (t) => {
@@ -103,6 +185,8 @@ test('status first touch initializes healthy normal state', async (t) => {
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.health, 'initialized');
   assert.equal(payload.route, 'normal');
+  assert.equal(payload.participants, 'both');
+  assert.equal(payload.label, 'work');
 });
 
 test('PreToolUse guard first touch initializes state from payload cwd', async (t) => {

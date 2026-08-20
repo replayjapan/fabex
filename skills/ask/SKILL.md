@@ -1,8 +1,10 @@
 ---
 name: ask
-description: Answer one question read-only, then return to normal mode on the next user prompt.
+description: Have Claude and Codex answer one question jointly and read-only, then restore the prior persistent mode.
 ---
 
 # Ask
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status`. If the route is normal, run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode ask-once` and show its route message. If already in discussion, stay there. Answer without file changes, effectful commands, or other project effects. Briefly note that one-shot mode reverts on the next user prompt.
+Run the Fabex `status`, `config`, and `diagnose` controls, then run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode ask-once --participants both` and show the mode message. If `display.replyModeBadge` is `always` or `changes`, prefix the answer with `[Fabex: ask]`; if it is `off`, omit the badge.
+
+Before forming Claude's answer, launch a fresh validated read-only Codex companion task with the user's question verbatim. Never pass `--write`. Form Claude's independent view, fetch Codex's result, attribute both where useful, and converge honestly without project effects. Note briefly that the next user prompt restores the prior persistent mode.

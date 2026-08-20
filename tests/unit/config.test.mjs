@@ -20,7 +20,8 @@ test('shipped defaults load without configuration', async (t) => {
   assert.deepEqual(result.config, {
     schemaVersion: 1,
     models: { codex: { model: null, reasoningEffort: 'high' }, operational: 'sonnet' },
-    collaboration: { jointByDefault: true }
+    collaboration: { jointByDefault: true },
+    display: { replyModeBadge: 'always' }
   });
   assert.equal(result.sources.shippedLoaded, true);
   assert.equal(result.sources.machine, join(data, 'config.json'));
@@ -92,4 +93,17 @@ test('malformed project JSON preserves lower layers and reports loaded false', a
   assert.equal(result.config.models.operational, 'haiku');
   assert.equal(result.sources.projectLoaded, false);
   assert.match(result.warnings.join('\n'), /could not load project config/);
+});
+
+test('reply badge accepts only always, changes, or off', async (t) => {
+  const { root, env } = await fixture(t);
+  await mkdir(join(root, '.fabex'));
+  for (const value of ['always', 'changes', 'off']) {
+    await writeFile(join(root, '.fabex', 'config.json'), JSON.stringify({ display: { replyModeBadge: value } }));
+    assert.equal((await loadEffectiveConfig(root, env)).config.display.replyModeBadge, value);
+  }
+  await writeFile(join(root, '.fabex', 'config.json'), JSON.stringify({ display: { replyModeBadge: 'sometimes' } }));
+  const invalid = await loadEffectiveConfig(root, env);
+  assert.equal(invalid.config.display.replyModeBadge, 'always');
+  assert.match(invalid.warnings.join('\n'), /must be always, changes, or off/);
 });
