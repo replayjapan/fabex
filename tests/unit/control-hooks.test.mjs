@@ -76,11 +76,11 @@ test('rendered normal session context stays within 700 UTF-8 bytes', () => {
   assert.match(context, /For ANY build, fix, change, or implement request you MUST invoke \/fabex:jointly first/);
   assert.match(context, /Codex alone edits files; never use Write\/Edit, shell, or node scripts/);
   assert.match(context, /never ask the user for write access/);
-  assert.match(context, /Clear criteria: jointly sends directly to write-enabled Codex; verify with tests; do not duplicate analysis/);
   assert.match(context, /Design\/judgment questions: jointly gets blind independent views, then converges/);
-  assert.match(context, /Fabex = Claude & Codex together/);
   assert.match(context, /greetings\/trivial lookups/);
-  assert.match(context, /fabex-operational/);
+  const delegation = 'You MUST delegate every image or screenshot inspection, GitHub or gh command sequence, and log-dump analysis to fabex-operational; do not perform any part of those in the primary session.';
+  assert.ok(context.includes(delegation));
+  assert.ok(context.indexOf(delegation) < context.indexOf('/discussion is persistent read-only'));
 });
 
 test('session and guard resolve payload cwd to the same canonical project root', async (t) => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 - 2026-08-20
+
+- Strengthened normal-session operational delegation with an imperative rule for image and screenshot inspection, GitHub and `gh` command sequences, and log-dump analysis.
+- Documented which routing protections are mechanically enforced and which collaboration behaviors remain advisory.
+- Reworded routing, blindness, delegation, and model-compatibility claims to distinguish deterministic controls from model-dependent behavioral compliance.
+
 ## 1.0.0 - 2026-08-19
 
 - Initial public release.

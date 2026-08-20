@@ -9,6 +9,8 @@ Use one of two lanes. Codex performs all file edits in both lanes. Native permis
 
 A question is not an implementation request. Never enter the Implement lane or launch a `--write` task unless the user explicitly requests a project change.
 
+You MUST delegate every image or screenshot inspection, GitHub or `gh` command sequence, and log-dump analysis to `fabex-operational`; do not perform any part of those in the primary session. Select its model from the effective `models.operational` config.
+
 ## Route deterministically
 
 - **Implement lane (default):** Use for build, fix, change, implement, create, or update requests that have explicit acceptance criteria or are mechanical fixes. Do not form or state an independent implementation analysis.
@@ -38,7 +40,7 @@ Never edit files yourself by any mechanism: do not use Write/Edit, shell, node s
    `node <companion-location>/scripts/codex-companion.mjs task --json --background --cwd <canonical-project-root> --fresh [--model <model>] --effort <reasoningEffort> '<prompt>'`
 
    The prompt must contain the user's message verbatim plus only neutral context needed to orient Codex. Never include Claude's opinion, draft, preferred direction, or suggested answer. Never include `--write` in this opening task.
-2. While Codex runs, form Claude's independent view. State Claude's complete view as visible assistant text before any `status` or `result` call. That transcript order is the auditable blindness guarantee.
+2. While Codex runs, form Claude's independent view. State Claude's complete view as visible assistant text before any `status` or `result` call. When followed, that transcript ordering provides an auditable blindness protocol.
 3. Only after Claude's visible view, fetch with the exact companion `status --json --wait --cwd ... <job-id>` and `result --json --cwd ... <job-id>` forms. Present both views, identify material disagreements without smoothing them over, and state the converged decision.
 4. If implementation is requested, enter the Implement lane with the user's request verbatim, the converged approach, and the acceptance criteria. Use a fresh task with `--write`; do not repeat either model's implementation analysis.
 

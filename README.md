@@ -2,7 +2,7 @@
 
 Fabex uses independent Claude and Codex views where judgment matters, converges honestly, and gives implementation to Codex without duplicating mechanical analysis.
 
-Built for Fable, works with every Claude model.
+Built for Fable. Fabex can be installed with every Claude model; compliance with its advisory behavior varies by model and context.
 
 ## How it works
 
@@ -13,12 +13,24 @@ request
                                                     └─ if code: Codex implements → Claude verifies
 ```
 
-Fabex has two deterministic lanes:
+Fabex has two routing policies:
 
 - **Implement:** The default for builds, fixes, changes, and implementations with explicit acceptance criteria, plus mechanical fixes. Claude states one short task-and-criteria framing line, immediately delegates the user's request to a fresh write-enabled Codex task, then independently runs the stated tests or criteria. Claude does not duplicate Codex's bug-by-bug implementation analysis.
 - **Decide:** For architecture, design, tradeoffs, and other substantive judgments. Claude and Codex form blind independent views and converge honestly. If code follows, their views stay focused on the approach and the work moves to Implement.
 
 The Decide lane remains auditable in the conversation: Claude states its complete view before fetching Codex's result. Codex receives the user's message plus neutral context, never Claude's draft opinion. In both lanes, Codex performs all file edits and returns a bounded summary of files changed, diffstat, test exit codes, unresolved risks, and decisions needed; Claude verifies rather than relaying full transcripts.
+
+## Enforced and advisory behavior
+
+| Mechanically enforced | Advisory (best-effort instructions, auditable in the transcript but not guaranteed) |
+| --- | --- |
+| Read-only blocking in discussion and ask-once modes | Question discipline |
+| Validated controls only in discussion and ask-once modes | Jointly invocation and lane selection |
+| Fail-closed routing when state is unhealthy | Codex-only edits in normal mode |
+| Ask-once auto-revert after the next user prompt | Independent verification and blindness ordering |
+|  | Operational delegation and cheaper-model selection |
+
+Advisory compliance varies with the model and context.
 
 ## Requirements
 
@@ -118,7 +130,7 @@ A representative implementation benchmark used the same six-bug, three-file, 12-
 | --- | ---: | ---: | ---: |
 | Solo Claude | 3,919 | 12 | 145k |
 | Fabex duplicated-analysis design (superseded) | 6,816 | 15 | 323k |
-| Fabex final two-lane design with enforced delegation wording | 2,224 | 9 | 255k |
+| Fabex final two-lane design with imperative delegation wording | 2,224 | 9 | 255k |
 
 On this representative implementation task, the final design used about 43% fewer Claude output tokens than solo Claude, and delegation to write-enabled Codex was confirmed. The superseded design forced Claude to duplicate implementation analysis before Codex did the work; the final Implement lane removes that duplication, while Decide preserves blind views where judgment benefits from them. These are single-run measurements, not a general savings guarantee. Fabex also read more cached input than solo Claude (255k versus 145k); cache reads are the cheapest Claude token class, but they are still usage. Codex-side usage is separate real spend and is not included in the Claude figures above.
 

@@ -22,7 +22,7 @@ test('plugin and marketplace metadata are consistent and authoritative', async (
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.0.0');
+  assert.equal(plugin.version, '1.0.1');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.name, 'fabex');
   assert.equal(marketplace.plugins.length, 1);
