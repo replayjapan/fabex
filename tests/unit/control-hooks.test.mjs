@@ -359,14 +359,21 @@ test('PreToolUse hook derives protected-command authority from subagent identity
   const delegated = await run(guard, [], {
     cwd: project,
     env,
-    input: { ...base, agent_id: 'agent-123', agent_type: 'fabex-operational' }
+    input: { ...base, agent_id: 'agent-123', agent_type: 'fabex:fabex-operational' }
   });
   assert.equal(delegated.stdout, '{}\n');
 
   const ambiguous = await run(guard, [], {
     cwd: project,
     env,
-    input: { ...base, agent_type: 'fabex-operational' }
+    input: { ...base, agent_type: 'fabex:fabex-operational' }
   });
   assert.equal(JSON.parse(ambiguous.stdout).hookSpecificOutput.permissionDecision, 'deny');
+
+  const bareType = await run(guard, [], {
+    cwd: project,
+    env,
+    input: { ...base, agent_id: 'agent-123', agent_type: 'fabex-operational' }
+  });
+  assert.equal(JSON.parse(bareType.stdout).hookSpecificOutput.permissionDecision, 'deny');
 });

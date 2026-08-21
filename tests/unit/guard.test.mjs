@@ -46,9 +46,9 @@ test('main-session GitHub pushes and gh operations are denied', async (t) => {
   assert.equal(await decision(ctx, 'Bash', { command: "printf '%s' 'git push origin main'" }), 'defer');
 });
 
-test('verified fabex-operational subagent may execute protected GitHub operations', async (t) => {
+test('verified plugin-scoped fabex-operational subagent may execute protected GitHub operations', async (t) => {
   const ctx = await fixture(t);
-  const executor = { agentId: 'agent-123', agentType: 'fabex-operational' };
+  const executor = { agentId: 'agent-123', agentType: 'fabex:fabex-operational' };
   assert.equal(await decision(ctx, 'Bash', { command: 'git push origin main' }, executor), 'defer');
   assert.equal(await decision(ctx, 'Bash', { command: 'gh pr create --fill' }, executor), 'defer');
 });
@@ -56,9 +56,11 @@ test('verified fabex-operational subagent may execute protected GitHub operation
 test('protected GitHub operations fail closed on ambiguous or alternate executor identity', async (t) => {
   const ctx = await fixture(t);
   for (const executor of [
-    { agentType: 'fabex-operational' },
+    { agentType: 'fabex:fabex-operational' },
     { agentId: 'agent-123' },
-    { agentId: '', agentType: 'fabex-operational' },
+    { agentId: '', agentType: 'fabex:fabex-operational' },
+    { agentId: 'agent-123', agentType: 'fabex-operational' },
+    { agentId: 'agent-123', agentType: 'other:fabex-operational' },
     { agentId: 'agent-123', agentType: 'general-purpose' }
   ]) assert.equal(await decision(ctx, 'Bash', { command: 'git push' }, executor), 'deny');
 });

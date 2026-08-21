@@ -15,6 +15,9 @@ const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
 const SAFE_UNHEALTHY = new Set(['status', 'config', 'diagnose', 'clear-dead-lock', 'recover-inspect', 'recover-retry', 'recover-abandon', 'recover-resolve-transaction']);
 const JOB_ID_RE = /^task-[a-z0-9]+-[a-z0-9]+$/;
 const OPERATIONAL_AGENT = 'fabex-operational';
+// Plugin-defined agents are reported by the hook harness with their plugin-scoped type.
+// Reject the bare agent name so an identity outside that contract cannot gain push authority.
+const OPERATIONAL_AGENT_TYPE = 'fabex:fabex-operational';
 const GIT_OPTIONS_WITH_VALUES = new Set(['-C', '-c', '--config-env', '--exec-path', '--git-dir', '--namespace', '--super-prefix', '--work-tree']);
 
 function simpleTokens(command) {
@@ -108,7 +111,7 @@ export function protectedGithubOperation(command) {
 function isOperationalExecutor(executor) {
   return typeof executor?.agentId === 'string'
     && executor.agentId.trim().length > 0
-    && executor.agentType === OPERATIONAL_AGENT;
+    && executor.agentType === OPERATIONAL_AGENT_TYPE;
 }
 
 export function parseControlCommand(command) {
