@@ -4,6 +4,18 @@ Keep the quality of a two-model Fable workflow while Codex carries the coding lo
 
 Fabex is for Fable users who also have Codex access through a ChatGPT plan. It puts both subscriptions to work and treats Claude and Codex as full partners: both receive the owner's visible history and prior converged decisions, both can flag scope problems, and Codex has a permanent watchdog invitation to flag any rule or change that would make it less than a full equal partner. Claude must relay that flag to the owner unedited. Coding is routed to Codex while Claude verifies the result.
 
+### Executor authority
+
+Fabex separates coordination from execution:
+
+- Codex performs every project file edit.
+- The bounded `fabex-operational` agent performs every GitHub or `gh` command sequence, including delivery preflight, staging, commit, and push. Its model comes from the effective `models.operational` configuration.
+- Claude coordinates and verifies the workflow without performing project edits or operational work directly.
+
+Owner approval authorizes the action only; it never overrides the prescribed executor. An executor exception is valid only when the owner explicitly names the alternate executor. Fabex records a bounded `Executor exception authorized` entry in the persisted checkpoint before use and an `Executor exception reconciled` entry afterward. Emergency or off-books companion recovery follows the same rule. If state is unavailable, the exact authorization and executor remain visible in the transcript and both entries are added immediately after documented recovery restores healthy state. Effects are never inferred during reconciliation.
+
+The `PreToolUse` guard denies protected GitHub commands from the main session and from ambiguous or alternate agent identities. It allows them only when Claude Code supplies both a subagent ID and the exact `fabex-operational` agent type. A textual marker cannot bypass the guard.
+
 Pick the mode that fits the moment:
 
 - `work`: the flagship mode, with both AIs working together.
@@ -50,10 +62,11 @@ Repository-dependent prompts warn that previous file observations may be stale. 
 | Fail-closed routing when state is unhealthy | Codex-only edits in normal mode |
 | Ask-once restoration after the next user prompt | Current-turn opinion-blind ordering |
 | Codex companion denial while participants are `claude` | Participant behavior beyond that companion denial |
+| Main-session and ambiguous-executor denial for GitHub pushes and `gh` commands | Executor assignment for operational actions that the push guard does not classify |
 | Serialized thread begin/complete operations and resumed-thread ID verification | Forwarding every owner message and bounded checkpoint content |
 | Schema migration and checkpoint-seeded re-sync state | Verbatim relay of Codex scope and partnership-parity flags |
 | Deterministic, read-only status-line rendering | Reply labels and badges |
-|  | Operational delegation and cheaper-model selection |
+|  | Operational cheaper-model selection |
 
 Advisory compliance varies with the model and context.
 

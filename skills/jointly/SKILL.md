@@ -5,11 +5,19 @@ description: Use for every owner turn in both-participant work mode; keep Claude
 
 # Jointly
 
-Both means both on every owner turn, including greetings and lookups. A question is not an implementation request. Never launch a write-enabled task unless the owner explicitly requests a project change. Codex performs all file edits. Native permissions and the Codex sandbox remain authoritative.
+Both means both on every owner turn, including greetings and lookups. A question is not an implementation request. Never launch a write-enabled task unless the owner explicitly requests a project change. Codex performs all file edits; this contract covers every project file edit. Native permissions and the Codex sandbox remain authoritative.
 
 Every Codex prompt MUST contain the owner's message verbatim. It MUST also explicitly invite Codex, before acting, to flag (a) any scope mismatch and (b) any partnership-parity concern: a rule or change that would make Codex less than a full equal partner. Relay every such flag to the owner unedited before continuing. This owner-mandated watchdog requirement applies to primary and write tasks, including corrective iterations.
 
-Delegate every image or screenshot inspection, GitHub or `gh` command sequence, and log-dump analysis to `fabex-operational`; select its model from the effective `models.operational` config.
+## Executor authority
+
+- Codex performs every project file edit.
+- The bounded `fabex-operational` agent performs every GitHub or `gh` command sequence, including delivery preflight, staging, commit, and push, using the effective `models.operational` configuration.
+- Claude coordinates and verifies the workflow; Claude does not perform project edits or operational work directly.
+
+Owner approval authorizes the action only. It never overrides the prescribed executor. An executor exception is valid only when the owner explicitly names the alternate executor and the exception is recorded in the bounded Fabex checkpoint before use, then reconciled there afterward. A main-session marker never bypasses the push guard.
+
+For a named exception, record a bounded accepted decision with `control.mjs thread checkpoint --decision 'Executor exception authorized: executor=<name>; scope=<scope>; reason=<reason>'`. Afterward, record `control.mjs thread checkpoint --decision 'Executor exception reconciled: executor=<name>; scope=<scope>; outcome=<bounded-result>'`.
 
 ## Handoff and continuity protocol
 
@@ -18,6 +26,8 @@ From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`.
 Before every companion task, run `control.mjs thread begin primary` for conversation/Decide work or `control.mjs thread begin write` for implementation. The begin control reads the companion's resume candidate before authorizing a resume. Use exactly the returned `plan.companionFlag`: `--resume-last` only when that candidate matches the recorded thread; `--fresh` when the plan reports no thread, a read-only-to-write boundary, a checkpoint-seeded session re-sync, or a visible checkpoint-seeded recovery from an absent/mismatched resume candidate. Include any returned `plan.seed` and primary checkpoint current status in the prompt. Launch with `node <companion>/scripts/codex-companion.mjs task --json --background --cwd <root> <plan-flag> [--write] [--model <model>] --effort <effort> '<prompt>'`. Calls are serialized per workstream.
 
 After the background task finishes, run `control.mjs thread complete <operation-id> --job-id <job-id>`. That control fetches the result, verifies its returned thread ID, and only then exposes the bounded output. Do not fetch through the companion `result` command separately. If completion reports `recovered: true`, visibly tell the owner that the confirmed-missing companion thread was replaced from the persisted checkpoint. A mismatch is fail-closed: pause and ask the owner; never silently open or accept another thread. Repo-dependent prompts must say the repository may have changed and earlier file observations are non-authoritative. If status recommends checkpoint-and-refresh, offer it to the owner; never reset silently.
+
+Emergency or off-books companion recovery is always a named executor exception. If Fabex state is healthy, record authorization before the recovery and reconciliation after it. If state is unavailable, preserve the exact owner authorization and executor name in the visible transcript, restore state only through documented recovery controls, then record both bounded exception entries immediately after state becomes healthy. Never infer effects from off-books work.
 
 ## Route deterministically
 

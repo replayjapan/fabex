@@ -349,3 +349,24 @@ test('PreToolUse guard first touch initializes state from payload cwd', async (t
   assert.equal(state.ok, true);
   assert.equal(state.state.route, 'normal');
 });
+
+test('PreToolUse hook derives protected-command authority from subagent identity fields', async (t) => {
+  const { project, env } = await fixture(t);
+  const base = { cwd: project, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push origin main' } };
+  const mainSession = await run(guard, [], { cwd: project, env, input: base });
+  assert.equal(JSON.parse(mainSession.stdout).hookSpecificOutput.permissionDecision, 'deny');
+
+  const delegated = await run(guard, [], {
+    cwd: project,
+    env,
+    input: { ...base, agent_id: 'agent-123', agent_type: 'fabex-operational' }
+  });
+  assert.equal(delegated.stdout, '{}\n');
+
+  const ambiguous = await run(guard, [], {
+    cwd: project,
+    env,
+    input: { ...base, agent_type: 'fabex-operational' }
+  });
+  assert.equal(JSON.parse(ambiguous.stdout).hookSpecificOutput.permissionDecision, 'deny');
+});

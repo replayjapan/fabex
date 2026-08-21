@@ -9,6 +9,10 @@
 - Added stale-repository warnings, status-visible thread metadata, owner-offered checkpoint-and-refresh guidance, and outermost-owner workstream-root resolution that prevents abandoned nested state from shadowing an ancestor workstream.
 - Added the permanent owner-mandated partnership-parity watchdog: every Codex prompt carries the owner's words verbatim and invites scope and parity flags, which Claude must relay unedited.
 - Fixed mid-session and interleaved primary/write continuity by creating session re-sync threads through the companion background-task store and inspecting its resumable candidate before every `--resume-last`. An absent or sibling-mismatched candidate now routes to one visible, checkpoint-seeded atomic replacement before any prompt launch; post-launch confirmed-missing recovery remains exact-condition-only, while ambiguous inspection/runtime failures and returned-ID mismatches remain fail-closed.
+- Codified executor authority: Codex performs all project file edits, `fabex-operational` performs every GitHub or `gh` sequence, and Claude coordinates without directly performing either class of work. Owner approval never overrides the prescribed executor; exceptions require an explicitly named alternate plus bounded authorization and reconciliation records.
+- Added a fail-closed push guard that denies main-session, alternate-agent, and ambiguous-identity `git push`, `git send-pack`, Git LFS push, and `gh` operations while allowing the verified `fabex-operational` subagent.
+- Required emergency or off-books companion recovery to be recorded as a named executor exception and reconciled into the persisted Fabex checkpoint afterward.
+- Recorded the delivery deviation for commit `f11e7c7`: Claude pushed it directly; the contents remain valid and history is not rewritten.
 
 ## 1.1.0 - 2026-08-20
 

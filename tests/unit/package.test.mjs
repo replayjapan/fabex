@@ -70,6 +70,11 @@ test('jointly routes implementation with persistent verified threads and parity 
   assert.match(skill, /completion reports `recovered: true`/);
   assert.match(skill, /Independently run the owner's tests or criteria/);
   assert.match(skill, /current unpublished opinion/);
+  assert.match(skill, /Codex performs every project file edit/);
+  assert.match(skill, /including delivery preflight, staging, commit, and push/);
+  assert.match(skill, /Owner approval authorizes the action only/);
+  assert.match(skill, /explicitly names the alternate executor/);
+  assert.match(skill, /Executor exception reconciled/);
 });
 
 test('participant skills encode joint defaults, Claude work invariant, and continuous verified Codex relay', async () => {
@@ -94,7 +99,7 @@ test('participant skills encode joint defaults, Claude work invariant, and conti
   assert.match(discussionCodex, /never clear the primary thread/);
 });
 
-test('1.2.0 release notes disclose continuity, usage increase, wording, and migration', async () => {
+test('1.2.0 release notes disclose continuity, executor authority, guard, usage increase, wording, and migration', async () => {
   const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
   const release = changelog.split('## 1.1.0')[0];
   assert.match(release, /## 1\.2\.0/);
@@ -108,6 +113,9 @@ test('1.2.0 release notes disclose continuity, usage increase, wording, and migr
   assert.match(release, /before any prompt launch/);
   assert.match(release, /checkpoint-seeded atomic replacement/);
   assert.match(release, /outermost-owner workstream-root resolution/);
+  assert.match(release, /Codex performs all project file edits/);
+  assert.match(release, /fail-closed push guard/);
+  assert.match(release, /f11e7c7/);
 });
 
 test('public tree contains no removed greeting exclusion wording', async () => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { classifyToolUse, classifyUnhealthyToolUse, parseControlCommand } from '../../scripts/hook-route-guard.mjs';
+import { classifyToolUse, classifyUnhealthyToolUse, parseControlCommand, protectedGithubOperation } from '../../scripts/hook-route-guard.mjs';
 import { PLUGIN_ROOT, projectIdFor } from '../../scripts/lib/paths.mjs';
 import { initialState } from '../../scripts/lib/state.mjs';
 
@@ -14,8 +14,8 @@ async function fixture(t) {
   return { root, paths, state: initialState(paths) };
 }
 
-async function decision(ctx, toolName, toolInput) {
-  return (await classifyToolUse({ toolName, toolInput, state: ctx.state, paths: ctx.paths })).decision;
+async function decision(ctx, toolName, toolInput, executor) {
+  return (await classifyToolUse({ toolName, toolInput, state: ctx.state, paths: ctx.paths, executor })).decision;
 }
 
 test('normal route defers every well-formed tool to native policy', async (t) => {
@@ -24,6 +24,43 @@ test('normal route defers every well-formed tool to native policy', async (t) =>
     ['Read', { file_path: 'x' }], ['Write', { file_path: 'x', content: 'y' }],
     ['Bash', { command: 'printenv' }], ['mcp__unknown__mutate', { target: 'x' }], ['Browser', { url: 'x' }]
   ]) assert.equal(await decision(ctx, name, input), 'defer', name);
+});
+
+test('main-session GitHub pushes and gh operations are denied', async (t) => {
+  const ctx = await fixture(t);
+  for (const command of [
+    'git push origin main',
+    '/usr/bin/git -C project push origin main',
+    'git send-pack origin refs/heads/main',
+    'git lfs push origin main',
+    'gh pr create --fill',
+    'npm test && git push origin main',
+    'git push; printf done',
+    'gh; printf done',
+    "sh -c 'git push origin main'"
+  ]) {
+    assert.ok(protectedGithubOperation(command), command);
+    assert.equal(await decision(ctx, 'Bash', { command }), 'deny', command);
+  }
+  assert.equal(await decision(ctx, 'Bash', { command: 'git status --short' }), 'defer');
+  assert.equal(await decision(ctx, 'Bash', { command: "printf '%s' 'git push origin main'" }), 'defer');
+});
+
+test('verified fabex-operational subagent may execute protected GitHub operations', async (t) => {
+  const ctx = await fixture(t);
+  const executor = { agentId: 'agent-123', agentType: 'fabex-operational' };
+  assert.equal(await decision(ctx, 'Bash', { command: 'git push origin main' }, executor), 'defer');
+  assert.equal(await decision(ctx, 'Bash', { command: 'gh pr create --fill' }, executor), 'defer');
+});
+
+test('protected GitHub operations fail closed on ambiguous or alternate executor identity', async (t) => {
+  const ctx = await fixture(t);
+  for (const executor of [
+    { agentType: 'fabex-operational' },
+    { agentId: 'agent-123' },
+    { agentId: '', agentType: 'fabex-operational' },
+    { agentId: 'agent-123', agentType: 'general-purpose' }
+  ]) assert.equal(await decision(ctx, 'Bash', { command: 'git push' }, executor), 'deny');
 });
 
 test('all read-only routes defer reads and deny writes', async (t) => {

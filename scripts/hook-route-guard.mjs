@@ -14,6 +14,8 @@ const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'disc
 const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
 const SAFE_UNHEALTHY = new Set(['status', 'config', 'diagnose', 'clear-dead-lock', 'recover-inspect', 'recover-retry', 'recover-abandon', 'recover-resolve-transaction']);
 const JOB_ID_RE = /^task-[a-z0-9]+-[a-z0-9]+$/;
+const OPERATIONAL_AGENT = 'fabex-operational';
+const GIT_OPTIONS_WITH_VALUES = new Set(['-C', '-c', '--config-env', '--exec-path', '--git-dir', '--namespace', '--super-prefix', '--work-tree']);
 
 function simpleTokens(command) {
   if (typeof command !== 'string' || command.length === 0 || command.includes('\0')) return null;
@@ -49,6 +51,64 @@ function simpleTokens(command) {
   if (quote) return null;
   if (started) tokens.push(current);
   return tokens;
+}
+
+function executableName(token) {
+  return basename(token ?? '').replace(/\.exe$/i, '').toLowerCase();
+}
+
+function protectedGitOperation(tokens, gitIndex) {
+  let index = gitIndex + 1;
+  while (index < tokens.length && tokens[index].startsWith('-')) {
+    const option = tokens[index];
+    if (GIT_OPTIONS_WITH_VALUES.has(option)) index += 2;
+    else index += 1;
+  }
+  const subcommand = tokens[index];
+  if (['push', 'send-pack'].includes(subcommand)) return 'git push operation';
+  if (subcommand === 'lfs' && tokens[index + 1] === 'push') return 'Git LFS push operation';
+  return null;
+}
+
+function protectedSimpleCommand(tokens) {
+  let index = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index] ?? '')) index += 1;
+  const executable = executableName(tokens[index]);
+  if (executable === 'gh') return 'GitHub CLI operation';
+  if (executable === 'git') return protectedGitOperation(tokens, index);
+  if (['bash', 'dash', 'fish', 'sh', 'zsh'].includes(executable)) {
+    const commandIndex = tokens.indexOf('-c', index + 1);
+    if (commandIndex !== -1 && typeof tokens[commandIndex + 1] === 'string') return protectedGithubOperation(tokens[commandIndex + 1]);
+  }
+  if (['command', 'env', 'exec', 'nohup', 'sudo', 'xcrun'].includes(executable)) {
+    for (let candidate = index + 1; candidate < tokens.length; candidate += 1) {
+      const nested = executableName(tokens[candidate]);
+      if (nested === 'gh') return 'GitHub CLI operation';
+      if (nested === 'git') return protectedGitOperation(tokens, candidate);
+    }
+  }
+  return null;
+}
+
+export function protectedGithubOperation(command) {
+  if (typeof command !== 'string' || command.length === 0 || command.includes('\0')) return null;
+  const tokens = simpleTokens(command);
+  if (tokens) return protectedSimpleCommand(tokens);
+  const boundary = String.raw`(?:^|[;&|()\r\n])\s*`;
+  const wrappers = String.raw`(?:(?:command|env|exec|nohup|sudo|xcrun)\s+)*`;
+  const path = String.raw`(?:[^\s;&|()]+\/)*`;
+  const commandEnd = String.raw`(?=\s|[;&|()\r\n]|$)`;
+  const gh = new RegExp(`${boundary}${wrappers}${path}gh(?:\\.exe)?${commandEnd}`, 'i');
+  if (gh.test(command)) return 'ambiguous or composed GitHub CLI operation';
+  const git = new RegExp(`${boundary}${wrappers}${path}git(?:\\.exe)?\\s+[^;&|()\\r\\n]{0,512}\\b(?:push|send-pack|lfs\\s+push)${commandEnd}`, 'i');
+  if (git.test(command)) return 'ambiguous or composed git push operation';
+  return null;
+}
+
+function isOperationalExecutor(executor) {
+  return typeof executor?.agentId === 'string'
+    && executor.agentId.trim().length > 0
+    && executor.agentType === OPERATIONAL_AGENT;
 }
 
 export function parseControlCommand(command) {
@@ -136,9 +196,13 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
   return deny(`state is ${health}; only reads and exact diagnostic or recovery controls are available`);
 }
 
-export async function classifyToolUse({ toolName, toolInput, state, paths }) {
+export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {} }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
   if (state.participants === 'claude' && toolName === 'Bash' && await isCompanionInvocation(toolInput.command)) return deny('Claude-only mode denies Codex companion invocations; explicitly switch participants first');
+  const protectedOperation = toolName === 'Bash' ? protectedGithubOperation(toolInput.command) : null;
+  if (protectedOperation && !isOperationalExecutor(executor)) {
+    return deny(`${protectedOperation} requires a verified ${OPERATIONAL_AGENT} subagent; main-session, alternate-agent, and ambiguous executor identities are denied`);
+  }
   if (state.route === 'normal') return defer();
   if (!['discussion', 'ask-once', 'recovery-read-only'].includes(state.route)) return deny('invalid route; use recover');
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
@@ -173,7 +237,13 @@ export async function main() {
     const root = await rootFromHookInput(input, process.env);
     const stateResult = await readState(root, process.env);
     output = stateResult.ok
-      ? await classifyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, state: stateResult.state, paths: stateResult.paths })
+      ? await classifyToolUse({
+        toolName: input.tool_name,
+        toolInput: input.tool_input,
+        state: stateResult.state,
+        paths: stateResult.paths,
+        executor: { agentId: input.agent_id, agentType: input.agent_type }
+      })
       : classifyUnhealthyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, health: stateResult.health });
   } catch {
     output = deny('route guard input or internal failure; use diagnose and recover');
