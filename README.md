@@ -1,8 +1,8 @@
 # Fabex
 
-Keep the quality of a Claude-led Fable workflow while Codex carries the coding load.
+Keep the quality of a two-model Fable workflow while Codex carries the coding load.
 
-Fabex is for Fable users who also have Codex access through a ChatGPT plan. It puts both your subscriptions to work and reduces pressure on your Claude limits during heavy coding. It is designed to route coding to Codex while Claude leads the workflow.
+Fabex is for Fable users who also have Codex access through a ChatGPT plan. It puts both subscriptions to work and treats Claude and Codex as full partners: both receive the owner's visible history and prior converged decisions, both can flag scope problems, and Codex has a permanent watchdog invitation to flag any rule or change that would make it less than a full equal partner. Claude must relay that flag to the owner unedited. Coding is routed to Codex while Claude verifies the result.
 
 Pick the mode that fits the moment:
 
@@ -20,16 +20,26 @@ Mode labels and an optional status-line badge make it clear where you are. Some 
 ```text
 request
 ├─ clear-criteria/mechanical implementation → Codex implements → Claude verifies
-└─ design/judgment → blind Claude + Codex views → honest convergence
+└─ design/judgment → current-turn opinion-blind views → honest convergence
                                                     └─ if code: Codex implements → Claude verifies
 ```
 
 Fabex has two routing policies:
 
-- **Implement:** The default for builds, fixes, changes, and implementations with explicit acceptance criteria, plus mechanical fixes. Claude states one short task-and-criteria framing line, immediately delegates the user's request to a fresh write-enabled Codex task, then independently runs the stated tests or criteria. Claude does not duplicate Codex's bug-by-bug implementation analysis.
-- **Decide:** For architecture, design, tradeoffs, and other substantive judgments. Claude and Codex form blind independent views and converge honestly. If code follows, their views stay focused on the approach and the work moves to Implement.
+- **Implement:** The default for builds, fixes, changes, and implementations with explicit acceptance criteria, plus mechanical fixes. Claude states one short task-and-criteria framing line, delegates the owner's verbatim request to Codex's persistent write sibling, then independently runs the stated tests or criteria.
+- **Decide:** For conversation, architecture, design, tradeoffs, and other judgments. Claude and Codex are current-turn opinion-blind: they share owner-visible history and prior decisions, but neither receives the other's current unpublished opinion. They then converge honestly.
 
-The Decide lane remains auditable in the conversation: Claude states its complete view before fetching Codex's result. Codex receives the user's message plus neutral context, never Claude's draft opinion. In both lanes, Codex performs all file edits and returns a bounded summary of files changed, diffstat, test exit codes, unresolved risks, and decisions needed; Claude verifies rather than relaying full transcripts.
+The Decide lane remains auditable: Codex is asked before Claude publishes its current view; Claude publishes its complete view before fetching; only then does Fabex fetch, verify the returned thread ID, and converge. Neither participant receives the other's current unpublished opinion. Every Codex task handoff carries the owner's words verbatim, explicitly invites scope-mismatch and partnership-parity flags before execution, and requires Claude to relay any flag unedited.
+
+### Continuous Codex memory
+
+Each resolved project workstream persists a primary read-only conversation thread, a write-thread sibling, a bounded checkpoint (verbatim owner goals, accepted decisions, and current status), and metadata for turn count, last use, re-sync state, and repository branch/HEAD/dirty fingerprint. Every both-participant owner message reaches the primary thread, including greetings and lookups. The owner-selected Claude-only modes are the only exclusion.
+
+Before using `--resume-last`, Fabex reads the companion's current resumable task candidate and requires its thread ID to match the recorded primary or write sibling. An absent or mismatched candidate authorizes one visible checkpoint-seeded fresh replacement before any owner prompt is launched; ambiguous inspection failures remain fail-closed. Fabex still mechanically checks the returned ID before exposing the result. Calls are serialized per workstream, and bounded outcomes are persisted for the next sibling consult.
+
+Companion resume is Claude-session scoped. At a real SessionStart in a mode that includes Codex, an existing primary thread is re-synced immediately from its persisted checkpoint through the tracked background store, the new ID is recorded, and status labels it `re-synced`; a failed or ambiguous re-sync remains fail-closed. Claude-only mode keeps companion denial intact and leaves the seeded re-sync pending until Codex is selected. Unseeded new threads remain limited to the initial thread and read-only-to-write boundary; candidate-driven replacements are always checkpoint-seeded and reported. There is no public fresh-thread command.
+
+Repository-dependent prompts warn that previous file observations may be stale. Status exposes thread metadata and recommends offering checkpoint-and-refresh when a thread is long or the repository fingerprint moved substantially. Refresh is never silent.
 
 ## Enforced and advisory behavior
 
@@ -38,8 +48,10 @@ The Decide lane remains auditable in the conversation: Claude states its complet
 | Read-only blocking in discussion and ask-once modes | Question discipline |
 | Validated controls only in discussion and ask-once modes | Jointly invocation and lane selection |
 | Fail-closed routing when state is unhealthy | Codex-only edits in normal mode |
-| Ask-once restoration after the next user prompt | Independent verification and blindness ordering |
+| Ask-once restoration after the next user prompt | Current-turn opinion-blind ordering |
 | Codex companion denial while participants are `claude` | Participant behavior beyond that companion denial |
+| Serialized thread begin/complete operations and resumed-thread ID verification | Forwarding every owner message and bounded checkpoint content |
+| Schema migration and checkpoint-seeded re-sync state | Verbatim relay of Codex scope and partnership-parity flags |
 | Deterministic, read-only status-line rendering | Reply labels and badges |
 |  | Operational delegation and cheaper-model selection |
 
@@ -88,11 +100,11 @@ claude plugin install fabex@fabex
 - `/ask` asks both AIs once in read-only mode.
 - `/askClaude` or `/askCodex` selects one AI for a read-only answer.
 - `/discussion` enters persistent joint read-only discussion.
-- `/discussionClaude` and `/discussionCodex` select a single participant; the Codex variant relays one continuous Codex thread per entry.
+- `/discussionClaude` and `/discussionCodex` select a single participant; the Codex variant relays the workstream's continuous primary Codex thread.
 - `/work` returns to joint normal work; `/workClaude` returns to normal Claude conversation without automatic Codex consultation.
 - `/status` and `/diagnose` report routing and health.
 
-Normal mode is the default. With joint-by-default enabled, clear implementation requests use Implement, substantive judgments use Decide, and greetings and trivial lookups skip the protocol.
+Normal mode is the default. With both participants selected, clear implementation requests use Implement and every other owner turn uses the continuous primary conversation thread. Both means both every time; select a single-AI mode when only one participant is wanted.
 
 ### Modes and labels
 
@@ -109,7 +121,11 @@ Route and participants are stored separately, while every supported combination 
 | `/askClaude` | ask-once | claude | `askClaude` | One read-only Claude answer, then restore |
 | `/askCodex` | ask-once | codex | `askCodex` | One read-only Codex answer, then restore |
 
-Codex always performs implementation. In `workClaude`, a build, fix, change, create, update, or implement request still invokes `/jointly`, explicitly switches participants to `both`, and routes edits to a write-enabled Codex task.
+Codex always performs implementation. In `workClaude`, a build, fix, change, create, update, or implement request still invokes `/jointly`, explicitly switches participants to `both`, and routes edits to the persistent write sibling.
+
+### Workstream-root resolution
+
+Controls and hooks walk upward from the supplied working directory to the nearest ancestor that already owns Fabex state, just as repository tools locate an enclosing root. This prevents a shell `cd` into a subdirectory from silently creating or operating on another state root. If no ancestor has Fabex state, the invoked working directory becomes a new workstream root.
 
 ## Configuration
 
@@ -173,7 +189,7 @@ Fabex does not set `refreshInterval` by default.
 Three claims should be kept separate:
 
 1. Reducing Claude-side usage on substantial implementation work and operational chores is the design goal, not a guaranteed result. The Implement lane moves coding and edit-test-fix loops to Codex while keeping Claude's role to a short framing line and independent verification.
-2. The Decide lane intentionally spends extra tokens on independent views when judgment is valuable. If you mostly chat, set `collaboration.jointByDefault` to `false` and invoke `/jointly` only when useful.
+2. Every both-mode message now consults Codex by owner requirement. This intentionally adds latency and Codex usage, including for greetings and lookups. Choose a Claude-only or Codex-only mode when one participant is desired.
 3. Codex-side usage is real and should be reported separately. Combined economics depend on task shape, models, caching, and prices; treat totals only as estimates, not guaranteed savings.
 
 A representative implementation benchmark used the same six-bug, three-file, 12-test task, identical pass criteria, and a fresh copy for each run. All three runs passed:
@@ -184,7 +200,7 @@ A representative implementation benchmark used the same six-bug, three-file, 12-
 | Fabex duplicated-analysis design (superseded) | 6,816 | 15 | 323k |
 | Fabex final two-lane design with imperative delegation wording | 2,224 | 9 | 255k |
 
-On this representative implementation task, the final design used about 43% fewer Claude output tokens than solo Claude, and delegation to write-enabled Codex was confirmed. The superseded design forced Claude to duplicate implementation analysis before Codex did the work; the final Implement lane removes that duplication, while Decide preserves blind views where judgment benefits from them. These are single-run measurements, not a general savings guarantee. Fabex also read more cached input than solo Claude (255k versus 145k); cache reads are the cheapest Claude token class, but they are still usage. Codex-side usage is separate real spend and is not included in the Claude figures above.
+On this representative implementation task, the final design used about 43% fewer Claude output tokens than solo Claude, and delegation to write-enabled Codex was confirmed. The superseded design forced Claude to duplicate implementation analysis before Codex did the work; the final Implement lane removes that duplication, while Decide preserves current-turn opinion-blind views where judgment benefits from them. These are single-run measurements, not a general savings guarantee. Fabex also read more cached input than solo Claude (255k versus 145k); cache reads are the cheapest Claude token class, but they are still usage. Codex-side usage is separate real spend and is not included in the Claude figures above.
 
 A paired one-line micro-task showed the same overhead pattern: Fabex used 3,078 Claude output tokens and 322k cache-read tokens over 12 turns; solo Claude used 1,397 output tokens and 184k cache-read tokens over eight turns. Both produced identical code and passed. Quick tasks can still cost more because delegation and verification have fixed overhead; use `/askClaude` or a plain request when token cost matters more than collaboration.
 

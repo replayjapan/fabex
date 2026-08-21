@@ -1,49 +1,42 @@
 ---
 name: jointly
-description: Use for build, fix, change, implement, create, or update requests and for substantive questions or decisions; route clear mechanical implementation straight to Codex with Claude verification, use blind independent Claude and Codex views for judgment, converge honestly, and give all implementation to Codex.
+description: Use for every owner turn in both-participant work mode; keep Claude and Codex current-turn opinion-blind, converge honestly, and route all implementation to Codex's persistent write sibling.
 ---
 
 # Jointly
 
-Use one of two lanes. Codex performs all file edits in both lanes. Native permissions and the Codex sandbox remain authoritative.
+Both means both on every owner turn, including greetings and lookups. A question is not an implementation request. Never launch a write-enabled task unless the owner explicitly requests a project change. Codex performs all file edits. Native permissions and the Codex sandbox remain authoritative.
 
-A question is not an implementation request. Never enter the Implement lane or launch a `--write` task unless the user explicitly requests a project change.
+Every Codex prompt MUST contain the owner's message verbatim. It MUST also explicitly invite Codex, before acting, to flag (a) any scope mismatch and (b) any partnership-parity concern: a rule or change that would make Codex less than a full equal partner. Relay every such flag to the owner unedited before continuing. This owner-mandated watchdog requirement applies to primary and write tasks, including corrective iterations.
 
-You MUST delegate every image or screenshot inspection, GitHub or `gh` command sequence, and log-dump analysis to `fabex-operational`; do not perform any part of those in the primary session. Select its model from the effective `models.operational` config.
+Delegate every image or screenshot inspection, GitHub or `gh` command sequence, and log-dump analysis to `fabex-operational`; select its model from the effective `models.operational` config.
+
+## Handoff and continuity protocol
+
+From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`. If status reports `participants: claude`, switch the current persistent route to `--participants both` before invoking the companion. Never implement while a read-only route is active; ask the owner to invoke `/work` or `/workClaude` first.
+
+Before every companion task, run `control.mjs thread begin primary` for conversation/Decide work or `control.mjs thread begin write` for implementation. The begin control reads the companion's resume candidate before authorizing a resume. Use exactly the returned `plan.companionFlag`: `--resume-last` only when that candidate matches the recorded thread; `--fresh` when the plan reports no thread, a read-only-to-write boundary, a checkpoint-seeded session re-sync, or a visible checkpoint-seeded recovery from an absent/mismatched resume candidate. Include any returned `plan.seed` and primary checkpoint current status in the prompt. Launch with `node <companion>/scripts/codex-companion.mjs task --json --background --cwd <root> <plan-flag> [--write] [--model <model>] --effort <effort> '<prompt>'`. Calls are serialized per workstream.
+
+After the background task finishes, run `control.mjs thread complete <operation-id> --job-id <job-id>`. That control fetches the result, verifies its returned thread ID, and only then exposes the bounded output. Do not fetch through the companion `result` command separately. If completion reports `recovered: true`, visibly tell the owner that the confirmed-missing companion thread was replaced from the persisted checkpoint. A mismatch is fail-closed: pause and ask the owner; never silently open or accept another thread. Repo-dependent prompts must say the repository may have changed and earlier file observations are non-authoritative. If status recommends checkpoint-and-refresh, offer it to the owner; never reset silently.
 
 ## Route deterministically
 
-- **Implement lane (default):** Use for build, fix, change, implement, create, or update requests that have explicit acceptance criteria or are mechanical fixes. Do not form or state an independent implementation analysis.
-- **Decide lane:** Use when the request requires choosing an approach, architecture, design, or tradeoff, or asks a substantive judgment question. If code is also requested, keep both views complete but brief and about the approach only; after convergence, enter the Implement lane.
-- **Pure questions:** Use the Decide lane for substantive questions. Skip this skill for greetings and trivial lookups. `/ask` is joint; `/askClaude` and `/askCodex` are the explicit single-AI escapes.
-
-From the project root, run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs config`, `status`, and `diagnose`. If status reports `participants: claude`, explicitly switch the current persistent route to `--participants both` before any companion invocation; invoking `/fabex:jointly` authorizes that participant transition. Never implement while a read-only route is active: ask the user to invoke `/work` or `/workClaude` first. Use the canonical project root, companion location, and configured Codex arguments: include `--model <model>` only when the model is non-null, then `--effort <reasoningEffort>`.
+- **Implement lane (default):** Build, fix, change, implement, create, or update requests with explicit acceptance criteria, plus mechanical fixes. Do not form or state a separate Claude implementation analysis.
+- **Decide lane:** Any conversation, question, approach, architecture, design, judgment, or tradeoff. Claude and Codex share owner-visible history and prior converged decisions but not one another's current unpublished opinion.
 
 ## Implement lane
 
-Never edit files yourself by any mechanism: do not use Write/Edit, shell, node scripts, or any other path. Codex alone performs every edit. Iterate only through short corrective Codex tasks, then reverify.
-
-1. State one short framing line containing only the task and acceptance criteria from the user's words. For a mechanical fix without separately stated criteria, treat the requested behavior itself as the criterion; do not invent criteria. Do not add bug-by-bug analysis, a proposed fix, or convergence ceremony.
-2. Immediately launch a fresh write-enabled background companion task:
-
-   `node <companion-location>/scripts/codex-companion.mjs task --json --background --cwd <canonical-project-root> --fresh --write [--model <model>] --effort <reasoningEffort> '<prompt>'`
-
-   The prompt must contain the user's message verbatim plus the acceptance criteria and no Claude implementation analysis. Require Codex to return only this bounded summary: status, files changed, diffstat, tests or criteria checked with exit codes, unresolved risks, and decisions needed.
-3. Fetch with the exact companion `status --json --wait --cwd ... <job-id>` and `result --json --cwd ... <job-id>` forms. Read and relay only the bounded summary, never a full transcript.
-4. Independently run the user's stated tests or criteria in the Claude session and collect their exit codes and a bounded diffstat. For a mechanical fix, also run relevant existing tests. Do not treat Codex's reported checks as Claude verification. Avoid rereading whole files; narrow diff inspection is allowed for security-sensitive changes.
-5. Report the implementation and verification results honestly. If verification fails, launch another fresh `--write` task with short corrective instructions containing only the failed criterion, essential failure evidence, and requested correction. Reverify; do not create a parallel implementation analysis.
+1. State one short framing line containing only the task and acceptance criteria from the owner's words. Do not add a proposed fix.
+2. Begin the persistent write-thread operation, then launch a write-enabled background companion task with the returned thread flag. The prompt contains the owner's message verbatim, any converged approach, acceptance criteria, stale-repository warning, and the parity-watchdog invitation above. Require only this bounded summary: status; parity-review outcome; files changed; diffstat; tests or criteria checked with exit codes; unresolved risks; decisions needed.
+3. Wait with the exact companion `status --json --wait --cwd ... <job-id>` form, then use the Fabex thread-complete control to fetch and mechanically verify before relaying the bounded result. A bounded write outcome is persisted as checkpoint current status so the next primary consult carries it.
+4. Independently run the owner's tests or criteria and collect exit codes and a bounded diffstat. For a mechanical fix, also run relevant existing tests. Narrow diff inspection is allowed for security-sensitive changes.
+5. If verification fails, resume the same write thread through another begin/complete cycle. The corrective prompt still carries the owner's original words verbatim, the failed criterion, essential evidence, requested correction, and the parity-watchdog invitation. Reverify.
 
 ## Decide lane
 
-1. Before forming or stating Claude's view, launch a fresh read-only background companion task:
+1. Begin the primary-thread operation and launch a read-only background companion task with the returned thread flag. The prompt contains the owner's message verbatim, any returned checkpoint seed, prior owner-visible decisions, neutral orientation, the stale-repository warning when relevant, and the parity-watchdog invitation. Never include Claude's current opinion or draft.
+2. While Codex runs, form Claude's view and publish Claude's complete current view as visible assistant text before any `status` or Fabex thread-complete fetch.
+3. Fetch the result, mechanically verify its thread ID, then present both views, relay parity or scope flags unedited, identify material disagreement, and state the converged decision. Record the exact accepted decision with `control.mjs thread checkpoint --decision '<accepted-decision>'`. The transcript order makes current-turn opinion separation auditable.
+4. If implementation was requested, enter the Implement lane using the owner's message verbatim, converged approach, and acceptance criteria. The write sibling is separate because the primary thread is read-only.
 
-   `node <companion-location>/scripts/codex-companion.mjs task --json --background --cwd <canonical-project-root> --fresh [--model <model>] --effort <reasoningEffort> '<prompt>'`
-
-   The prompt must contain the user's message verbatim plus only neutral context needed to orient Codex. Never include Claude's opinion, draft, preferred direction, or suggested answer. Never include `--write` in this opening task.
-2. While Codex runs, form Claude's independent view. State Claude's complete view as visible assistant text before any `status` or `result` call. When followed, that transcript ordering provides an auditable blindness protocol.
-3. Only after Claude's visible view, fetch with the exact companion `status --json --wait --cwd ... <job-id>` and `result --json --cwd ... <job-id>` forms. Present both views, identify material disagreements without smoothing them over, and state the converged decision.
-4. If implementation is requested, enter the Implement lane with the user's request verbatim, the converged approach, and the acceptance criteria. Use a fresh task with `--write`; do not repeat either model's implementation analysis.
-
-Efficiency rules: relay Codex work as bounded schema summaries only. Never relay full transcripts. Verify implementation using independently collected test exit codes and diffstat, not by rereading whole files.
-
-Use `--resume` or `--resume-last` only for read-only follow-up in the same context. Every independent opening view and every implementation or corrective task starts fresh.
+Never relay full transcripts. Keep checkpoints and outcomes bounded.

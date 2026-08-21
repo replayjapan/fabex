@@ -55,7 +55,12 @@ test('exact controls parse and composed lookalikes do not', async (t) => {
     `node ${control} mode normal --participants both`,
     `node ${control} mode normal --participants claude`,
     `node ${control} mode discussion --participants codex`,
-    `node ${control} mode ask-once --participants claude`
+    `node ${control} mode ask-once --participants claude`,
+    `node ${control} thread begin primary`,
+    `node ${control} thread begin write`,
+    `node ${control} thread complete 11111111-1111-4111-8111-111111111111 --thread-id thread-123`,
+    `node ${control} thread complete 11111111-1111-4111-8111-111111111111 --job-id task-m123abc-abc123`,
+    `node ${control} thread checkpoint --decision 'accepted direction'`
   ]) assert.equal(await decision(ctx, 'Bash', { command }), 'defer', command);
   assert.equal(parseControlCommand(`node ${control} mode discussion --participants neither`), null);
   assert.equal(parseControlCommand(`node ${control} mode discussion --participants both extra`), null);

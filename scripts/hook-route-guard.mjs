@@ -56,6 +56,10 @@ export function parseControlCommand(command) {
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
   if (['status', 'config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
+  if (args[0] === 'thread' && args[1] === 'begin' && ['primary', 'write'].includes(args[2]) && args.length === 3) return { kind: 'thread-begin' };
+  if (args[0] === 'thread' && args[1] === 'complete' && args.length === 5 && UUID_RE.test(args[2]) && args[3] === '--thread-id' && TOKEN_RE.test(args[4])) return { kind: 'thread-complete' };
+  if (args[0] === 'thread' && args[1] === 'complete' && args.length === 5 && UUID_RE.test(args[2]) && args[3] === '--job-id' && JOB_ID_RE.test(args[4])) return { kind: 'thread-complete' };
+  if (args[0] === 'thread' && args[1] === 'checkpoint' && args[2] === '--decision' && typeof args[3] === 'string' && args[3].length > 0 && Buffer.byteLength(args[3], 'utf8') <= 2048 && args.length === 4) return { kind: 'thread-checkpoint' };
   if (args[0] === 'mode' && ['normal', 'discussion', 'ask-once'].includes(args[1])) {
     if (args.length === 2) return { kind: `mode-${args[1]}`, participants: 'both' };
     if (args.length === 4 && args[2] === '--participants' && ['both', 'claude', 'codex'].includes(args[3])) return { kind: `mode-${args[1]}`, participants: args[3] };
@@ -166,7 +170,7 @@ export async function main() {
   let output;
   try {
     const input = await readInput();
-    const root = await rootFromHookInput(input);
+    const root = await rootFromHookInput(input, process.env);
     const stateResult = await readState(root, process.env);
     output = stateResult.ok
       ? await classifyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, state: stateResult.state, paths: stateResult.paths })

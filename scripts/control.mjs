@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { platform } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { discoverCompanionRuntime } from './lib/codex-adapter.mjs';
+import { beginPartnerOperation, completePartnerJob, completePartnerOperation, discoverCompanionRuntime, recordAcceptedDecision, repositoryFingerprint, threadRefreshAdvice } from './lib/codex-adapter.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
 import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
@@ -40,11 +40,8 @@ async function mode(root, target, participants = 'both') {
     return;
   }
   await mutate(root, `mode-${target}-${participants}`, (state) => {
-    const leavingDiscussionCodex = state.route === 'discussion' && state.participants === 'codex' && !(target === 'discussion' && participants === 'codex');
-    const enteringDiscussionCodex = target === 'discussion' && participants === 'codex' && !(state.route === 'discussion' && state.participants === 'codex');
     if (target === 'ask-once' && state.route !== 'ask-once') state.returnTo = { route: state.route, participants: state.participants };
     if (target !== 'ask-once') state.returnTo = null;
-    if (leavingDiscussionCodex || enteringDiscussionCodex) state.partner.threadId = null;
     state.route = target;
     state.participants = participants;
   });
@@ -53,6 +50,24 @@ async function mode(root, target, participants = 'both') {
 
 async function status(root) {
   const result = await readState(root, process.env);
+  const currentFingerprint = await repositoryFingerprint(result.paths.canonicalRoot);
+  const refresh = threadRefreshAdvice(result.state.partner.threads, currentFingerprint);
+  const checkpoint = result.state.partner.threads.checkpoint;
+  const partner = {
+    transport: result.state.partner.transport,
+    status: result.state.partner.status,
+    envelope: result.state.partner.envelope,
+    threads: {
+      primaryThreadId: result.state.partner.threads.primaryThreadId,
+      writeThreadId: result.state.partner.threads.writeThreadId,
+      checkpoint: {
+        ownerGoalCount: checkpoint.ownerGoals.length,
+        acceptedDecisionCount: checkpoint.acceptedDecisions.length,
+        hasCurrentStatus: checkpoint.currentStatus !== null
+      },
+      metadata: result.state.partner.threads.metadata
+    }
+  };
   process.stdout.write(`${JSON.stringify({
     health: result.health,
     route: result.state.route,
@@ -62,10 +77,81 @@ async function status(root) {
     generation: result.state.generation,
     project: result.state.project,
     task: result.state.task,
-    partner: result.state.partner,
+    partner,
+    threadContinuity: {
+      primaryThreadId: result.state.partner.threads.primaryThreadId,
+      writeThreadId: result.state.partner.threads.writeThreadId,
+      metadata: result.state.partner.threads.metadata,
+      currentRepoFingerprint: currentFingerprint,
+      checkpointAndRefresh: refresh
+    },
     operations: result.state.operations
   }, null, 2)}\n`);
   if (!result.ok) process.exitCode = 2;
+}
+
+async function thread(root, args) {
+  const current = await currentState(root);
+  if (current.state.participants === 'claude') throw new ValidationError('Claude-only mode denies Codex companion lifecycle controls; explicitly switch participants first');
+  if (args[0] === 'begin' && args.length === 2 && ['primary', 'write'].includes(args[1])) {
+    const kind = args[1];
+    const result = await beginPartnerOperation(root, {
+      threadKind: kind,
+      name: 'fabex',
+      envelope: {
+        cwd: root,
+        sandbox: kind === 'write' ? 'workspace-write' : 'read-only',
+        approvalPolicy: 'native',
+        instructionProfile: kind === 'write' ? 'implementation-sibling' : 'continuous-primary'
+      }
+    }, process.env);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (args[0] === 'complete' && args.length === 4 && args[2] === '--thread-id') {
+    const operationId = assertUuid(args[1], 'operation id');
+    const threadId = args[3];
+    if (typeof threadId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(threadId)) throw new ValidationError('thread id is invalid');
+    const operation = current.state.operations.find((item) => item.id === operationId && item.kind === 'partner' && item.status === 'running');
+    const [, , action = 'resume'] = operation?.name?.split(':').slice(-3) ?? [];
+    const recovered = action === 'recover';
+    const replacedThreadId = recovered ? operation.externalId : null;
+    const state = await completePartnerOperation(root, operationId, { threadId }, process.env);
+    process.stdout.write(`${JSON.stringify({
+      verified: true,
+      recovered,
+      recoveryReason: recovered ? 'prelaunch-resume-candidate-replacement' : null,
+      replacedThreadId,
+      operationId,
+      threadId,
+      resyncStatus: state.partner.threads.metadata.resyncStatus,
+      turnCount: state.partner.threads.metadata.turnCount
+    }, null, 2)}\n`);
+    return;
+  }
+  if (args[0] === 'complete' && args.length === 4 && args[2] === '--job-id') {
+    const operationId = assertUuid(args[1], 'operation id');
+    const completed = await completePartnerJob(root, operationId, args[3], process.env);
+    process.stdout.write(`${JSON.stringify({
+      verified: completed.verified,
+      recovered: completed.recovered,
+      recoveryReason: completed.recoveryReason ?? null,
+      replacedThreadId: completed.replacedThreadId ?? null,
+      operationId,
+      jobId: completed.jobId,
+      threadId: completed.threadId,
+      rawOutput: completed.rawOutput,
+      resyncStatus: completed.state.partner.threads.metadata.resyncStatus,
+      turnCount: completed.state.partner.threads.metadata.turnCount
+    }, null, 2)}\n`);
+    return;
+  }
+  if (args[0] === 'checkpoint' && args.length === 3 && args[1] === '--decision') {
+    const state = await recordAcceptedDecision(root, args[2], process.env);
+    process.stdout.write(`${JSON.stringify({ recorded: true, acceptedDecisionCount: state.partner.threads.checkpoint.acceptedDecisions.length })}\n`);
+    return;
+  }
+  throw new ValidationError('thread requires begin, complete, or checkpoint --decision <accepted-decision>');
 }
 
 async function config(root) {
@@ -147,7 +233,7 @@ async function diagnose(root) {
 }
 
 export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
-  const root = await rootFromControlCwd(cwd);
+  const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
   if (command === 'mode' && args.length === 1) return mode(root, args[0]);
   if (command === 'mode' && args.length === 3 && args[1] === '--participants') return mode(root, args[0], args[2]);
@@ -155,6 +241,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
   if (command === 'diagnose' && args.length === 0) return diagnose(root);
   if (command === 'config' && args.length === 0) return config(root);
   if (command === 'recover') return recover(root, args);
+  if (command === 'thread') return thread(root, args);
   throw new ValidationError('unknown or malformed control command');
 }
 

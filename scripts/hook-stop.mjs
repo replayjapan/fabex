@@ -19,7 +19,7 @@ export async function main() {
   try { input = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { process.stdout.write('{}\n'); return; }
   if (input.stop_hook_active === true) { process.stdout.write('{}\n'); return; }
   try {
-    const root = await rootFromHookInput(input);
+    const root = await rootFromHookInput(input, process.env);
     process.stdout.write(`${JSON.stringify(stopDecision(input, await readState(root, process.env)))}\n`);
   } catch { process.stdout.write('{}\n'); }
 }

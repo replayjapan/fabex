@@ -1,12 +1,10 @@
 ---
 name: askCodex
-description: Ask Codex one read-only question through the official companion and relay the attributed answer.
+description: Ask Codex one read-only question through the continuous verified primary thread and relay it.
 ---
 
 # Ask Codex
 
-Run the Fabex `status`, `config`, and `diagnose` controls, then run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode ask-once --participants codex` and show the mode message. If `display.replyModeBadge` is `always` or `changes`, prefix the answer with `[Fabex: askCodex]`; if it is `off`, omit the badge. Use the canonical project root, companion location, and configured Codex arguments to invoke:
+Run Fabex `status`, `config`, and `diagnose`, then `control.mjs mode ask-once --participants codex` and show the mode message. Apply the configured reply badge.
 
-`node <companion-location>/scripts/codex-companion.mjs task --json --cwd <canonical-project-root> --fresh [--model <model>] --effort <reasoningEffort> '<question>'`
-
-Pass the user's question verbatim as one shell-quoted argument. Never pass `--write`. Relay the result with clear Codex attribution, stay substantively silent, cause no project effects, and note that the next user prompt restores the prior persistent mode.
+Follow the jointly skill's primary-thread begin, companion, and complete protocol. Pass the owner's question verbatim and the parity-watchdog invitation. Use the returned thread plan, never `--write`, and mechanically verify the returned ID before using the result. Relay with Codex attribution, relay scope or partnership-parity flags unedited, stay substantively silent, and note that the next owner prompt restores the prior persistent mode.

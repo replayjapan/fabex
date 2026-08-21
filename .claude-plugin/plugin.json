@@ -1,7 +1,7 @@
 {
   "name": "fabex",
-  "version": "1.1.0",
-  "description": "Built for Fable: Claude and Codex think independently, converge honestly, and Codex writes the code — stretching your Fable tokens.",
+  "version": "1.2.0",
+  "description": "Built for Fable: Claude and Codex work as full partners, converge honestly, and Codex writes the code — stretching your Fable tokens.",
   "author": {
     "name": "rePlay, LLC"
   },

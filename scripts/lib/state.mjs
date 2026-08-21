@@ -29,7 +29,18 @@ export function initialState(identity) {
     partner: {
       transport: 'official-codex-plugin',
       status: 'not-started',
-      threadId: null,
+      threads: {
+        primaryThreadId: null,
+        writeThreadId: null,
+        checkpoint: { ownerGoals: [], acceptedDecisions: [], currentStatus: null },
+        metadata: {
+          turnCount: 0,
+          lastUsedAt: null,
+          repoFingerprint: { branch: null, head: null, dirty: null },
+          resyncStatus: 'not-needed',
+          refreshOfferedAt: null
+        }
+      },
       envelope: { cwd: null, sandbox: null, approvalPolicy: null, instructionProfile: null }
     },
     operations: []
@@ -101,8 +112,32 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = parsed?.schemaVersion === 1;
-  const state = migrated ? { ...parsed, schemaVersion: STATE_SCHEMA_VERSION, participants: 'both', returnTo: null } : parsed;
+  const migrated = [1, 2].includes(parsed?.schemaVersion);
+  let state = parsed;
+  if (migrated) {
+    state = structuredClone(parsed);
+    if (state.schemaVersion === 1) {
+      state.participants = 'both';
+      state.returnTo = null;
+    }
+    const legacyThreadId = state.partner?.threadId ?? null;
+    if (state.partner) {
+      delete state.partner.threadId;
+      state.partner.threads = {
+        primaryThreadId: legacyThreadId,
+        writeThreadId: null,
+        checkpoint: { ownerGoals: [], acceptedDecisions: [], currentStatus: null },
+        metadata: {
+          turnCount: legacyThreadId ? 1 : 0,
+          lastUsedAt: null,
+          repoFingerprint: { branch: null, head: null, dirty: null },
+          resyncStatus: legacyThreadId ? 'required' : 'not-needed',
+          refreshOfferedAt: null
+        }
+      };
+    }
+    state.schemaVersion = STATE_SCHEMA_VERSION;
+  }
   try { validateState(state, paths); } catch (error) {
     const code = error.details?.some((item) => item.includes('schemaVersion')) ? 'schema-mismatch' : 'corrupt';
     throw new StateStoreError(code, error.details?.join('; ') || error.message, error);
@@ -114,7 +149,7 @@ async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-v1-to-v2');
+    await acquireLock(paths, 'schema-migration-to-v3');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);

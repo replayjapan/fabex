@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-08-21
+
+- Added persistent primary and write Codex threads, bounded checkpoints, repository fingerprints, per-workstream serialization, mechanical resume-ID verification, and fail-closed mismatch handling.
+- Migrated schema v1 and v2 state automatically and atomically to schema v3; existing recorded partner threads become primary threads and are checkpoint-seeded on session re-sync.
+- Made every owner message in every both-participant mode consult Codex, including greetings and lookups. Latency and Codex usage increase by design, per owner requirement; single-AI modes remain the only exclusion.
+- Replaced the former view-isolation wording with an auditable current-turn opinion-blind protocol while retaining shared owner-visible history and prior converged decisions.
+- Added stale-repository warnings, status-visible thread metadata, owner-offered checkpoint-and-refresh guidance, and outermost-owner workstream-root resolution that prevents abandoned nested state from shadowing an ancestor workstream.
+- Added the permanent owner-mandated partnership-parity watchdog: every Codex prompt carries the owner's words verbatim and invites scope and parity flags, which Claude must relay unedited.
+- Fixed mid-session and interleaved primary/write continuity by creating session re-sync threads through the companion background-task store and inspecting its resumable candidate before every `--resume-last`. An absent or sibling-mismatched candidate now routes to one visible, checkpoint-seeded atomic replacement before any prompt launch; post-launch confirmed-missing recovery remains exact-condition-only, while ambiguous inspection/runtime failures and returned-ID mismatches remain fail-closed.
+
 ## 1.1.0 - 2026-08-20
 
 - Added `workClaude`, `discussionClaude`, and `discussionCodex`, plus participant selection across the eight supported work, discussion, and ask modes.
@@ -12,12 +22,12 @@
 
 - Strengthened normal-session operational delegation with an imperative rule for image and screenshot inspection, GitHub and `gh` command sequences, and log-dump analysis.
 - Documented which routing protections are mechanically enforced and which collaboration behaviors remain advisory.
-- Reworded routing, blindness, delegation, and model-compatibility claims to distinguish deterministic controls from model-dependent behavioral compliance.
+- Reworded routing, opinion separation, delegation, and model-compatibility claims to distinguish deterministic controls from model-dependent behavioral compliance.
 
 ## 1.0.0 - 2026-08-19
 
 - Initial public release.
-- Added blind independent Claude and Codex views with Codex-led implementation.
+- Added separated Claude and Codex views with Codex-led implementation.
 - Added normal, discussion, ask-once, and recovery-read-only routing.
 - Added transactional state, layered configuration, recovery controls, and public documentation.
 - Documented the final single-run implementation benchmark: the two-lane design used 2,224 Claude output tokens versus solo Claude's 3,919 (about 43% fewer), while using more cache-read tokens; Codex-side usage remains separate real spend, and the release gate remains the median of repeated paired runs.

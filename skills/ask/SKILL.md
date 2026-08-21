@@ -1,10 +1,10 @@
 ---
 name: ask
-description: Have Claude and Codex answer one question jointly and read-only, then restore the prior persistent mode.
+description: Have Claude and Codex answer one question jointly and read-only through the continuous verified primary thread.
 ---
 
 # Ask
 
-Run the Fabex `status`, `config`, and `diagnose` controls, then run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode ask-once --participants both` and show the mode message. If `display.replyModeBadge` is `always` or `changes`, prefix the answer with `[Fabex: ask]`; if it is `off`, omit the badge.
+Run Fabex `status`, `config`, and `diagnose`, then `control.mjs mode ask-once --participants both` and show the mode message. Apply the configured reply badge.
 
-Before forming Claude's answer, launch a fresh validated read-only Codex companion task with the user's question verbatim. Never pass `--write`. Form Claude's independent view, fetch Codex's result, attribute both where useful, and converge honestly without project effects. Note briefly that the next user prompt restores the prior persistent mode.
+Follow the jointly skill's primary-thread begin, companion, and complete protocol with the owner's question verbatim and the parity-watchdog invitation. Claude publishes its complete current view before fetching. After mechanical thread-ID verification, attribute both views, relay any scope or partnership-parity flag unedited, and converge without project effects. Note that the next owner prompt restores the prior persistent mode.

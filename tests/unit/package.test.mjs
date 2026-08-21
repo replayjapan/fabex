@@ -5,12 +5,12 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..', '..');
-const tagline = 'Built for Fable: Claude and Codex think independently, converge honestly, and Codex writes the code — stretching your Fable tokens.';
+const tagline = 'Built for Fable: Claude and Codex work as full partners, converge honestly, and Codex writes the code — stretching your Fable tokens.';
 
 async function filesUnder(directory) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.name === 'node_modules') continue;
+    if (entry.name === 'node_modules' || entry.name === '.git') continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) files.push(...await filesUnder(path));
     else if (entry.isFile()) files.push(path);
@@ -22,7 +22,7 @@ test('plugin and marketplace metadata are consistent and authoritative', async (
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.1.0');
+  assert.equal(plugin.version, '1.2.0');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.name, 'fabex');
   assert.equal(marketplace.plugins.length, 1);
@@ -51,22 +51,28 @@ test('only the requested public skills are packaged', async () => {
   assert.deepEqual(names, ['ask', 'askClaude', 'askCodex', 'diagnose', 'discussion', 'discussionClaude', 'discussionCodex', 'jointly', 'recover', 'status', 'work', 'workClaude'].sort());
 });
 
-test('jointly routes mechanical implementation without a blind analysis', async () => {
+test('jointly routes implementation with persistent verified threads and parity watchdog', async () => {
   const skill = await readFile(resolve(root, 'skills', 'jointly', 'SKILL.md'), 'utf8');
   assert.ok(skill.indexOf('A question is not an implementation request.') < skill.indexOf('## Route deterministically'));
-  assert.match(skill, /Never enter the Implement lane or launch a `--write` task unless the user explicitly requests a project change/);
+  assert.match(skill, /Never launch a write-enabled task unless the owner explicitly requests a project change/);
   assert.match(skill, /## Route deterministically/);
   assert.match(skill, /Implement lane \(default\)/);
-  assert.match(skill, /Do not form or state an independent implementation analysis/);
-  assert.match(skill, /Never edit files yourself by any mechanism/);
-  assert.match(skill, /Codex alone performs every edit/);
-  assert.match(skill, /Iterate only through short corrective Codex tasks/);
-  assert.match(skill, /--fresh --write \[--model <model>\] --effort <reasoningEffort>/);
-  assert.match(skill, /Independently run the user's stated tests or criteria/);
-  assert.match(skill, /choosing an approach, architecture, design, or tradeoff/);
+  assert.match(skill, /Do not form or state a separate Claude implementation analysis/);
+  assert.match(skill, /Codex performs all file edits/);
+  assert.match(skill, /owner's message verbatim/);
+  assert.match(skill, /partnership-parity concern/);
+  assert.match(skill, /Relay every such flag to the owner unedited/);
+  assert.match(skill, /thread begin primary/);
+  assert.match(skill, /thread begin write/);
+  assert.match(skill, /--resume-last/);
+  assert.match(skill, /reads the companion's resume candidate before authorizing a resume/);
+  assert.match(skill, /fail-closed/);
+  assert.match(skill, /completion reports `recovered: true`/);
+  assert.match(skill, /Independently run the owner's tests or criteria/);
+  assert.match(skill, /current unpublished opinion/);
 });
 
-test('participant skills encode joint defaults, Claude work invariant, and continuous Codex relay', async () => {
+test('participant skills encode joint defaults, Claude work invariant, and continuous verified Codex relay', async () => {
   const workClaude = await readFile(resolve(root, 'skills', 'workClaude', 'SKILL.md'), 'utf8');
   assert.match(workClaude, /without automatically consulting Codex/);
   assert.match(workClaude, /Codex always does the coding/);
@@ -75,27 +81,45 @@ test('participant skills encode joint defaults, Claude work invariant, and conti
 
   const discussion = await readFile(resolve(root, 'skills', 'discussion', 'SKILL.md'), 'utf8');
   assert.match(discussion, /--participants both/);
-  assert.match(discussion, /user's message verbatim/);
+  assert.match(discussion, /owner's message verbatim/);
+  assert.match(discussion, /every owner message/i);
   const ask = await readFile(resolve(root, 'skills', 'ask', 'SKILL.md'), 'utf8');
   assert.match(ask, /--participants both/);
-  assert.match(ask, /fresh validated read-only Codex companion task/);
+  assert.match(ask, /primary-thread begin, companion, and complete protocol/);
 
   const discussionCodex = await readFile(resolve(root, 'skills', 'discussionCodex', 'SKILL.md'), 'utf8');
-  assert.match(discussionCodex, /one fresh read-only Codex companion thread/);
+  assert.match(discussionCodex, /same continuous verified primary thread/);
   assert.match(discussionCodex, /--resume-last/);
   assert.match(discussionCodex, /stay substantively silent/);
-  assert.match(discussionCodex, /clears Fabex's recorded discussion thread/);
+  assert.match(discussionCodex, /never clear the primary thread/);
 });
 
-test('1.1.0 release notes disclose changed joint defaults and migration', async () => {
+test('1.2.0 release notes disclose continuity, usage increase, wording, and migration', async () => {
   const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
-  const release = changelog.split('## 1.0.1')[0];
-  assert.match(release, /## 1\.1\.0/);
-  assert.match(release, /`\/ask` and `\/discussion` to consult both Claude and Codex/);
-  assert.match(release, /latency/);
+  const release = changelog.split('## 1.1.0')[0];
+  assert.match(release, /## 1\.2\.0/);
+  assert.match(release, /every owner message in every both-participant mode/);
+  assert.match(release, /latency/i);
   assert.match(release, /Codex usage/);
-  assert.match(release, /schema v1 to v2/);
-  assert.match(release, /canonical mode labels/);
+  assert.match(release, /schema v1 and v2.*schema v3/);
+  assert.match(release, /current-turn opinion-blind/);
+  assert.match(release, /partnership-parity watchdog/);
+  assert.match(release, /inspecting its resumable candidate before every `--resume-last`/);
+  assert.match(release, /before any prompt launch/);
+  assert.match(release, /checkpoint-seeded atomic replacement/);
+  assert.match(release, /outermost-owner workstream-root resolution/);
+});
+
+test('public tree contains no removed greeting exclusion wording', async () => {
+  const removedWord = new RegExp(['s', 'k', 'i', 'p'].join(''), 'i');
+  const removedPhrase = new RegExp(['blind', 'independent', 'views'].join(' '), 'i');
+  const demotingPhrase = new RegExp(['Claude', '(?:-led| leads)'].join(''), 'i');
+  for (const path of await filesUnder(root)) {
+    const content = await readFile(path, 'utf8');
+    assert.doesNotMatch(content, removedWord, path);
+    assert.doesNotMatch(content, removedPhrase, path);
+    assert.doesNotMatch(content, demotingPhrase, path);
+  }
 });
 
 test('every shipped JSON file parses', async () => {

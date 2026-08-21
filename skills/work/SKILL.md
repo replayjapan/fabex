@@ -5,4 +5,4 @@ description: Enter normal joint work mode, where Claude and Codex use Fabex rout
 
 # Work
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs config`, then `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode normal --participants both` from the project root and show the mode message. If `display.replyModeBadge` is `always` or `changes`, prefix this transition reply with `[Fabex: work]`; if it is `off`, omit the badge. This changes only Fabex routing; it does not widen native permissions or sandbox access.
+Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs config`, then `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode normal --participants both` from the resolved workstream root and show the mode message. Apply the configured reply badge. This changes only Fabex routing; it does not widen native permissions or sandbox access. Both means every subsequent owner turn reaches the continuous verified primary Codex thread through `/fabex:jointly`.
