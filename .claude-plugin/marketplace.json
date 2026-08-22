@@ -4,13 +4,13 @@
     "name": "rePlay, LLC"
   },
   "metadata": {
-    "description": "Built for Fable: Claude and Codex work as full partners, converge honestly, and Codex writes the code — stretching your Fable tokens."
+    "description": "Built for Fable: Claude and Codex collaborate through one continuous MCP thread within documented platform and behavioral limits."
   },
   "plugins": [
     {
       "name": "fabex",
       "source": "./",
-      "description": "Built for Fable: Claude and Codex work as full partners, converge honestly, and Codex writes the code — stretching your Fable tokens.",
+      "description": "Built for Fable: Claude and Codex collaborate through one continuous MCP thread within documented platform and behavioral limits.",
       "author": {
         "name": "rePlay, LLC"
       },

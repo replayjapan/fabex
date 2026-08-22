@@ -1,5 +1,5 @@
 {
-  "description": "Fabex route, context, and partner lifecycle hooks",
+  "description": "Fabex route, context, and synchronous Codex MCP lifecycle hooks",
   "hooks": {
     "SessionStart": [
       {
@@ -30,6 +30,30 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-route-guard.mjs"]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__codex__codex|mcp__codex__codex-reply",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-mcp-result.mjs"]
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "mcp__codex__codex|mcp__codex__codex-reply",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-mcp-result.mjs"]
           }
         ]
       }

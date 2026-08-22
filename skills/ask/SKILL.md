@@ -1,10 +1,10 @@
 ---
 name: ask
-description: Have Claude and Codex answer one question jointly and read-only through the continuous verified primary thread.
+description: Have Claude and Codex answer one question jointly and behaviorally read-only through the canonical Codex MCP thread.
 ---
 
 # Ask
 
 Run Fabex `status`, `config`, and `diagnose`, then `control.mjs mode ask-once --participants both` and show the mode message. Apply the configured reply badge.
 
-Follow the jointly skill's primary-thread begin, companion, and complete protocol with the owner's question verbatim and the parity-watchdog invitation. Claude publishes its complete current view before fetching. After mechanical thread-ID verification, attribute both views, relay any scope or partnership-parity flag unedited, and converge without project effects. Note that the next owner prompt restores the prior persistent mode.
+Follow the jointly skill's canonical MCP begin-and-PostToolUse protocol with the owner's question verbatim, the parity watchdog, and explicit no-effects instructions. The thread remains workspace-write, so read-only is instructional rather than mechanical. After structured thread-ID verification, attribute both views, relay flags unedited, and converge. The next owner prompt restores the prior mode.

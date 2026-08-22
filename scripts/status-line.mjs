@@ -41,7 +41,7 @@ export async function renderStatusLine(input, env = process.env) {
     if (!info.isFile() || info.size > MAX_BYTES) throw new Error('state invalid');
     const state = JSON.parse(await readFile(stateFile, 'utf8'));
     const participants = state.schemaVersion === 1 ? 'both' : state.participants;
-    if (![1, 2, 3].includes(state.schemaVersion) || state.project?.id !== projectId || state.project?.canonicalRoot !== canonicalRoot || !isValidMode(state.route, participants)) throw new Error('state invalid');
+    if (![1, 2, 3, 4].includes(state.schemaVersion) || state.project?.id !== projectId || state.project?.canonicalRoot !== canonicalRoot || !isValidMode(state.route, participants)) throw new Error('state invalid');
     const label = formatMode(state.route, participants);
     const suffix = ['discussion', 'ask-once', 'recovery-read-only'].includes(state.route) ? ' · read-only' : '';
     return `Fabex: ${label}${suffix}`;

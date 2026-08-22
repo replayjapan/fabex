@@ -5,7 +5,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..', '..');
-const tagline = 'Built for Fable: Claude and Codex work as full partners, converge honestly, and Codex writes the code — stretching your Fable tokens.';
+const tagline = 'Built for Fable: Claude and Codex collaborate through one continuous MCP thread within documented platform and behavioral limits.';
 
 async function filesUnder(directory) {
   const files = [];
@@ -22,7 +22,7 @@ test('plugin and marketplace metadata are consistent and authoritative', async (
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.2.0');
+  assert.equal(plugin.version, '1.3.0');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.name, 'fabex');
   assert.equal(marketplace.plugins.length, 1);
@@ -33,9 +33,9 @@ test('plugin and marketplace metadata are consistent and authoritative', async (
   assert.equal('version' in marketplace.plugins[0], false);
 });
 
-test('hook registration is exec-form and contains exactly the four events', async () => {
+test('hook registration is exec-form and includes synchronous MCP result events', async () => {
   const hooks = JSON.parse(await readFile(resolve(root, 'hooks', 'hooks.json'), 'utf8')).hooks;
-  assert.deepEqual(Object.keys(hooks).sort(), ['PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort());
+  assert.deepEqual(Object.keys(hooks).sort(), ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort());
   for (const registrations of Object.values(hooks)) {
     const hook = registrations[0].hooks[0];
     assert.equal(hook.type, 'command');
@@ -51,52 +51,63 @@ test('only the requested public skills are packaged', async () => {
   assert.deepEqual(names, ['ask', 'askClaude', 'askCodex', 'diagnose', 'discussion', 'discussionClaude', 'discussionCodex', 'jointly', 'recover', 'status', 'work', 'workClaude'].sort());
 });
 
-test('jointly routes implementation with persistent verified threads and parity watchdog', async () => {
+test('jointly routes implementation through the canonical verified MCP thread and parity watchdog', async () => {
   const skill = await readFile(resolve(root, 'skills', 'jointly', 'SKILL.md'), 'utf8');
-  assert.ok(skill.indexOf('A question is not an implementation request.') < skill.indexOf('## Route deterministically'));
-  assert.match(skill, /Never launch a write-enabled task unless the owner explicitly requests a project change/);
+  assert.ok(skill.indexOf('Questions authorize answers only.') < skill.indexOf('## Route deterministically'));
   assert.match(skill, /## Route deterministically/);
-  assert.match(skill, /Implement lane \(default\)/);
-  assert.match(skill, /Do not form or state a separate Claude implementation analysis/);
-  assert.match(skill, /Codex performs all file edits/);
+  assert.match(skill, /Do not form a separate Claude implementation plan/);
   assert.match(skill, /owner's message verbatim/);
   assert.match(skill, /partnership-parity concern/);
-  assert.match(skill, /Relay every such flag to the owner unedited/);
-  assert.match(skill, /thread begin primary/);
-  assert.match(skill, /thread begin write/);
-  assert.match(skill, /--resume-last/);
-  assert.match(skill, /reads the companion's resume candidate before authorizing a resume/);
-  assert.match(skill, /fail-closed/);
-  assert.match(skill, /completion reports `recovered: true`/);
-  assert.match(skill, /Independently run the owner's tests or criteria/);
-  assert.match(skill, /current unpublished opinion/);
+  assert.match(skill, /Relay each flag to the owner unedited/);
+  assert.match(skill, /control\.mjs thread begin/);
+  assert.match(skill, /mcp__codex__codex-reply/);
+  assert.match(skill, /PostToolUse hook/);
+  assert.match(skill, /structured `threadId`/);
+  assert.match(skill, /one checkpoint-seeded replacement/);
+  assert.match(skill, /Independently run the owner's verification/);
   assert.match(skill, /Codex performs every project file edit/);
   assert.match(skill, /including delivery preflight, staging, commit, and push/);
-  assert.match(skill, /Owner approval authorizes the action only/);
+  assert.match(skill, /pass that model explicitly/);
   assert.match(skill, /explicitly names the alternate executor/);
   assert.match(skill, /Executor exception reconciled/);
 });
 
 test('participant skills encode joint defaults, Claude work invariant, and continuous verified Codex relay', async () => {
   const workClaude = await readFile(resolve(root, 'skills', 'workClaude', 'SKILL.md'), 'utf8');
-  assert.match(workClaude, /without automatically consulting Codex/);
-  assert.match(workClaude, /Codex always does the coding/);
+  assert.match(workClaude, /Raw Claude-only questions and answers are not relayed/);
   assert.match(workClaude, /invoke `\/fabex:jointly`/);
-  assert.match(workClaude, /switches participants to `both`/);
+  assert.match(workClaude, /switches to `both`/);
 
   const discussion = await readFile(resolve(root, 'skills', 'discussion', 'SKILL.md'), 'utf8');
   assert.match(discussion, /--participants both/);
   assert.match(discussion, /owner's message verbatim/);
-  assert.match(discussion, /every owner message/i);
+  assert.match(discussion, /workspace-write/);
   const ask = await readFile(resolve(root, 'skills', 'ask', 'SKILL.md'), 'utf8');
   assert.match(ask, /--participants both/);
-  assert.match(ask, /primary-thread begin, companion, and complete protocol/);
+  assert.match(ask, /canonical MCP/);
 
   const discussionCodex = await readFile(resolve(root, 'skills', 'discussionCodex', 'SKILL.md'), 'utf8');
-  assert.match(discussionCodex, /same continuous verified primary thread/);
-  assert.match(discussionCodex, /--resume-last/);
+  assert.match(discussionCodex, /canonical verified MCP thread/);
+  assert.match(discussionCodex, /exact canonical threadId/);
   assert.match(discussionCodex, /stay substantively silent/);
-  assert.match(discussionCodex, /never clear the primary thread/);
+  assert.match(discussionCodex, /Mode changes never clear it/);
+});
+
+test('MCP configuration uses the installed codex mcp-server without environment or credential fields', async () => {
+  const mcp = JSON.parse(await readFile(resolve(root, '.mcp.json'), 'utf8'));
+  assert.deepEqual(mcp, { mcpServers: { codex: { command: 'codex', args: ['mcp-server'] } } });
+});
+
+test('1.3.0 release notes describe the final MCP redesign and pending activation honestly', async () => {
+  const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
+  const release = changelog.split('## 1.2.0')[0];
+  assert.match(release, /## 1\.3\.0 - 2026-08-22/);
+  assert.match(release, /synchronous `codex` and `codex-reply`/);
+  assert.match(release, /one canonical `workspace-write`/);
+  assert.match(release, /PostToolUse hook/);
+  assert.match(release, /raw Claude-only questions and answers/);
+  assert.match(release, /terminal operation records/);
+  assert.match(release, /activation.*pending/i);
 });
 
 test('1.2.0 release notes disclose continuity, executor authority, guard, usage increase, wording, and migration', async () => {

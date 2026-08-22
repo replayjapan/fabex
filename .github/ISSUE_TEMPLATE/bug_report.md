@@ -13,4 +13,4 @@ labels: bug
 
 ## Environment
 
-Include Fabex, Claude Code, Codex companion, Node.js, and operating-system versions. Remove secrets and personal data.
+Include Fabex, Claude Code, Codex CLI, Node.js, and operating-system versions. Say whether `/fabex:diagnose` exposes both Codex MCP tools. Remove secrets and personal data.

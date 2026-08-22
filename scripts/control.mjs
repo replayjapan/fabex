@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { platform } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beginPartnerOperation, completePartnerJob, completePartnerOperation, discoverCompanionRuntime, recordAcceptedDecision, repositoryFingerprint, threadRefreshAdvice } from './lib/codex-adapter.mjs';
+import { MCP_CODEX_TOOL, MCP_REPLY_TOOL, beginPartnerOperation, recordAcceptedDecision, recordCurrentStatus, repositoryFingerprint } from './lib/mcp-adapter.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
 import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
@@ -51,21 +51,19 @@ async function mode(root, target, participants = 'both') {
 async function status(root) {
   const result = await readState(root, process.env);
   const currentFingerprint = await repositoryFingerprint(result.paths.canonicalRoot);
-  const refresh = threadRefreshAdvice(result.state.partner.threads, currentFingerprint);
-  const checkpoint = result.state.partner.threads.checkpoint;
+  const checkpoint = result.state.partner.thread.checkpoint;
   const partner = {
     transport: result.state.partner.transport,
     status: result.state.partner.status,
     envelope: result.state.partner.envelope,
-    threads: {
-      primaryThreadId: result.state.partner.threads.primaryThreadId,
-      writeThreadId: result.state.partner.threads.writeThreadId,
+    thread: {
+      threadId: result.state.partner.thread.threadId,
       checkpoint: {
         ownerGoalCount: checkpoint.ownerGoals.length,
         acceptedDecisionCount: checkpoint.acceptedDecisions.length,
         hasCurrentStatus: checkpoint.currentStatus !== null
       },
-      metadata: result.state.partner.threads.metadata
+      metadata: result.state.partner.thread.metadata
     }
   };
   process.stdout.write(`${JSON.stringify({
@@ -79,11 +77,9 @@ async function status(root) {
     task: result.state.task,
     partner,
     threadContinuity: {
-      primaryThreadId: result.state.partner.threads.primaryThreadId,
-      writeThreadId: result.state.partner.threads.writeThreadId,
-      metadata: result.state.partner.threads.metadata,
-      currentRepoFingerprint: currentFingerprint,
-      checkpointAndRefresh: refresh
+      canonicalThreadId: result.state.partner.thread.threadId,
+      metadata: result.state.partner.thread.metadata,
+      currentRepoFingerprint: currentFingerprint
     },
     operations: result.state.operations
   }, null, 2)}\n`);
@@ -92,66 +88,23 @@ async function status(root) {
 
 async function thread(root, args) {
   const current = await currentState(root);
-  if (current.state.participants === 'claude') throw new ValidationError('Claude-only mode denies Codex companion lifecycle controls; explicitly switch participants first');
-  if (args[0] === 'begin' && args.length === 2 && ['primary', 'write'].includes(args[1])) {
-    const kind = args[1];
-    const result = await beginPartnerOperation(root, {
-      threadKind: kind,
-      name: 'fabex',
-      envelope: {
-        cwd: root,
-        sandbox: kind === 'write' ? 'workspace-write' : 'read-only',
-        approvalPolicy: 'native',
-        instructionProfile: kind === 'write' ? 'implementation-sibling' : 'continuous-primary'
-      }
-    }, process.env);
+  if (args[0] === 'begin' && args.length === 1) {
+    if (current.state.participants === 'claude') throw new ValidationError('Claude-only mode denies Codex MCP lifecycle controls; explicitly switch participants first');
+    const result = await beginPartnerOperation(root, { name: 'fabex' }, process.env);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    return;
-  }
-  if (args[0] === 'complete' && args.length === 4 && args[2] === '--thread-id') {
-    const operationId = assertUuid(args[1], 'operation id');
-    const threadId = args[3];
-    if (typeof threadId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(threadId)) throw new ValidationError('thread id is invalid');
-    const operation = current.state.operations.find((item) => item.id === operationId && item.kind === 'partner' && item.status === 'running');
-    const [, , action = 'resume'] = operation?.name?.split(':').slice(-3) ?? [];
-    const recovered = action === 'recover';
-    const replacedThreadId = recovered ? operation.externalId : null;
-    const state = await completePartnerOperation(root, operationId, { threadId }, process.env);
-    process.stdout.write(`${JSON.stringify({
-      verified: true,
-      recovered,
-      recoveryReason: recovered ? 'prelaunch-resume-candidate-replacement' : null,
-      replacedThreadId,
-      operationId,
-      threadId,
-      resyncStatus: state.partner.threads.metadata.resyncStatus,
-      turnCount: state.partner.threads.metadata.turnCount
-    }, null, 2)}\n`);
-    return;
-  }
-  if (args[0] === 'complete' && args.length === 4 && args[2] === '--job-id') {
-    const operationId = assertUuid(args[1], 'operation id');
-    const completed = await completePartnerJob(root, operationId, args[3], process.env);
-    process.stdout.write(`${JSON.stringify({
-      verified: completed.verified,
-      recovered: completed.recovered,
-      recoveryReason: completed.recoveryReason ?? null,
-      replacedThreadId: completed.replacedThreadId ?? null,
-      operationId,
-      jobId: completed.jobId,
-      threadId: completed.threadId,
-      rawOutput: completed.rawOutput,
-      resyncStatus: completed.state.partner.threads.metadata.resyncStatus,
-      turnCount: completed.state.partner.threads.metadata.turnCount
-    }, null, 2)}\n`);
     return;
   }
   if (args[0] === 'checkpoint' && args.length === 3 && args[1] === '--decision') {
     const state = await recordAcceptedDecision(root, args[2], process.env);
-    process.stdout.write(`${JSON.stringify({ recorded: true, acceptedDecisionCount: state.partner.threads.checkpoint.acceptedDecisions.length })}\n`);
+    process.stdout.write(`${JSON.stringify({ recorded: true, acceptedDecisionCount: state.partner.thread.checkpoint.acceptedDecisions.length })}\n`);
     return;
   }
-  throw new ValidationError('thread requires begin, complete, or checkpoint --decision <accepted-decision>');
+  if (args[0] === 'checkpoint' && args.length === 3 && args[1] === '--status') {
+    const state = await recordCurrentStatus(root, args[2], process.env);
+    process.stdout.write(`${JSON.stringify({ recorded: true, hasCurrentStatus: state.partner.thread.checkpoint.currentStatus !== null })}\n`);
+    return;
+  }
+  throw new ValidationError('thread requires begin or checkpoint --decision/--status <bounded-text>');
 }
 
 async function config(root) {
@@ -193,7 +146,7 @@ async function recover(root, args) {
       candidate.status = 'running';
       state.partner.status = 'running';
     });
-    process.stdout.write(`Partner retry armed for operation ${id}. Invoke only the recorded Codex partner task.\n`);
+    process.stdout.write(`Partner retry armed for operation ${id}. Invoke only the exact recorded Codex MCP tool and arguments.\n`);
     return;
   }
   if (action === 'abandon') {
@@ -219,16 +172,24 @@ async function diagnose(root) {
   const state = await readState(root, process.env);
   let hooksValid = false;
   try { JSON.parse(await readFile(resolve(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8')); hooksValid = true; } catch {}
-  const companionRoot = await discoverCompanionRuntime(process.env);
+  let mcpConfigured = false;
+  try {
+    const mcp = JSON.parse(await readFile(resolve(PLUGIN_ROOT, '.mcp.json'), 'utf8'));
+    mcpConfigured = mcp?.mcpServers?.codex?.command === 'codex' && JSON.stringify(mcp.mcpServers.codex.args) === JSON.stringify(['mcp-server']);
+  } catch {}
   let transaction = { present: false };
   try { transaction = await inspectTransaction(root, process.env); } catch (error) { transaction = { present: true, valid: false, reason: error.message }; }
   process.stdout.write(`${JSON.stringify({
-    plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown' },
+    plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown', loadedRoot: PLUGIN_ROOT },
     node: process.version,
     platform: { value: platform(), support: platform() === 'darwin' ? 'macOS supported' : platform() === 'win32' ? 'Windows experimental' : 'not documented as supported' },
     hooks: { configPresentAndValidJson: hooksValid },
     state: { health: state.health, route: state.state.route, participants: state.state.participants, label: formatMode(state.state.route, state.state.participants), transaction },
-    codex: { companionRuntimeAvailable: Boolean(companionRoot), location: companionRoot }
+    codex: {
+      mcpConfigured,
+      expectedTools: [MCP_CODEX_TOOL, MCP_REPLY_TOOL],
+      activationVerification: 'pending plugin reload; verify tools before the first Codex task'
+    }
   }, null, 2)}\n`);
 }
 

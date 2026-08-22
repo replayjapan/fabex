@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { discoverCompanionRuntime } from './lib/codex-adapter.mjs';
-import { TOKEN_RE } from './lib/config.mjs';
+import { loadEffectiveConfig } from './lib/config.mjs';
+import { MCP_CODEX_TOOL, MCP_REPLY_TOOL, validateMcpToolArguments } from './lib/mcp-adapter.mjs';
 import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
 import { readState } from './lib/state.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
@@ -13,7 +13,6 @@ const SKILL_TOOLS = new Set(['Skill', 'SlashCommand']);
 const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'discussionClaude', 'discussionCodex', 'work', 'workClaude', 'status', 'diagnose', 'recover']);
 const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
 const SAFE_UNHEALTHY = new Set(['status', 'config', 'diagnose', 'clear-dead-lock', 'recover-inspect', 'recover-retry', 'recover-abandon', 'recover-resolve-transaction']);
-const JOB_ID_RE = /^task-[a-z0-9]+-[a-z0-9]+$/;
 const OPERATIONAL_AGENT = 'fabex-operational';
 // Plugin-defined agents are reported by the hook harness with their plugin-scoped type.
 // Reject the bare agent name so an identity outside that contract cannot gain push authority.
@@ -119,10 +118,9 @@ export function parseControlCommand(command) {
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
   if (['status', 'config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
-  if (args[0] === 'thread' && args[1] === 'begin' && ['primary', 'write'].includes(args[2]) && args.length === 3) return { kind: 'thread-begin' };
-  if (args[0] === 'thread' && args[1] === 'complete' && args.length === 5 && UUID_RE.test(args[2]) && args[3] === '--thread-id' && TOKEN_RE.test(args[4])) return { kind: 'thread-complete' };
-  if (args[0] === 'thread' && args[1] === 'complete' && args.length === 5 && UUID_RE.test(args[2]) && args[3] === '--job-id' && JOB_ID_RE.test(args[4])) return { kind: 'thread-complete' };
+  if (args[0] === 'thread' && args[1] === 'begin' && args.length === 2) return { kind: 'thread-begin' };
   if (args[0] === 'thread' && args[1] === 'checkpoint' && args[2] === '--decision' && typeof args[3] === 'string' && args[3].length > 0 && Buffer.byteLength(args[3], 'utf8') <= 2048 && args.length === 4) return { kind: 'thread-checkpoint' };
+  if (args[0] === 'thread' && args[1] === 'checkpoint' && args[2] === '--status' && typeof args[3] === 'string' && args[3].length > 0 && Buffer.byteLength(args[3], 'utf8') <= 8192 && args.length === 4) return { kind: 'thread-checkpoint' };
   if (args[0] === 'mode' && ['normal', 'discussion', 'ask-once'].includes(args[1])) {
     if (args.length === 2) return { kind: `mode-${args[1]}`, participants: 'both' };
     if (args.length === 4 && args[2] === '--participants' && ['both', 'claude', 'codex'].includes(args[3])) return { kind: `mode-${args[1]}`, participants: args[3] };
@@ -141,49 +139,22 @@ function isPluginSkill(toolName, input) {
   return name.startsWith('fabex:') || BARE_SKILLS.has(name);
 }
 
-async function isReadOnlyCompanionCommand(command, paths) {
-  const tokens = simpleTokens(command);
-  if (!tokens || basename(tokens[0] ?? '') !== 'node') return false;
-  const companionRoot = await discoverCompanionRuntime(process.env);
-  if (!companionRoot || resolve(tokens[1] ?? '') !== resolve(companionRoot, 'scripts', 'codex-companion.mjs')) return false;
-  const subcommand = tokens[2];
-  let index = 3;
-  if (tokens[index] !== '--json') return false;
-  index += 1;
-  if (subcommand === 'task') {
-    if (tokens[index] === '--background') index += 1;
-    if (tokens[index] !== '--cwd' || resolve(tokens[index + 1] ?? '') !== paths.canonicalRoot) return false;
-    index += 2;
-    if (!['--fresh', '--resume', '--resume-last'].includes(tokens[index])) return false;
-    const threadMode = tokens[index];
-    index += 1;
-    const seen = new Set();
-    while (['--model', '--effort'].includes(tokens[index])) {
-      const flag = tokens[index];
-      const value = tokens[index + 1];
-      if (seen.has(flag) || !TOKEN_RE.test(value ?? '')) return false;
-      seen.add(flag);
-      index += 2;
-    }
-    const prompts = tokens.slice(index);
-    if (prompts.length > 1 || prompts.some((prompt) => !prompt.trim() || prompt.startsWith('-'))) return false;
-    return threadMode !== '--fresh' || prompts.length === 1;
-  }
-  if (subcommand === 'status') {
-    if (tokens[index] === '--wait') index += 1;
-    return tokens[index] === '--cwd' && resolve(tokens[index + 1] ?? '') === paths.canonicalRoot && JOB_ID_RE.test(tokens[index + 2] ?? '') && tokens.length === index + 3;
-  }
-  if (subcommand === 'result') {
-    return tokens[index] === '--cwd' && resolve(tokens[index + 1] ?? '') === paths.canonicalRoot && JOB_ID_RE.test(tokens[index + 2] ?? '') && tokens.length === index + 3;
-  }
-  return false;
+function mainSession(executor) {
+  return !(typeof executor?.agentId === 'string' && executor.agentId.trim().length > 0);
 }
 
-async function isCompanionInvocation(command) {
-  const tokens = simpleTokens(command);
-  if (!tokens || basename(tokens[0] ?? '') !== 'node') return false;
-  const companionRoot = await discoverCompanionRuntime(process.env);
-  return Boolean(companionRoot) && resolve(tokens[1] ?? '') === resolve(companionRoot, 'scripts', 'codex-companion.mjs');
+function activeMainEditException(state, toolName) {
+  const decisions = state.partner.thread.checkpoint.acceptedDecisions;
+  const allowedExecutors = new Set(['claude', 'claude-main', 'main-session']);
+  let active = null;
+  for (const decision of decisions) {
+    const authorized = /^Executor exception authorized: executor=([^;]+); scope=([^;]+); reason=.+$/i.exec(decision);
+    if (authorized && allowedExecutors.has(authorized[1].trim().toLowerCase())) active = { executor: authorized[1].trim().toLowerCase(), scope: authorized[2].trim().toLowerCase() };
+    const reconciled = /^Executor exception reconciled: executor=([^;]+); scope=([^;]+); outcome=.+$/i.exec(decision);
+    if (reconciled && active && reconciled[1].trim().toLowerCase() === active.executor && reconciled[2].trim().toLowerCase() === active.scope) active = null;
+  }
+  if (!active) return false;
+  return ['project file edits', 'all edits', toolName.toLowerCase()].includes(active.scope);
 }
 
 const deny = (reason) => ({ decision: 'deny', reason });
@@ -201,12 +172,24 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
 
 export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {} }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
-  if (state.participants === 'claude' && toolName === 'Bash' && await isCompanionInvocation(toolInput.command)) return deny('Claude-only mode denies Codex companion invocations; explicitly switch participants first');
+  const codexMcpTool = [MCP_CODEX_TOOL, MCP_REPLY_TOOL].includes(toolName);
+  if (toolName.startsWith('mcp__codex__') && !codexMcpTool) return deny('Fabex permits only the exact Codex MCP codex and codex-reply tools');
+  if (codexMcpTool) {
+    if (state.participants === 'claude') return deny('Claude-only mode denies Codex MCP calls; explicitly switch participants first');
+    const effective = await loadEffectiveConfig(paths.canonicalRoot, process.env);
+    const checked = validateMcpToolArguments({ toolName, toolInput, state, root: paths.canonicalRoot, config: effective.config });
+    return checked.ok ? defer() : deny(checked.reason);
+  }
   const protectedOperation = toolName === 'Bash' ? protectedGithubOperation(toolInput.command) : null;
   if (protectedOperation && !isOperationalExecutor(executor)) {
     return deny(`${protectedOperation} requires a verified ${OPERATIONAL_AGENT} subagent; main-session, alternate-agent, and ambiguous executor identities are denied`);
   }
-  if (state.route === 'normal') return defer();
+  if (state.route === 'normal') {
+    if (WRITE_TOOLS.has(toolName) && mainSession(executor) && !activeMainEditException(state, toolName)) {
+      return deny('normal Fabex mode reserves project edits for Codex; Claude main-session Write/Edit/NotebookEdit requires an owner-named recorded executor exception');
+    }
+    return defer();
+  }
   if (!['discussion', 'ask-once', 'recovery-read-only'].includes(state.route)) return deny('invalid route; use recover');
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
   if (WRITE_TOOLS.has(toolName)) return deny(`${state.route} is read-only`);
@@ -216,8 +199,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       if (state.route !== 'recovery-read-only' || SAFE_UNHEALTHY.has(control.kind)) return defer();
       return deny('recovery-read-only permits only diagnostic and recovery controls');
     }
-    if (await isReadOnlyCompanionCommand(toolInput.command, paths)) return defer();
-    return deny(`${state.route} permits only exact Fabex controls and validated read-only companion commands`);
+    return deny(`${state.route} permits only exact Fabex controls; Codex participation uses begin-authorized MCP tools`);
   }
   return deny(`${state.route} denies tools outside the read-only allowlist`);
 }

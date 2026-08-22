@@ -27,18 +27,17 @@ export function initialState(identity) {
     returnTo: null,
     task: { id: null, status: null, label: null, joint: { required: false, status: null, decisionId: null } },
     partner: {
-      transport: 'official-codex-plugin',
+      transport: 'codex-mcp',
       status: 'not-started',
-      threads: {
-        primaryThreadId: null,
-        writeThreadId: null,
+      thread: {
+        threadId: null,
         checkpoint: { ownerGoals: [], acceptedDecisions: [], currentStatus: null },
         metadata: {
           turnCount: 0,
           lastUsedAt: null,
           repoFingerprint: { branch: null, head: null, dirty: null },
-          resyncStatus: 'not-needed',
-          refreshOfferedAt: null
+          reattachStatus: 'not-needed',
+          replacementStatus: 'not-needed'
         }
       },
       envelope: { cwd: null, sandbox: null, approvalPolicy: null, instructionProfile: null }
@@ -112,7 +111,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -120,22 +119,27 @@ async function loadValidated(paths) {
       state.participants = 'both';
       state.returnTo = null;
     }
-    const legacyThreadId = state.partner?.threadId ?? null;
+    const legacyCheckpoint = state.partner?.threads?.checkpoint ?? state.partner?.thread?.checkpoint ?? { ownerGoals: [], acceptedDecisions: [], currentStatus: null };
+    const legacyMetadata = state.partner?.threads?.metadata ?? state.partner?.thread?.metadata ?? {};
     if (state.partner) {
       delete state.partner.threadId;
-      state.partner.threads = {
-        primaryThreadId: legacyThreadId,
-        writeThreadId: null,
-        checkpoint: { ownerGoals: [], acceptedDecisions: [], currentStatus: null },
+      delete state.partner.threads;
+      delete state.partner.thread;
+      state.partner.transport = 'codex-mcp';
+      state.partner.status = 'not-started';
+      state.partner.thread = {
+        threadId: null,
+        checkpoint: legacyCheckpoint,
         metadata: {
-          turnCount: legacyThreadId ? 1 : 0,
-          lastUsedAt: null,
-          repoFingerprint: { branch: null, head: null, dirty: null },
-          resyncStatus: legacyThreadId ? 'required' : 'not-needed',
-          refreshOfferedAt: null
+          turnCount: Number.isSafeInteger(legacyMetadata.turnCount) ? legacyMetadata.turnCount : 0,
+          lastUsedAt: legacyMetadata.lastUsedAt ?? null,
+          repoFingerprint: legacyMetadata.repoFingerprint ?? { branch: null, head: null, dirty: null },
+          reattachStatus: 'not-needed',
+          replacementStatus: 'not-needed'
         }
       };
     }
+    state.operations = [];
     state.schemaVersion = STATE_SCHEMA_VERSION;
   }
   try { validateState(state, paths); } catch (error) {
@@ -149,7 +153,7 @@ async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v3');
+    await acquireLock(paths, 'schema-migration-to-v4');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);
