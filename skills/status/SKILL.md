@@ -5,4 +5,4 @@ description: Report the canonical Fabex mode label, route, participants, state h
 
 # Status
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status` and `config` from the resolved workstream root. Lead with `label`, then summarize route, participants, `returnTo`, health, task, partner state, canonical thread ID, turn count, last use, reattach/replacement status, stored/current repository fingerprints, and unresolved operation IDs. Apply the configured badge policy. Do not include prompts, checkpoint text, transcripts, environment values, or secrets.
+Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status` and `config` from the resolved workstream root. Lead with `label`, then summarize route, participants, `returnTo`, health, task, partner/controller state, canonical thread ID, turn count, last use, stored/current repository fingerprints, recovery-seed bytes, and queued/active/unresolved operation IDs with genuine lifecycle phase. Apply the configured badge policy. Do not include queued messages, results, checkpoint text, transcripts, environment values, or secrets.

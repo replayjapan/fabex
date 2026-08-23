@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadEffectiveConfig } from './lib/config.mjs';
-import { MCP_CODEX_TOOL, MCP_REPLY_TOOL, validateMcpToolArguments } from './lib/mcp-adapter.mjs';
 import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
 import { readState } from './lib/state.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
@@ -12,7 +10,8 @@ const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
 const SKILL_TOOLS = new Set(['Skill', 'SlashCommand']);
 const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'discussionClaude', 'discussionCodex', 'work', 'workClaude', 'status', 'diagnose', 'recover']);
 const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
-const SAFE_UNHEALTHY = new Set(['status', 'config', 'diagnose', 'clear-dead-lock', 'recover-inspect', 'recover-retry', 'recover-abandon', 'recover-resolve-transaction']);
+const CONTROLLER_PATH = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
+const SAFE_UNHEALTHY = new Set(['status', 'config', 'diagnose', 'controller-status', 'controller-result', 'controller-cancel', 'clear-dead-lock', 'recover-inspect', 'recover-abandon', 'recover-replace-missing-thread', 'recover-resolve-transaction']);
 const OPERATIONAL_AGENT = 'fabex-operational';
 // Plugin-defined agents are reported by the hook harness with their plugin-scoped type.
 // Reject the bare agent name so an identity outside that contract cannot gain push authority.
@@ -118,17 +117,40 @@ export function parseControlCommand(command) {
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
   if (['status', 'config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
-  if (args[0] === 'thread' && args[1] === 'begin' && args.length === 2) return { kind: 'thread-begin' };
-  if (args[0] === 'thread' && args[1] === 'checkpoint' && args[2] === '--decision' && typeof args[3] === 'string' && args[3].length > 0 && Buffer.byteLength(args[3], 'utf8') <= 2048 && args.length === 4) return { kind: 'thread-checkpoint' };
-  if (args[0] === 'thread' && args[1] === 'checkpoint' && args[2] === '--status' && typeof args[3] === 'string' && args[3].length > 0 && Buffer.byteLength(args[3], 'utf8') <= 8192 && args.length === 4) return { kind: 'thread-checkpoint' };
+  const fields = new Set(['objective', 'current-task', 'constraint', 'decision', 'relevant-file', 'implementation-status', 'test-status', 'unresolved-problem', 'next-action']);
+  if (args[0] === 'checkpoint' && fields.has(args[1]) && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 8192 && args.length === 3) return { kind: 'checkpoint' };
   if (args[0] === 'mode' && ['normal', 'discussion', 'ask-once'].includes(args[1])) {
     if (args.length === 2) return { kind: `mode-${args[1]}`, participants: 'both' };
     if (args.length === 4 && args[2] === '--participants' && ['both', 'claude', 'codex'].includes(args[3])) return { kind: `mode-${args[1]}`, participants: args[3] };
   }
   if (args[0] === 'recover' && args[1] === 'clear-dead-lock' && args.length === 2) return { kind: 'clear-dead-lock' };
   if (args[0] === 'recover' && args[1] === 'resolve-transaction' && args.length === 3 && ['--commit', '--discard'].includes(args[2])) return { kind: 'recover-resolve-transaction' };
-  if (args[0] === 'recover' && ['inspect', 'retry', 'abandon'].includes(args[1]) && args.length === 4 && args[2] === '--operation-id' && UUID_RE.test(args[3])) return { kind: `recover-${args[1]}` };
+  if (args[0] === 'recover' && ['inspect', 'abandon', 'replace-missing-thread'].includes(args[1]) && args.length === 4 && args[2] === '--operation-id' && UUID_RE.test(args[3])) return { kind: `recover-${args[1]}` };
   return null;
+}
+
+export function parseControllerCommand(command) {
+  if (typeof command === 'string' && command.includes('\n')) {
+    const lines = command.split('\n');
+    if (lines.at(-1) === '') lines.pop();
+    const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+submit\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
+    if (header && resolve(header[1] ?? header[2] ?? header[3]) === CONTROLLER_PATH && lines.at(-1) === header[4]) {
+      const message = lines.slice(1, -1).join('\n');
+      if (message.trim() && Buffer.byteLength(message, 'utf8') <= 192 * 1024) return { kind: 'controller-submit' };
+    }
+  }
+  const tokens = simpleTokens(command);
+  if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROLLER_PATH) return null;
+  const args = tokens.slice(2);
+  if (args[0] === 'submit' && args.length === 3 && args[1] === '--message' && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 192 * 1024) return { kind: 'controller-submit' };
+  if (['status', 'result', 'cancel'].includes(args[0]) && args.length === 3 && args[1] === '--operation-id' && UUID_RE.test(args[2])) return { kind: `controller-${args[0]}` };
+  return null;
+}
+
+function invokesFabexScript(command, path) {
+  const tokens = simpleTokens(command);
+  if (tokens && basename(tokens[0] ?? '') === 'node' && resolve(tokens[1] ?? '') === path) return true;
+  return typeof command === 'string' && command.includes('controller.mjs');
 }
 
 function isPluginSkill(toolName, input) {
@@ -164,7 +186,7 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput)) return deny('malformed tool request');
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
   if (toolName === 'Bash') {
-    const control = parseControlCommand(toolInput.command);
+    const control = parseControlCommand(toolInput.command) ?? parseControllerCommand(toolInput.command);
     if (control && SAFE_UNHEALTHY.has(control.kind)) return defer();
   }
   return deny(`state is ${health}; only reads and exact diagnostic or recovery controls are available`);
@@ -172,17 +194,15 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
 
 export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {} }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
-  const codexMcpTool = [MCP_CODEX_TOOL, MCP_REPLY_TOOL].includes(toolName);
-  if (toolName.startsWith('mcp__codex__') && !codexMcpTool) return deny('Fabex permits only the exact Codex MCP codex and codex-reply tools');
-  if (codexMcpTool) {
-    if (state.participants === 'claude') return deny('Claude-only mode denies Codex MCP calls; explicitly switch participants first');
-    const effective = await loadEffectiveConfig(paths.canonicalRoot, process.env);
-    const checked = validateMcpToolArguments({ toolName, toolInput, state, root: paths.canonicalRoot, config: effective.config });
-    return checked.ok ? defer() : deny(checked.reason);
-  }
   const protectedOperation = toolName === 'Bash' ? protectedGithubOperation(toolInput.command) : null;
   if (protectedOperation && !isOperationalExecutor(executor)) {
     return deny(`${protectedOperation} requires a verified ${OPERATIONAL_AGENT} subagent; main-session, alternate-agent, and ambiguous executor identities are denied`);
+  }
+  if (toolName === 'Bash') {
+    const controller = parseControllerCommand(toolInput.command);
+    if (invokesFabexScript(toolInput.command, CONTROLLER_PATH) && !controller) return deny('only exact Fabex controller submit, status, result, and cancel entry points are allowed');
+    if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
+    if (controller?.kind === 'controller-submit' && state.route === 'recovery-read-only') return deny('recovery-read-only denies new Codex SDK turns');
   }
   if (state.route === 'normal') {
     if (WRITE_TOOLS.has(toolName) && mainSession(executor) && !activeMainEditException(state, toolName)) {
@@ -194,12 +214,12 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
   if (WRITE_TOOLS.has(toolName)) return deny(`${state.route} is read-only`);
   if (toolName === 'Bash') {
-    const control = parseControlCommand(toolInput.command);
+    const control = parseControlCommand(toolInput.command) ?? parseControllerCommand(toolInput.command);
     if (control) {
       if (state.route !== 'recovery-read-only' || SAFE_UNHEALTHY.has(control.kind)) return defer();
       return deny('recovery-read-only permits only diagnostic and recovery controls');
     }
-    return deny(`${state.route} permits only exact Fabex controls; Codex participation uses begin-authorized MCP tools`);
+    return deny(`${state.route} permits only exact Fabex controls and SDK controller entry points`);
   }
   return deny(`${state.route} denies tools outside the read-only allowlist`);
 }

@@ -6,8 +6,8 @@ import { readState } from './lib/state.mjs';
 
 export function stopDecision(input, stateResult) {
   if (input?.stop_hook_active === true || !stateResult?.ok) return {};
-  if (stateResult.state.operations.some((operation) => operation.kind === 'partner' && operation.status === 'running')) {
-    return { decision: 'block', reason: 'A Codex partner task is still running. Complete or explicitly recover it before stopping.' };
+  if (stateResult.state.operations.some((operation) => operation.kind === 'partner' && ['queued', 'working'].includes(operation.status))) {
+    return { decision: 'block', reason: 'A Codex partner task is queued or working. Poll its lifecycle or cancel it before stopping.' };
   }
   return {};
 }

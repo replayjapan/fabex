@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { rootFromControlCwd } from './lib/paths.mjs';
+import { assertUuid, ValidationError } from './lib/validation.mjs';
+import { cancelOperation, claimNextOperation, claimRunner, operationStatus, releaseRunner, releaseRunnerIfIdle, runOperation, submitOperation } from './lib/sdk-controller.mjs';
+
+async function codexFactory(options) {
+  const { Codex } = await import('@openai/codex-sdk');
+  return new Codex(options);
+}
+
+function option(args, name) {
+  const index = args.indexOf(name);
+  if (index === -1 || index + 1 >= args.length || args.indexOf(name, index + 1) !== -1) throw new ValidationError(`${name} is required exactly once`);
+  return args[index + 1];
+}
+
+async function stdinMessage() {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    if (size > 192 * 1024 + 1) throw new ValidationError('stdin owner message exceeds 192 KiB');
+    chunks.push(chunk);
+  }
+  const value = Buffer.concat(chunks).toString('utf8');
+  return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+
+export async function runQueue(root, env = process.env, createCodex = codexFactory) {
+  if (!(await claimRunner(root, process.pid, env))) return;
+  let activeController = null;
+  const abort = () => activeController?.abort();
+  process.on('SIGUSR1', abort);
+  try {
+    while (true) {
+      const operation = await claimNextOperation(root, env);
+      if (!operation) {
+        if (await releaseRunnerIfIdle(root, process.pid, env)) break;
+        continue;
+      }
+      activeController = new AbortController();
+      try { await runOperation(root, operation, { createCodex, signal: activeController.signal }, env); } catch {}
+      activeController = null;
+    }
+  } finally {
+    process.off('SIGUSR1', abort);
+    await releaseRunner(root, process.pid, env).catch(() => {});
+  }
+}
+
+export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), env = process.env } = {}) {
+  const [command, ...args] = argv;
+  if (command === 'runner') {
+    if (args.length !== 2 || args[0] !== '--root') throw new ValidationError('runner requires exactly --root <path>');
+    return runQueue(resolve(args[1]), env);
+  }
+  const root = await rootFromControlCwd(cwd, env);
+  if (command === 'submit') {
+    const message = args.length === 0 ? await stdinMessage() : args.length === 2 && args[0] === '--message' ? args[1] : null;
+    if (message === null) throw new ValidationError('submit accepts stdin or exactly --message <owner-message>');
+    process.stdout.write(`${JSON.stringify(await submitOperation(root, message, env))}\n`);
+    return;
+  }
+  if (['status', 'result', 'cancel'].includes(command)) {
+    if (args.length !== 2 || args[0] !== '--operation-id') throw new ValidationError(`${command} requires exactly --operation-id <uuid>`);
+    const id = assertUuid(option(args, '--operation-id'), 'operation id');
+    let result = command === 'cancel' ? await cancelOperation(root, id, env) : await operationStatus(root, id, env);
+    if (command === 'result' && !['completed', 'failed', 'cancelled'].includes(result.status)) throw new Error('operation is not complete');
+    if (command === 'status') result = { id: result.id, status: result.status, externalId: result.externalId, lifecycle: result.lifecycle };
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  throw new ValidationError('unknown or malformed controller command');
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await main(); } catch (error) {
+    process.stderr.write(`fabex-controller: ${error.message}\n`);
+    process.exitCode = 1;
+  }
+}

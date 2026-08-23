@@ -1,139 +1,109 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
-import { classifyToolUse, classifyUnhealthyToolUse, parseControlCommand, protectedGithubOperation } from '../../scripts/hook-route-guard.mjs';
-import { PLUGIN_ROOT, projectIdFor } from '../../scripts/lib/paths.mjs';
+import { join, resolve } from 'node:path';
+import { classifyToolUse, classifyUnhealthyToolUse, parseControllerCommand, parseControlCommand, protectedGithubOperation } from '../../scripts/hook-route-guard.mjs';
+import { PLUGIN_ROOT } from '../../scripts/lib/paths.mjs';
 import { initialState } from '../../scripts/lib/state.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'fabex-guard-'));
+  await mkdir(join(root, 'project'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const paths = { canonicalRoot: root, projectId: projectIdFor(root) };
-  return { root, paths, state: initialState(paths) };
+  const canonicalRoot = join(root, 'project');
+  return { state: initialState({ projectId: '0000000000000000', canonicalRoot }), paths: { canonicalRoot } };
 }
 
-async function classify(ctx, toolName, toolInput, executor) {
-  return classifyToolUse({ toolName, toolInput, state: ctx.state, paths: ctx.paths, executor });
-}
+const classify = (ctx, toolName, toolInput, executor = {}) => classifyToolUse({ toolName, toolInput, state: ctx.state, paths: ctx.paths, executor });
 
-function initialInput(root, extra = {}) {
-  return {
-    prompt: `Fabex partner — ${basename(root)} — continuous session\nOwner request`,
-    'approval-policy': 'on-request', cwd: root, sandbox: 'workspace-write',
-    config: { model_reasoning_effort: 'high' },
-    ...extra
-  };
-}
-
-function arm(ctx, action, externalId = null) {
-  ctx.state.operations = [{ id: '11111111-1111-4111-8111-111111111111', kind: 'partner', name: `fabex:${action}`, status: 'running', externalId }];
-  ctx.state.partner.status = 'running';
-}
-
-test('normal mode hard-denies Claude main-session Write/Edit/NotebookEdit but defers reads and Bash', async (t) => {
+test('normal mode preserves Codex edit authority and the recorded owner-named exception', async (t) => {
   const ctx = await fixture(t);
-  for (const tool of ['Write', 'Edit', 'NotebookEdit']) assert.equal((await classify(ctx, tool, {})).decision, 'deny');
-  for (const [tool, input] of [['Read', {}], ['Glob', {}], ['Grep', {}], ['Bash', { command: 'git status --short' }]]) {
-    assert.equal((await classify(ctx, tool, input)).decision, 'defer');
+  assert.equal((await classify(ctx, 'Write', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'deny');
+  assert.equal((await classify(ctx, 'Read', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'defer');
+  ctx.state.partner.thread.checkpoint.acceptedDecisions.push('Executor exception authorized: executor=claude-main; scope=project file edits; reason=owner named');
+  assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'defer');
+  ctx.state.partner.thread.checkpoint.acceptedDecisions.push('Executor exception reconciled: executor=claude-main; scope=project file edits; outcome=done');
+  assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'deny');
+});
+
+test('exact SDK controller entry points are gated and the internal runner is denied', async (t) => {
+  const ctx = await fixture(t);
+  const controller = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
+  const id = '11111111-1111-4111-8111-111111111111';
+  const submit = `node ${controller} submit --message 'owner message with $ literal'`;
+  assert.equal(parseControllerCommand(submit).kind, 'controller-submit');
+  assert.equal((await classify(ctx, 'Bash', { command: submit })).decision, 'defer');
+  const heredoc = `node "${controller}" submit <<'FABEX_OWNER_A1B2C3D4'\nowner's $HOME and $(literal)\n\`code\` | symbols\nFABEX_OWNER_A1B2C3D4`;
+  assert.equal(parseControllerCommand(heredoc).kind, 'controller-submit');
+  assert.equal((await classify(ctx, 'Bash', { command: heredoc })).decision, 'defer');
+  for (const action of ['status', 'result', 'cancel']) {
+    const command = `node ${controller} ${action} --operation-id ${id}`;
+    assert.equal(parseControllerCommand(command).kind, `controller-${action}`);
+    assert.equal((await classify(ctx, 'Bash', { command })).decision, 'defer');
   }
-  assert.equal((await classify(ctx, 'Write', {}, { agentId: 'subagent', agentType: 'other:agent' })).decision, 'defer');
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} runner --root ${ctx.paths.canonicalRoot}` })).decision, 'deny');
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message x extra` })).decision, 'deny');
 });
 
-test('owner-named recorded executor exception is the only main-session edit escape', async (t) => {
-  const ctx = await fixture(t);
-  ctx.state.partner.thread.checkpoint.acceptedDecisions.push('Executor exception authorized: executor=Claude; scope=project file edits; reason=owner named alternate');
-  assert.equal((await classify(ctx, 'Write', {})).decision, 'defer');
-  ctx.state.partner.thread.checkpoint.acceptedDecisions.push('Executor exception reconciled: executor=Claude; scope=project file edits; outcome=done');
-  assert.equal((await classify(ctx, 'Write', {})).decision, 'deny');
-});
-
-test('exact Codex MCP tools require a running begin record and validated arguments', async (t) => {
-  const ctx = await fixture(t);
-  assert.equal((await classify(ctx, 'mcp__codex__codex', initialInput(ctx.root))).decision, 'deny');
-  arm(ctx, 'initial');
-  assert.equal((await classify(ctx, 'mcp__codex__codex', initialInput(ctx.root))).decision, 'defer');
-  assert.equal((await classify(ctx, 'mcp__codex__codex', initialInput(ctx.root, { sandbox: 'read-only' }))).decision, 'deny');
-  assert.equal((await classify(ctx, 'mcp__codex__codex', initialInput(ctx.root, { unexpected: true }))).decision, 'deny');
-  assert.equal((await classify(ctx, 'mcp__codex__status', {})).decision, 'deny');
-  ctx.state.partner.thread.threadId = 'canonical-thread';
-  arm(ctx, 'reply', 'canonical-thread');
-  assert.equal((await classify(ctx, 'mcp__codex__codex-reply', { prompt: 'continue', threadId: 'canonical-thread' })).decision, 'defer');
-  assert.equal((await classify(ctx, 'mcp__codex__codex-reply', { prompt: 'continue', threadId: 'other' })).decision, 'deny');
-  assert.equal((await classify(ctx, 'mcp__codex__codex-reply', { prompt: 'continue', threadId: 'canonical-thread', cwd: ctx.root })).decision, 'deny');
-});
-
-test('Claude-only modes deny both exact Codex MCP tools', async (t) => {
+test('Claude-only mode denies SDK submit while allowing status and cancellation', async (t) => {
   const ctx = await fixture(t);
   ctx.state.participants = 'claude';
-  arm(ctx, 'initial');
-  assert.equal((await classify(ctx, 'mcp__codex__codex', initialInput(ctx.root))).decision, 'deny');
-  ctx.state.partner.thread.threadId = 'thread';
-  arm(ctx, 'reply', 'thread');
-  assert.equal((await classify(ctx, 'mcp__codex__codex-reply', { prompt: 'x', threadId: 'thread' })).decision, 'deny');
+  const controller = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
+  const id = '11111111-1111-4111-8111-111111111111';
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message owner` })).decision, 'deny');
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} status --operation-id ${id}` })).decision, 'defer');
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} cancel --operation-id ${id}` })).decision, 'defer');
 });
 
-test('discussion permits exact begin-authorized MCP while still denying Claude write tools', async (t) => {
+test('discussion allows exact SDK controls but denies writes and unrelated effects', async (t) => {
   const ctx = await fixture(t);
   ctx.state.route = 'discussion';
-  arm(ctx, 'initial');
-  assert.equal((await classify(ctx, 'mcp__codex__codex', initialInput(ctx.root))).decision, 'defer');
-  for (const tool of ['Write', 'Edit', 'NotebookEdit']) assert.equal((await classify(ctx, tool, {})).decision, 'deny');
-  for (const tool of ['Read', 'Glob', 'Grep']) assert.equal((await classify(ctx, tool, {})).decision, 'defer');
+  const controller = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message discuss` })).decision, 'defer');
+  assert.equal((await classify(ctx, 'Write', { file_path: 'x' })).decision, 'deny');
+  assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'obsolete' })).decision, 'deny');
 });
 
-test('main-session GitHub pushes and gh remain denied', async (t) => {
+test('MCP transport has no special tool gate in normal mode', async (t) => {
   const ctx = await fixture(t);
-  for (const command of ['git push origin main', 'git send-pack origin main', 'git lfs push origin main', 'gh pr create --fill', 'npm test && git push origin main']) {
-    assert.ok(protectedGithubOperation(command), command);
-    assert.equal((await classify(ctx, 'Bash', { command })).decision, 'deny', command);
-  }
+  assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'not a Fabex path' })).decision, 'defer');
 });
 
-test('verified plugin-scoped operational subagent may execute protected GitHub operations', async (t) => {
-  const ctx = await fixture(t);
-  const executor = { agentId: 'agent-123', agentType: 'fabex:fabex-operational' };
-  assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' }, executor)).decision, 'defer');
-  for (const bad of [{}, { agentId: 'x', agentType: 'fabex-operational' }, { agentType: 'fabex:fabex-operational' }]) {
-    assert.equal((await classify(ctx, 'Bash', { command: 'git push' }, bad)).decision, 'deny');
-  }
-});
-
-test('exact controls omit removed complete/result and sibling paths', async (t) => {
-  const ctx = await fixture(t);
-  ctx.state.route = 'discussion';
-  const control = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
-  const allowed = [
-    `node ${control} status`, `node ${control} config`, `node ${control} diagnose`,
-    `node ${control} thread begin`,
-    `node ${control} thread checkpoint --decision 'accepted direction'`,
-    `node ${control} thread checkpoint --status 'bounded status'`,
-    `node ${control} mode normal --participants both`
-  ];
-  for (const command of allowed) assert.equal((await classify(ctx, 'Bash', { command })).decision, 'defer', command);
-  for (const command of [
-    `node ${control} thread begin primary`,
-    `node ${control} thread begin write`,
-    `node ${control} thread complete 11111111-1111-4111-8111-111111111111 --thread-id thread`,
-    `node ${control} thread complete 11111111-1111-4111-8111-111111111111 --job-id task-old`
-  ]) assert.equal(parseControlCommand(command), null, command);
-});
-
-test('diagnostic and recovery controls remain available for unhealthy state', () => {
+test('control parser permits current checkpoint, mode, diagnostic, and recovery paths only', () => {
   const control = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
   const id = '11111111-1111-4111-8111-111111111111';
   for (const command of [
     `node ${control} status`, `node ${control} config`, `node ${control} diagnose`,
-    `node ${control} recover clear-dead-lock`, `node ${control} recover inspect --operation-id ${id}`,
-    `node ${control} recover retry --operation-id ${id}`, `node ${control} recover abandon --operation-id ${id}`,
-    `node ${control} recover resolve-transaction --commit`, `node ${control} recover resolve-transaction --discard`
-  ]) assert.equal(classifyUnhealthyToolUse({ toolName: 'Bash', toolInput: { command }, health: 'corrupt' }).decision, 'defer');
+    `node ${control} checkpoint decision 'accepted direction'`,
+    `node ${control} checkpoint test-status passing`,
+    `node ${control} mode discussion --participants both`,
+    `node ${control} recover inspect --operation-id ${id}`,
+    `node ${control} recover replace-missing-thread --operation-id ${id}`,
+    `node ${control} recover abandon --operation-id ${id}`
+  ]) assert.ok(parseControlCommand(command), command);
+  assert.equal(parseControlCommand(`node ${control} thread begin`), null);
+  assert.equal(parseControlCommand(`node ${control} recover retry --operation-id ${id}`), null);
 });
 
-test('recovery route denies ordinary Bash and unrecognized tools', async (t) => {
+test('GitHub push and gh operations remain operational-agent-only', async (t) => {
   const ctx = await fixture(t);
+  for (const command of ['git push origin main', 'git send-pack origin', 'git lfs push origin main', 'gh pr create']) assert.ok(protectedGithubOperation(command), command);
+  assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' })).decision, 'deny');
+  assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' }, { agentId: 'agent', agentType: 'fabex:fabex-operational' })).decision, 'defer');
+  assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' }, { agentId: 'agent', agentType: 'fabex-operational' })).decision, 'deny');
+});
+
+test('unhealthy and recovery routes permit only bounded status/cancel and recovery controls', async (t) => {
+  const ctx = await fixture(t);
+  const controller = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
+  const control = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
+  const id = '11111111-1111-4111-8111-111111111111';
+  for (const command of [
+    `node ${control} status`, `node ${control} diagnose`, `node ${control} recover inspect --operation-id ${id}`,
+    `node ${controller} status --operation-id ${id}`, `node ${controller} result --operation-id ${id}`, `node ${controller} cancel --operation-id ${id}`
+  ]) assert.equal(classifyUnhealthyToolUse({ toolName: 'Bash', toolInput: { command }, health: 'corrupt' }).decision, 'defer', command);
   ctx.state.route = 'recovery-read-only';
-  assert.equal((await classify(ctx, 'Bash', { command: 'node ordinary-tool.mjs' })).decision, 'deny');
-  assert.equal((await classify(ctx, 'mcp__unknown__read', {})).decision, 'deny');
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message no` })).decision, 'deny');
+  assert.equal((await classify(ctx, 'Bash', { command: 'node unrelated.mjs' })).decision, 'deny');
 });

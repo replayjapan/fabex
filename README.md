@@ -1,158 +1,180 @@
-# Fabex
+# Fabex — Beta
 
-Keep the quality of a two-model Fable workflow while Codex carries the coding load.
+> **Beta:** Fabex 1.4.0 is being dogfooded. Do not treat it as marketplace-ready until the live continuity, Codex Desktop visibility, process, and RAM criteria below pass.
 
-Fabex connects Claude and Codex as practical partners through one canonical Codex MCP thread. Within documented platform and behavioral limits, both receive owner-visible joint turns and accepted decisions, both may flag scope or parity problems, Codex performs project edits, and Claude coordinates and verifies.
+Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every owner message in a joint or Codex-participant mode is queued onto one continuous Codex thread; Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores.
 
-No collaboration framework can guarantee equal memory, judgment, availability, model behavior, or platform presentation. Fabex mechanically enforces only the controls listed below and states the remaining limits plainly.
+## What 1.4.0 changes
 
-## Executor authority
+Fabex now uses the official TypeScript `@openai/codex-sdk` instead of Claude Code's synchronous Codex MCP tools. A small local controller returns an operation ID immediately, consumes `runStreamed()` events in the background, publishes concise lifecycle status, serializes messages, and resumes the exact persisted SDK thread after process or Claude restarts.
 
-- Codex performs every project file edit through the canonical MCP thread.
-- The bounded `fabex-operational` agent performs every GitHub or `gh` command sequence, including delivery preflight, staging, commit, and push. Fabex reads `models.operational` and requires that model to be passed explicitly when the agent is created.
-- Claude coordinates and verifies. Its main-session Write/Edit/NotebookEdit calls are denied in normal Fabex mode.
-
-Owner approval authorizes an action but never changes its prescribed executor. An exception is valid only when the owner explicitly names the alternate executor and Fabex records bounded authorization before use and reconciliation afterward. The push guard continues to allow protected GitHub operations only for a verified plugin-scoped `fabex:fabex-operational` subagent. Bash cannot be classified as universally mutating or read-only, so command discipline remains a documented limitation.
+There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hook, structured-content recorder, and begin-authorized tool protocol were removed.
 
 ## Modes
 
-| Skill | Route | Participants | Effect and limit |
-| --- | --- | --- | --- |
-| `/work` | normal | both | Joint work on the canonical thread; Codex edits |
-| `/workClaude` | normal | Claude | Claude-only conversation; implementation switches to joint work |
-| `/discussion` | discussion | both | Joint discussion; no-effects behavior is instructed, not sandbox-switched |
-| `/discussionClaude` | discussion | Claude | Claude-only read-only discussion |
-| `/discussionCodex` | discussion | Codex | Codex relay; no-effects behavior is instructed |
-| `/ask` | ask-once | both | One joint no-effects answer, then restore |
-| `/askClaude` | ask-once | Claude | One Claude-only answer, then restore |
-| `/askCodex` | ask-once | Codex | One Codex relay answer, then restore |
+| Command | Route | Participants | Codex SDK turn | Mechanical SDK sandbox |
+| --- | --- | --- | --- | --- |
+| `/work` | normal | Claude + Codex | Every owner message | `workspace-write` |
+| `/workClaude` | normal | Claude | Implementation switches to joint mode | none until joint work |
+| `/discussion` | discussion | Claude + Codex | Every owner message | `read-only` |
+| `/discussionClaude` | discussion | Claude | none | none |
+| `/discussionCodex` | discussion | Codex relay | Every owner message | `read-only` |
+| `/ask` | ask-once | Claude + Codex | One owner question | `read-only` |
+| `/askClaude` | ask-once | Claude | none | none |
+| `/askCodex` | ask-once | Codex relay | One owner question | `read-only` |
 
-The Codex MCP `codex-reply` tool cannot change sandbox, approval policy, model, or working directory. To preserve memory across mode changes, Fabex creates the canonical thread once with `workspace-write`. Discussion and ask modes are therefore behaviorally read-only through explicit instructions; they do not mechanically remove the thread's write capability.
+Questions authorize answers only. Codex performs project edits. Claude coordinates and verifies, and its normal-mode main-session Write/Edit/NotebookEdit calls remain hard-denied unless the owner explicitly names and records an executor exception. Only the verified plugin-scoped `fabex:fabex-operational` agent may perform GitHub or `gh` sequences.
 
-## Continuous Codex memory
-
-The first Codex-including owner turn lazily creates one canonical thread. Its first prompt begins with:
-
-```text
-Fabex partner — <project> — continuous session
-```
-
-All later work, discussion, and ask turns use `mcp__codex__codex-reply` with the exact persisted `threadId`. Mode changes never create sibling threads. Calls serialize per workstream, and the synchronous MCP response must return the matching structured `threadId` before Fabex accepts it.
-
-A Codex turn can run for many minutes with no visible progress while the synchronous MCP call is in flight; this is normal, so prefer milestone-sized requests.
-
-Fabex stores a bounded checkpoint containing recent joint owner goals, accepted decisions, relevant current status, repository fingerprint, and continuity metadata. Raw Claude-only questions and answers are neither relayed to Codex nor placed in its restart seed. Owner-approved decisions and relevant bounded status may still be recorded while Claude-only.
-
-### Restart disclaimer
-
-MCP transport lifetime follows the hosting Claude session. On SessionStart, Fabex makes no model call; it marks the next real Codex turn for one best-effort exact-ID `codex-reply` reattachment. Cross-restart reattachment is not a documented guarantee. If the thread is definitively unavailable, Fabex permits at most one visible checkpoint-seeded replacement. Missing or mismatched IDs, interruption, timeout, and ambiguous failure remain fail-closed in recovery-read-only.
-
-The checkpoint is disaster recovery, not full transcript memory. A replacement can preserve recorded goals, decisions, and status but cannot recreate unrecorded reasoning or exact conversation history.
-
-Codex MCP sessions are not currently expected to flood ordinary Codex Desktop recents, but invisibility and resource behavior are not guaranteed platform contracts. Do not market Fabex as preventing Codex Desktop sessions or memory use.
-
-## Mechanically enforced and instructional behavior
+## Mechanically enforced and platform-limited behavior
 
 | Mechanically enforced | Instructional or platform-limited |
 | --- | --- |
-| Exact `mcp__codex__codex` and `mcp__codex__codex-reply` gating | Codex compliance with no-effects discussion prompts |
-| Canonical returned-threadId verification | Equal model judgment and memory |
-| Per-workstream call serialization | Perfect current-turn opinion blindness with synchronous tools |
-| Claude-only denial of Codex MCP tools | Bash mutation classification outside protected GitHub commands |
-| Normal-mode Claude main-session Write/Edit/NotebookEdit denial | Operational-agent model resolution by the host runtime |
-| Main-session and ambiguous-executor GitHub push denial | MCP visibility and resource behavior in Codex Desktop |
-| Atomic schema migration and bounded terminal-operation pruning | Cross-restart MCP reattachment |
-| Fail-closed state on ambiguous outcomes | Complete continuity after checkpoint replacement |
+| Exact controller submit/status/result/cancel command shapes | Equal model judgment and memory quality |
+| Durable per-workstream FIFO queue and one active turn | Perfect current-turn opinion separation while progress is asynchronous |
+| Exact `thread.started` ID verification on every turn | SDK/CLI service availability and subscription limits |
+| Per-turn `read-only` or `workspace-write` SDK sandbox | Codex Desktop Recents visibility across future app versions |
+| Claude-only denial of SDK submit | Host model resolution for `fabex-operational` |
+| Claude main-session Write/Edit/NotebookEdit denial | Complete continuity after an explicitly replaced missing session |
+| Claude-tool GitHub push/`gh` calls limited to the plugin-scoped operational agent | Codex compliance with the instruction reserving staging, commits, pushes, and `gh` for `fabex-operational` |
+| Atomic schema migration and hard 48 KiB complete recovery seed | Resource use of SDK/CLI processes under live workloads |
 
-## Requirements and MCP setup
+## Controller and progress visibility
 
-- Claude Code with plugin MCP support
-- Codex CLI with `codex mcp-server`
-- Node.js 20 or newer
-
-The retired Codex companion plugin is neither required nor used.
-
-Install the Codex CLI using an official method, sign in using the Codex CLI, and confirm this command exists:
+The joint workflow submits a short single-line owner message with:
 
 ```sh
-codex mcp-server --help
+node "${CLAUDE_PLUGIN_ROOT}/scripts/controller.mjs" submit --message '<owner message>'
 ```
 
-Fabex ships `.mcp.json` with this stdio server:
+For multiline or shell-significant text, the skill uses a guard-validated quoted heredoc with a fresh delimiter, preserving the body without interpolation.
 
-```json
-{
-  "mcpServers": {
-    "codex": {
-      "command": "codex",
-      "args": ["mcp-server"]
-    }
-  }
-}
+Submission returns a UUID immediately. While the operation runs, status reports only genuine SDK lifecycle observations:
+
+Owner messages are limited to 192 KiB so an initial turn plus the maximum 48 KiB recovery seed remains below the former 256 KiB failure boundary.
+
+- `queued` while an earlier owner message is active;
+- `working` after the SDK turn starts;
+- `command` for command execution;
+- `tests` when a command is recognizable verification;
+- `completed`, `failed`, or `cancelled` at a genuine terminal outcome.
+
+Reasoning events and command output are never exposed as progress. Claude polls with `controller.mjs status --operation-id <uuid>` and reads the bounded terminal result with `result`. A busy controller keeps later messages in durable FIFO order and processes them sequentially on the same thread; v1 has no mid-turn steering.
+
+Cancellation is explicit:
+
+```sh
+node "${CLAUDE_PLUGIN_ROOT}/scripts/controller.mjs" cancel --operation-id <uuid>
 ```
 
-Fabex never requests, stores, inspects, sanitizes, or configures credentials; it uses the authentication already configured for the installed Codex CLI.
+Cancellation aborts the active `runStreamed()` call through `AbortSignal`, records `cancelled`, and retains the verified canonical thread ID for the next queued turn. Cancelling a queued operation removes its raw message before it reaches Codex.
 
-After installation or update, reload plugins, run `/fabex:diagnose`, and confirm both `mcp__codex__codex` and `mcp__codex__codex-reply` are exposed before the first Codex task.
+## Continuous thread and restart behavior
+
+The first SDK event for every turn must be `thread.started`. Fabex accepts the returned `thread_id` only when it creates the canonical thread; every resumed turn must return the exact persisted ID. A missing or mismatched ID fails closed.
+
+Across controller or Claude restarts, Fabex reconstructs the SDK thread with `resumeThread(exactId, perTurnOptions)`. The official SDK cold-resumes threads persisted by the Codex CLI. No empty re-sync turn, sibling thread, manual compaction call, or source rewrite is used.
+
+The controller reapplies Fabex developer instructions and `compact_prompt` on every execution. Mode changes do not change the canonical ID; they change only the per-turn SDK sandbox.
+
+If the SDK returns the verified text `Session not found for thread_id: <id>`, Fabex enters recovery-read-only. Only the explicit `recover replace-missing-thread --operation-id <uuid>` path clears that confirmed-missing ID; the next owner turn creates one structured-checkpoint-seeded replacement. Other failures do not silently replace the thread.
+
+## Structured checkpoint and recovery budget
+
+Fabex no longer accumulates raw owner-goal history. Its checkpoint has exactly these fields:
+
+- objective;
+- current task;
+- constraints;
+- accepted decisions;
+- relevant files;
+- implementation status;
+- test status;
+- unresolved problems;
+- next action;
+- repository fingerprint.
+
+The complete recovery seed—including title, framing, serialized checkpoint, and stale-repository warning—has a hard 48 KiB UTF-8 limit. Updates that would exceed 49,152 bytes are rejected atomically. The checkpoint is disaster recovery context, not a transcript and not a substitute for the exact thread.
+
+## Requirements and dependency installation
+
+- Claude Code with local plugin support
+- Node.js 20 or newer
+- pnpm 10 or newer, or a compatible npm client
+- Codex CLI signed in through the owner's existing ChatGPT/Codex subscription
+
+Fabex declares the official SDK in the plugin's `package.json` and pins it in `pnpm-lock.yaml`. The SDK brings its matching `@openai/codex` CLI package. Fabex does not bundle or commit `node_modules`; install the pinned dependency into the plugin checkout before installing or reloading the plugin:
+
+```sh
+pnpm install --frozen-lockfile
+```
+
+For npm-based environments, `npm install` from the plugin root installs the same declared dependency, though the committed pnpm lockfile is the release authority.
+
+Fabex has no API-key, base-URL, credential entry, or separate billing surface. It neither requests nor stores credentials and passes no `apiKey` to the SDK. It relies only on the existing Codex CLI ChatGPT subscription sign-in. If a future SDK or CLI requires API-key billing for this path, stop: that is a release blocker, not a fallback.
 
 ## Install
 
-The public marketplace location is not assigned yet. The following is a development placeholder, not a working marketplace URL:
+The public marketplace location is not assigned. For a development checkout:
 
 ```sh
-claude plugin marketplace add <FUTURE-FABEX-MARKETPLACE-REPO-OR-PATH>
+git clone <FABEX-REPOSITORY-URL>
+cd fabex
+pnpm install --frozen-lockfile
+claude plugin marketplace add "$(pwd)"
 claude plugin install fabex@fabex
 ```
 
-For local development, substitute the checked-out repository path. Do not point normal use at a mutable plugin cache.
+After an update, reload the plugin, run `/fabex:diagnose`, then perform the live dogfood criteria below. Do not point normal use at a mutable plugin cache.
 
 ## Configuration
 
-No configuration is required. Configuration merges field by field from shipped defaults, the machine `FABEX_HOME` config, then project `.fabex/config.json`.
+Configuration merges field by field from shipped defaults, machine `FABEX_HOME` config, then project `.fabex/config.json`:
 
 ```json
 {
   "schemaVersion": 1,
   "models": {
-    "codex": {
-      "model": null,
-      "reasoningEffort": "high"
-    },
+    "codex": { "model": null, "reasoningEffort": "high" },
     "operational": "sonnet"
   },
-  "collaboration": {
-    "jointByDefault": true
-  },
-  "display": {
-    "replyModeBadge": "always"
-  }
+  "collaboration": { "jointByDefault": true },
+  "display": { "replyModeBadge": "always" }
 }
 ```
 
-`models.codex` applies when the canonical thread is created; MCP replies inherit that thread's fixed settings. `models.operational` defaults to Sonnet, remains configurable, and is passed explicitly at agent creation. Host model substitution may be reported or remain unverifiable, so Fabex does not promise that the configured operational model is always cheaper.
+`models.codex` is applied on every SDK reconstruction. `models.operational` must be passed explicitly when creating `fabex-operational`. Native host permissions remain authoritative.
 
 ## Privacy and retention
 
-Fabex state is stored per canonical workstream under its plugin data directory with restrictive file permissions. Checkpoints are bounded to eight owner-goal entries, sixteen accepted decisions, one current-status summary, and repository metadata. Terminal operation records are pruned to the most recent 24; unresolved recovery records are preserved. Fabex does not store full Codex transcripts or raw Claude-only Q&A. MCP and host applications may retain their own data independently under their own policies.
+Per-workstream state is stored under the plugin data directory with restrictive permissions. A queued raw owner message is retained only until its operation becomes terminal, then erased. Fabex retains the structured checkpoint and at most 24 terminal operation records with bounded final response/error fields; it does not store a full Codex transcript, reasoning events, command output, or raw Claude-only Q&A.
 
-## Status and recovery
+The SDK and Codex CLI persist the canonical thread under Codex's own storage and may retain data under their policies. Claude Code and host applications may retain their own data independently.
 
-`/status` reports the canonical mode, route, participants, state health, canonical thread ID, reattach/replacement status, bounded checkpoint counts, repository fingerprints, and unresolved operations. It does not print checkpoint content or transcripts.
+## Status, recovery, and guards
 
-`/recover` can inspect, explicitly retry, or abandon a recorded unresolved operation, clear only a confirmed-dead state lock, and commit/discard only an unambiguous validated transaction. State files must never be hand-edited.
+`/status` reports mode, participants, state health, controller PID/active operation, canonical thread ID, metadata, recovery-seed byte count, current repository fingerprint, and bounded lifecycle records. It omits checkpoint text, queued messages, final responses, transcripts, environment values, and credentials.
 
-## Benchmark status
+`/recover` can inspect an operation without exposing its retained queued text, abandon a failed/cancelled record, explicitly replace only a confirmed-missing thread, clear only a confirmed-dead lock, and commit/discard only a validated unambiguous transaction. State files must never be hand-edited.
 
-The repeated paired benchmark is retired as a release blocker. Existing single-run measurements are informational only. A representative earlier implementation task used fewer Claude output tokens than its solo-Claude comparison while reading more cached input; a micro-task cost more because coordination has fixed overhead. Repeated paired runs with predeclared criteria are required before publishing any new quantitative savings claim. Fabex makes no guaranteed savings claim.
+The route guard gates exact controller submit/status/result/cancel entry points, keeps Claude-only denial semantics, hard-denies Claude main-session Write/Edit/NotebookEdit in normal mode, and preserves the operational-agent-only GitHub push guard. There is no MCP tool gating because there is no MCP transport.
+
+## Beta dogfood and release criteria
+
+1. Verify every joint owner message reaches the same `thread_id`, including after Claude and controller restarts.
+2. Verify discussion and ask use `read-only`, implementation uses `workspace-write`, and the ID does not change.
+3. Queue messages during a long turn and verify FIFO processing and visible lifecycle transitions.
+4. Cancel an active turn, submit another message, and verify continuity on the same ID.
+5. Watch Codex Desktop thread count. SDK exec-source sessions are expected to stay out of Desktop's default Recents; this is a hard criterion, not a documented platform guarantee.
+6. Watch Codex/Node process accumulation and RAM during repeated turns and restarts.
+
+If Desktop thread flooding, orphaned sessions/processes, or material RAM growth returns, stop dogfooding and adjust the transport before release. No live dogfood, plugin reload, or Codex Desktop inspection is performed by the isolated repository test suite.
 
 ## Release activation status
 
-Version 1.3.0 is implemented in this repository. Activation verification is pending until the owner installs or reloads it. Live same-thread mode switching, interruption behavior, exact tool exposure, and cross-restart best-effort reattachment must be tested after that reload; until then 1.3.0 is not described as active or marketplace-ready.
+Version 1.4.0 is implemented in this repository. Unit and mock-integration verification can complete without live model calls, but activation remains pending install/reload and the Beta dogfood criteria. Fabex is not yet marketplace-ready.
 
 ## Platform support
 
-macOS supported; Windows experimental. Platform behavior remains subject to Claude Code and Codex CLI limits.
-
-## Security and contributing
+macOS supported; Windows experimental. Platform behavior remains subject to Claude Code, the official SDK, and Codex CLI limits.
 
 See [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).

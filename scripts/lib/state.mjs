@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { access, chmod, mkdir, open, readFile, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { emptyCheckpoint, migrateLegacyCheckpoint } from './checkpoint.mjs';
 import { projectPaths } from './paths.mjs';
 import { STATE_SCHEMA_VERSION, ValidationError, validateState } from './validation.mjs';
 
@@ -27,21 +28,20 @@ export function initialState(identity) {
     returnTo: null,
     task: { id: null, status: null, label: null, joint: { required: false, status: null, decisionId: null } },
     partner: {
-      transport: 'codex-mcp',
+      transport: 'codex-sdk',
       status: 'not-started',
       thread: {
         threadId: null,
-        checkpoint: { ownerGoals: [], acceptedDecisions: [], currentStatus: null },
+        checkpoint: emptyCheckpoint(),
         metadata: {
           turnCount: 0,
           lastUsedAt: null,
-          repoFingerprint: { branch: null, head: null, dirty: null },
-          reattachStatus: 'not-needed',
-          replacementStatus: 'not-needed'
+          repoFingerprint: { branch: null, head: null, dirty: null }
         }
       },
-      envelope: { cwd: null, sandbox: null, approvalPolicy: null, instructionProfile: null }
+      envelope: { cwd: null, sandbox: null, instructionProfile: null }
     },
+    controller: { runnerPid: null, activeOperationId: null },
     operations: []
   };
 }
@@ -111,34 +111,37 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
+    const sourceVersion = state.schemaVersion;
     if (state.schemaVersion === 1) {
       state.participants = 'both';
       state.returnTo = null;
     }
     const legacyCheckpoint = state.partner?.threads?.checkpoint ?? state.partner?.thread?.checkpoint ?? { ownerGoals: [], acceptedDecisions: [], currentStatus: null };
     const legacyMetadata = state.partner?.threads?.metadata ?? state.partner?.thread?.metadata ?? {};
+    const preservedThreadId = sourceVersion === 4 && typeof state.partner?.thread?.threadId === 'string' ? state.partner.thread.threadId : null;
     if (state.partner) {
       delete state.partner.threadId;
       delete state.partner.threads;
       delete state.partner.thread;
-      state.partner.transport = 'codex-mcp';
+      state.partner.transport = 'codex-sdk';
       state.partner.status = 'not-started';
       state.partner.thread = {
-        threadId: null,
-        checkpoint: legacyCheckpoint,
+        threadId: preservedThreadId,
+        checkpoint: migrateLegacyCheckpoint(legacyCheckpoint),
         metadata: {
           turnCount: Number.isSafeInteger(legacyMetadata.turnCount) ? legacyMetadata.turnCount : 0,
           lastUsedAt: legacyMetadata.lastUsedAt ?? null,
-          repoFingerprint: legacyMetadata.repoFingerprint ?? { branch: null, head: null, dirty: null },
-          reattachStatus: 'not-needed',
-          replacementStatus: 'not-needed'
+          repoFingerprint: legacyMetadata.repoFingerprint ?? { branch: null, head: null, dirty: null }
         }
       };
+      state.partner.thread.checkpoint.repoFingerprint = state.partner.thread.metadata.repoFingerprint;
+      state.partner.envelope = { cwd: null, sandbox: null, instructionProfile: null };
     }
+    state.controller = { runnerPid: null, activeOperationId: null };
     state.operations = [];
     state.schemaVersion = STATE_SCHEMA_VERSION;
   }
@@ -153,7 +156,7 @@ async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v4');
+    await acquireLock(paths, 'schema-migration-to-v5');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);
@@ -186,13 +189,20 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
     if (await exists(paths.stateFile)) {
       const loaded = await loadValidated(paths);
       const state = loaded.migrated ? await persistMigration(paths) : loaded.state;
-      const hasRunning = state.operations.some((operation) => operation.status === 'running') || state.partner.status === 'running';
-      if (!recoverUnresolved || !hasRunning) return { ok: true, state, health: 'healthy', paths };
+      const hasRunning = state.operations.some((operation) => operation.status === 'working') || state.partner.status === 'working';
+      const runnerAlive = (() => {
+        if (!Number.isSafeInteger(state.controller.runnerPid) || state.controller.runnerPid <= 0) return false;
+        try { process.kill(state.controller.runnerPid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
+      })();
+      if (!recoverUnresolved || !hasRunning || runnerAlive) return { ok: true, state, health: 'healthy', paths };
       return updateState(root, (draft) => {
         draft.route = 'recovery-read-only';
         draft.task.status = 'recovery-required';
-        draft.operations = draft.operations.map((operation) => operation.status === 'running' ? { ...operation, status: 'interrupted' } : operation);
-        if (draft.partner.status === 'running') draft.partner.status = 'pending';
+        draft.operations = draft.operations.map((operation) => operation.status === 'working'
+          ? { ...operation, status: 'failed', request: { ...operation.request, message: null }, result: { ...operation.result, error: 'controller stopped before the SDK turn outcome was known' }, lifecycle: { ...operation.lifecycle, phase: 'failed', detail: 'Controller stopped; recovery is required.', finishedAt: new Date().toISOString() } }
+          : operation);
+        draft.partner.status = 'failed';
+        draft.controller = { runnerPid: null, activeOperationId: null };
         draft.generation += 1;
         return draft;
       }, { expectedGeneration: state.generation, purpose: 'session-recovery' }, env);

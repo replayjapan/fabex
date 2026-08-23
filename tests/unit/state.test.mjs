@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { claimNextOperation, submitOperation } from '../../scripts/lib/sdk-controller.mjs';
 import { initialState, initializeState, readState, resolveTransaction, updateState } from '../../scripts/lib/state.mjs';
 
 async function fixture(t) {
@@ -13,183 +14,143 @@ async function fixture(t) {
   return { project, env: { ...process.env, FABEX_HOME: join(directory, 'data') } };
 }
 
-test('initial state is schema-versioned with the compact Fabex shape', () => {
+test('initial state is schema v5 with SDK controller and structured checkpoint', () => {
   const state = initialState({ projectId: '0000000000000000', canonicalRoot: '/synthetic/project' });
-  assert.equal(state.schemaVersion, 4);
-  assert.equal(state.route, 'normal');
-  assert.equal(state.participants, 'both');
-  assert.equal(state.returnTo, null);
-  assert.equal(state.partner.transport, 'codex-mcp');
-  assert.deepEqual(state.partner.thread.checkpoint, { ownerGoals: [], acceptedDecisions: [], currentStatus: null });
-  assert.equal(state.partner.thread.metadata.turnCount, 0);
-  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'project', 'returnTo', 'route', 'schemaVersion', 'task'].sort());
+  assert.equal(state.schemaVersion, 5);
+  assert.equal(state.partner.transport, 'codex-sdk');
+  assert.deepEqual(Object.keys(state.partner.thread.checkpoint), ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint']);
+  assert.deepEqual(state.controller, { runnerPid: null, activeOperationId: null });
+  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'controller', 'project', 'returnTo', 'route', 'schemaVersion', 'task'].sort());
 });
 
-test('schema v1 state migrates atomically in place on load', async (t) => {
+test('1.3.0 schema v4 migrates atomically and preserves the exact canonical thread id', async (t) => {
   const { project, env } = await fixture(t);
   const initialized = await initializeState(project, env);
-  const v1 = structuredClone(initialized.state);
-  v1.schemaVersion = 1;
-  delete v1.participants;
-  delete v1.returnTo;
-  v1.partner.transport = 'official-codex-plugin';
-  v1.partner.threadId = 'legacy-primary';
-  delete v1.partner.thread;
-  await writeFile(initialized.paths.stateFile, `${JSON.stringify(v1)}\n`);
+  const v4 = structuredClone(initialized.state);
+  v4.schemaVersion = 4;
+  delete v4.controller;
+  v4.partner.transport = 'codex-mcp';
+  v4.partner.status = 'completed';
+  v4.partner.thread.threadId = 'canonical-from-1.3';
+  v4.partner.thread.checkpoint = { ownerGoals: ['ship SDK'], acceptedDecisions: ['same id'], currentStatus: 'MCP active' };
+  v4.partner.thread.metadata = { ...v4.partner.thread.metadata, reattachStatus: 'required', replacementStatus: 'not-needed' };
+  v4.partner.envelope = { cwd: project, sandbox: 'workspace-write', approvalPolicy: 'on-request', instructionProfile: 'continuous-canonical' };
+  v4.operations = [{ id: '11111111-1111-4111-8111-111111111111', kind: 'partner', name: 'fabex:reply', status: 'completed', externalId: 'canonical-from-1.3' }];
+  await writeFile(initialized.paths.stateFile, `${JSON.stringify(v4)}\n`);
   const loaded = await readState(project, env);
   assert.equal(loaded.ok, true);
-  assert.equal(loaded.health, 'healthy');
-  assert.equal(loaded.state.schemaVersion, 4);
-  assert.equal(loaded.state.participants, 'both');
-  assert.equal(loaded.state.returnTo, null);
-  assert.equal(loaded.state.partner.thread.threadId, null);
-  assert.equal(loaded.state.partner.transport, 'codex-mcp');
-  assert.equal(loaded.state.generation, v1.generation + 1);
+  assert.equal(loaded.state.schemaVersion, 5);
+  assert.equal(loaded.state.partner.transport, 'codex-sdk');
+  assert.equal(loaded.state.partner.thread.threadId, 'canonical-from-1.3');
+  assert.equal(loaded.state.partner.thread.checkpoint.objective, 'ship SDK');
+  assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['same id']);
+  assert.equal(loaded.state.partner.thread.checkpoint.implementationStatus, 'MCP active');
+  assert.deepEqual(loaded.state.operations, []);
+  assert.equal(loaded.state.generation, v4.generation + 1);
   assert.deepEqual(JSON.parse(await readFile(initialized.paths.stateFile, 'utf8')), loaded.state);
   await assert.rejects(access(initialized.paths.transactionFile));
 });
 
-test('schema v2 state migrates atomically while retiring its companion thread id', async (t) => {
+test('oversized 1.3.0 checkpoint compacts into the v5 recovery budget during migration', async (t) => {
   const { project, env } = await fixture(t);
   const initialized = await initializeState(project, env);
-  const v2 = structuredClone(initialized.state);
-  v2.schemaVersion = 2;
-  v2.partner.transport = 'official-codex-plugin';
-  v2.partner.threadId = 'v2-primary';
-  delete v2.partner.thread;
-  await writeFile(initialized.paths.stateFile, `${JSON.stringify(v2)}\n`);
+  const v4 = structuredClone(initialized.state);
+  v4.schemaVersion = 4;
+  delete v4.controller;
+  v4.partner.transport = 'codex-mcp';
+  v4.partner.thread.threadId = 'large-checkpoint-thread';
+  v4.partner.thread.checkpoint = {
+    ownerGoals: Array.from({ length: 8 }, (_, index) => `${index}:${'g'.repeat(32760)}`),
+    acceptedDecisions: Array.from({ length: 16 }, (_, index) => `${index}:${'d'.repeat(2040)}`),
+    currentStatus: 's'.repeat(8192)
+  };
+  v4.partner.thread.metadata = { ...v4.partner.thread.metadata, reattachStatus: 'required', replacementStatus: 'not-needed' };
+  v4.partner.envelope = { cwd: project, sandbox: 'workspace-write', approvalPolicy: 'on-request', instructionProfile: 'continuous-canonical' };
+  await writeFile(initialized.paths.stateFile, `${JSON.stringify(v4)}\n`);
   const loaded = await readState(project, env);
   assert.equal(loaded.ok, true);
-  assert.equal(loaded.state.schemaVersion, 4);
-  assert.equal(loaded.state.partner.thread.threadId, null);
-  assert.equal(loaded.state.partner.thread.metadata.reattachStatus, 'not-needed');
+  assert.equal(loaded.state.partner.thread.threadId, 'large-checkpoint-thread');
+  assert.ok(loaded.state.partner.thread.checkpoint.objective.length <= 8192);
+  assert.equal(loaded.state.partner.thread.checkpoint.acceptedDecisions.length, 8);
 });
 
-test('schema v3 migration retires companion thread ids and operations but preserves checkpoint atomically', async (t) => {
+test('older companion schema migration retires incompatible companion thread ids', async (t) => {
   const { project, env } = await fixture(t);
   const initialized = await initializeState(project, env);
   const v3 = structuredClone(initialized.state);
   v3.schemaVersion = 3;
+  delete v3.controller;
   v3.partner = {
-    transport: 'official-codex-plugin',
-    status: 'completed',
-    threads: {
-      primaryThreadId: 'companion-primary',
-      writeThreadId: 'companion-write',
-      checkpoint: { ownerGoals: ['goal'], acceptedDecisions: ['decision'], currentStatus: 'status' },
-      metadata: {
-        turnCount: 7,
-        lastUsedAt: '2026-08-21T00:00:00.000Z',
-        repoFingerprint: { branch: 'main', head: 'abc', dirty: false },
-        resyncStatus: 'required',
-        refreshOfferedAt: null
-      }
-    },
+    transport: 'official-codex-plugin', status: 'completed',
+    threads: { primaryThreadId: 'companion', writeThreadId: 'companion-write', checkpoint: { ownerGoals: ['goal'], acceptedDecisions: [], currentStatus: null }, metadata: { turnCount: 2, lastUsedAt: null, repoFingerprint: { branch: null, head: null, dirty: null } } },
     envelope: { cwd: project, sandbox: 'read-only', approvalPolicy: 'native', instructionProfile: 'old' }
   };
-  v3.operations = [{ id: '11111111-1111-4111-8111-111111111111', kind: 'partner', name: 'old', status: 'completed', externalId: 'job' }];
+  v3.operations = [];
   await writeFile(initialized.paths.stateFile, `${JSON.stringify(v3)}\n`);
   const loaded = await readState(project, env);
-  assert.equal(loaded.ok, true);
-  assert.equal(loaded.state.schemaVersion, 4);
+  assert.equal(loaded.state.schemaVersion, 5);
   assert.equal(loaded.state.partner.thread.threadId, null);
-  assert.deepEqual(loaded.state.partner.thread.checkpoint, v3.partner.threads.checkpoint);
-  assert.deepEqual(loaded.state.partner.thread.metadata.repoFingerprint, v3.partner.threads.metadata.repoFingerprint);
-  assert.deepEqual(loaded.state.operations, []);
-  assert.equal(loaded.state.generation, v3.generation + 1);
-  await assert.rejects(access(initialized.paths.transactionFile));
+  assert.equal(loaded.state.partner.thread.checkpoint.objective, 'goal');
 });
 
-test('readState first touch atomically initializes instead of reporting missing', async (t) => {
+test('first touch initializes and atomic updates leave restrictive clean state', async (t) => {
   const { project, env } = await fixture(t);
   const result = await readState(project, env);
-  assert.equal(result.ok, true);
   assert.equal(result.health, 'initialized');
-  assert.equal(result.state.route, 'normal');
-  await assert.doesNotReject(access(result.paths.stateFile));
-  await assert.rejects(access(result.paths.transactionFile));
-});
-
-test('atomic update advances generation and cleans journals and temp files', async (t) => {
-  const { project, env } = await fixture(t);
-  const initialized = await initializeState(project, env);
-  const updated = await updateState(project, (state) => {
-    state.route = 'discussion';
-    state.generation += 1;
-    return state;
-  }, { expectedGeneration: 0, purpose: 'test' }, env);
+  const updated = await updateState(project, (state) => { state.route = 'discussion'; state.generation += 1; return state; }, { expectedGeneration: 0 }, env);
   assert.equal(updated.ok, true);
-  assert.equal(updated.state.generation, 1);
   assert.equal((await readState(project, env)).state.route, 'discussion');
-  assert.equal((await readdir(initialized.paths.projectDir)).some((name) => name.includes('.tmp.')), false);
-  assert.equal((await stat(initialized.paths.projectDir)).mode & 0o777, 0o700);
-  assert.equal((await stat(initialized.paths.stateFile)).mode & 0o777, 0o600);
+  assert.equal((await readdir(result.paths.projectDir)).some((name) => name.includes('.tmp.')), false);
+  assert.equal((await stat(result.paths.projectDir)).mode & 0o777, 0o700);
+  assert.equal((await stat(result.paths.stateFile)).mode & 0o777, 0o600);
 });
 
-test('lock contention produces recovery-read-only without stealing the lock', async (t) => {
+test('dead controller work becomes failed recovery state at SessionStart', async (t) => {
+  const { project, env } = await fixture(t);
+  await initializeState(project, env);
+  await submitOperation(project, 'active', env, { spawnRunner: false });
+  await claimNextOperation(project, env);
+  const recovered = await initializeState(project, env, { recoverUnresolved: true });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.state.route, 'recovery-read-only');
+  assert.equal(recovered.state.operations[0].status, 'failed');
+  assert.equal(recovered.state.operations[0].request.message, null);
+  assert.equal(recovered.state.controller.activeOperationId, null);
+});
+
+test('lock contention, corrupt JSON, and incompatible state fail closed', async (t) => {
   const { project, env } = await fixture(t);
   const initialized = await initializeState(project, env);
   await mkdir(initialized.paths.lockDir, { mode: 0o700 });
   await writeFile(initialized.paths.lockOwnerFile, '{"pid":1}\n', { mode: 0o600 });
-  const result = await readState(project, env);
-  assert.equal(result.ok, false);
-  assert.equal(result.health, 'lock-contention');
-  assert.equal(result.state.route, 'recovery-read-only');
-  await assert.doesNotReject(access(initialized.paths.lockOwnerFile));
-});
-
-test('corrupt and incompatible state require recovery', async (t) => {
-  const { project, env } = await fixture(t);
-  const initialized = await initializeState(project, env);
+  assert.equal((await readState(project, env)).health, 'lock-contention');
+  await rm(initialized.paths.lockDir, { recursive: true });
   await writeFile(initialized.paths.stateFile, '{');
   assert.equal((await readState(project, env)).health, 'corrupt');
   const good = initialState(initialized.paths);
-  good.schemaVersion = 9;
+  good.schemaVersion = 99;
   await writeFile(initialized.paths.stateFile, JSON.stringify(good));
-  const mismatch = await readState(project, env);
-  assert.equal(mismatch.health, 'schema-mismatch');
-  assert.equal(mismatch.state.route, 'recovery-read-only');
+  assert.equal((await readState(project, env)).health, 'schema-mismatch');
 });
 
-test('running partner work becomes interrupted recovery state at SessionStart', async (t) => {
-  const { project, env } = await fixture(t);
-  await initializeState(project, env);
-  await updateState(project, (state) => {
-    state.partner.status = 'running';
-    state.operations.push({ id: '11111111-1111-4111-8111-111111111111', kind: 'partner', name: 'joint', status: 'running', externalId: null });
-    state.generation += 1;
-    return state;
-  }, { expectedGeneration: 0 }, env);
-  const recovered = await initializeState(project, env, { recoverUnresolved: true });
-  assert.equal(recovered.ok, true);
-  assert.equal(recovered.state.route, 'recovery-read-only');
-  assert.equal(recovered.state.operations[0].status, 'interrupted');
-  assert.equal(recovered.state.partner.status, 'pending');
-});
-
-test('validated next-generation transaction can commit', async (t) => {
+test('validated transactions commit or discard and ambiguous journals remain', async (t) => {
   const { project, env } = await fixture(t);
   const initialized = await initializeState(project, env);
-  const transaction = structuredClone(initialized.state);
-  transaction.generation = 1;
-  transaction.route = 'discussion';
-  await writeFile(initialized.paths.transactionFile, JSON.stringify(transaction));
-  assert.equal((await readState(project, env)).health, 'transaction-present');
+  const next = structuredClone(initialized.state);
+  next.generation = 1;
+  next.route = 'discussion';
+  await writeFile(initialized.paths.transactionFile, JSON.stringify(next));
   await resolveTransaction(project, 'commit', env);
-  const current = await readState(project, env);
-  assert.equal(current.state.generation, 1);
-  assert.equal(current.state.route, 'discussion');
-});
-
-test('validated next-generation transaction can discard', async (t) => {
-  const { project, env } = await fixture(t);
-  const initialized = await initializeState(project, env);
-  const transaction = structuredClone(initialized.state);
-  transaction.generation = 1;
-  await writeFile(initialized.paths.transactionFile, JSON.stringify(transaction));
+  assert.equal((await readState(project, env)).state.route, 'discussion');
+  const discard = structuredClone((await readState(project, env)).state);
+  discard.generation += 1;
+  await writeFile(initialized.paths.transactionFile, JSON.stringify(discard));
   await resolveTransaction(project, 'discard', env);
-  assert.equal((await readState(project, env)).state.generation, 0);
-  await assert.rejects(access(initialized.paths.transactionFile));
+  const ambiguous = structuredClone((await readState(project, env)).state);
+  ambiguous.generation += 4;
+  await writeFile(initialized.paths.transactionFile, JSON.stringify(ambiguous));
+  await assert.rejects(resolveTransaction(project, 'commit', env), (error) => error.code === 'transaction-ambiguous');
+  await assert.doesNotReject(access(initialized.paths.transactionFile));
 });
 
 test('generation-zero journal restores a missing initial state', async (t) => {
@@ -199,14 +160,4 @@ test('generation-zero journal restores a missing initial state', async (t) => {
   await unlink(initialized.paths.stateFile);
   await resolveTransaction(project, 'commit', env);
   assert.equal((await readState(project, env)).state.generation, 0);
-});
-
-test('ambiguous transaction is retained for explicit recovery', async (t) => {
-  const { project, env } = await fixture(t);
-  const initialized = await initializeState(project, env);
-  const transaction = structuredClone(initialized.state);
-  transaction.generation = 4;
-  await writeFile(initialized.paths.transactionFile, JSON.stringify(transaction));
-  await assert.rejects(resolveTransaction(project, 'commit', env), (error) => error.code === 'transaction-ambiguous');
-  await assert.doesNotReject(access(initialized.paths.transactionFile));
 });

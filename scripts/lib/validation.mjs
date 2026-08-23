@@ -1,14 +1,14 @@
+import { buildRecoverySeed } from './checkpoint.mjs';
 import { isValidMode, PARTICIPANTS } from './mode.mjs';
 
-export const STATE_SCHEMA_VERSION = 4;
+export const STATE_SCHEMA_VERSION = 5;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
 const JOINT_STATUSES = new Set([null, 'pending', 'completed', 'unavailable']);
-const PARTNER_STATUSES = new Set(['not-started', 'pending', 'running', 'completed', 'unavailable']);
-const OPERATION_STATUSES = new Set(['running', 'completed', 'failed', 'interrupted']);
-const REATTACH_STATUSES = new Set(['not-needed', 'required', 'attached']);
-const REPLACEMENT_STATUSES = new Set(['not-needed', 'authorized', 'used']);
+const PARTNER_STATUSES = new Set(['not-started', 'queued', 'working', 'completed', 'failed', 'cancelled', 'unavailable']);
+const OPERATION_STATUSES = new Set(['queued', 'working', 'completed', 'failed', 'cancelled']);
+const PHASES = new Set(['queued', 'working', 'command', 'tests', 'completed', 'failed', 'cancelled']);
 
 export class ValidationError extends Error {
   constructor(message, details = []) {
@@ -29,51 +29,72 @@ export function hasExactKeys(value, keys) {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function nullableString(value) {
-  return value === null || typeof value === 'string';
+const nullableString = (value) => value === null || typeof value === 'string';
+const boundedString = (value, bytes) => typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= bytes;
+const boundedNullableString = (value, bytes) => value === null || boundedString(value, bytes);
+const boundedStrings = (value, count, bytes) => Array.isArray(value) && value.length <= count && value.every((item) => boundedString(item, bytes));
+
+function validFingerprint(value) {
+  return hasExactKeys(value, ['branch', 'head', 'dirty'])
+    && nullableString(value.branch) && nullableString(value.head) && [null, true, false].includes(value.dirty);
 }
 
-function boundedStrings(value, count, bytes) {
-  return Array.isArray(value) && value.length <= count && value.every((item) => typeof item === 'string' && Buffer.byteLength(item, 'utf8') <= bytes);
+function validateCheckpoint(checkpoint, projectRoot, errors) {
+  const keys = ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint'];
+  if (!hasExactKeys(checkpoint, keys)) { errors.push('partner checkpoint shape is invalid'); return; }
+  for (const key of ['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction']) {
+    if (!boundedNullableString(checkpoint[key], 8192)) errors.push(`checkpoint ${key} is invalid`);
+  }
+  if (!boundedStrings(checkpoint.constraints, 24, 4096)) errors.push('checkpoint constraints are invalid');
+  if (!boundedStrings(checkpoint.acceptedDecisions, 24, 4096)) errors.push('checkpoint acceptedDecisions are invalid');
+  if (!boundedStrings(checkpoint.relevantFiles, 64, 1024)) errors.push('checkpoint relevantFiles are invalid');
+  if (!boundedStrings(checkpoint.unresolvedProblems, 24, 4096)) errors.push('checkpoint unresolvedProblems are invalid');
+  if (!validFingerprint(checkpoint.repoFingerprint)) errors.push('checkpoint repoFingerprint is invalid');
+  try { buildRecoverySeed(checkpoint, projectRoot); } catch (error) { errors.push(error.message); }
+}
+
+function validateOperation(operation, errors) {
+  if (!hasExactKeys(operation, ['id', 'kind', 'name', 'status', 'externalId', 'request', 'result', 'lifecycle'])) { errors.push('operation record is invalid'); return; }
+  if (!UUID_RE.test(operation.id ?? '') || operation.kind !== 'partner' || operation.name !== 'sdk-turn' || !OPERATION_STATUSES.has(operation.status) || !nullableString(operation.externalId)) errors.push('operation identity is invalid');
+  if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox'])) errors.push('operation request shape is invalid');
+  else {
+    if (!boundedNullableString(operation.request.message, 192 * 1024)) errors.push('operation message is invalid');
+    if (!ROUTES.has(operation.request.route) || operation.request.route === 'recovery-read-only') errors.push('operation route is invalid');
+    if (!PARTICIPANTS.has(operation.request.participants) || operation.request.participants === 'claude') errors.push('operation participants are invalid');
+    const expectedSandbox = operation.request.route === 'normal' ? 'workspace-write' : 'read-only';
+    if (operation.request.sandbox !== expectedSandbox) errors.push('operation sandbox is invalid');
+  }
+  if (!hasExactKeys(operation.result, ['finalResponse', 'error']) || !boundedNullableString(operation.result.finalResponse, 32 * 1024) || !boundedNullableString(operation.result.error, 8192)) errors.push('operation result is invalid');
+  if (!hasExactKeys(operation.lifecycle, ['phase', 'detail', 'queuedAt', 'startedAt', 'finishedAt', 'cancelRequested'])) errors.push('operation lifecycle shape is invalid');
+  else if (!PHASES.has(operation.lifecycle.phase) || !boundedString(operation.lifecycle.detail, 1024) || !boundedString(operation.lifecycle.queuedAt, 64) || !boundedNullableString(operation.lifecycle.startedAt, 64) || !boundedNullableString(operation.lifecycle.finishedAt, 64) || typeof operation.lifecycle.cancelRequested !== 'boolean') errors.push('operation lifecycle is invalid');
 }
 
 export function validateState(state, identity) {
   const errors = [];
-  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'operations'])) errors.push('state has unexpected or missing top-level fields');
+  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations'])) errors.push('state has unexpected or missing top-level fields');
   if (state?.schemaVersion !== STATE_SCHEMA_VERSION) errors.push('state schemaVersion is incompatible');
   if (!Number.isSafeInteger(state?.generation) || state.generation < 0) errors.push('generation must be a non-negative integer');
   if (!hasExactKeys(state?.project, ['id', 'canonicalRoot'])) errors.push('project shape is invalid');
   if (identity && state?.project?.id !== identity.projectId) errors.push('project id does not match the canonical root');
   if (identity && state?.project?.canonicalRoot !== identity.canonicalRoot) errors.push('canonical root does not match state ownership');
-  if (!ROUTES.has(state?.route)) errors.push('route is invalid');
-  if (!PARTICIPANTS.has(state?.participants)) errors.push('participants is invalid');
-  if (ROUTES.has(state?.route) && PARTICIPANTS.has(state?.participants) && !isValidMode(state.route, state.participants)) errors.push('route and participants combination is invalid');
-  if (state?.returnTo !== null) {
-    if (!hasExactKeys(state?.returnTo, ['route', 'participants']) || !['normal', 'discussion'].includes(state.returnTo?.route) || !PARTICIPANTS.has(state.returnTo?.participants) || !isValidMode(state.returnTo?.route, state.returnTo?.participants)) errors.push('returnTo is invalid');
-  }
+  if (!ROUTES.has(state?.route) || !PARTICIPANTS.has(state?.participants) || (ROUTES.has(state?.route) && PARTICIPANTS.has(state?.participants) && !isValidMode(state.route, state.participants))) errors.push('route or participants are invalid');
+  if (state?.returnTo !== null && (!hasExactKeys(state.returnTo, ['route', 'participants']) || !['normal', 'discussion'].includes(state.returnTo.route) || !PARTICIPANTS.has(state.returnTo.participants) || !isValidMode(state.returnTo.route, state.returnTo.participants))) errors.push('returnTo is invalid');
   if (state?.route !== 'ask-once' && state?.returnTo !== null) errors.push('returnTo is only valid in ask-once mode');
-  if (!hasExactKeys(state?.task, ['id', 'status', 'label', 'joint'])) errors.push('task shape is invalid');
-  if (!nullableString(state?.task?.id) || !nullableString(state?.task?.status) || !nullableString(state?.task?.label) || !TASK_STATUSES.has(state?.task?.status)) errors.push('task fields are invalid');
-  if (!hasExactKeys(state?.task?.joint, ['required', 'status', 'decisionId'])) errors.push('joint task shape is invalid');
-  if (typeof state?.task?.joint?.required !== 'boolean' || !nullableString(state?.task?.joint?.status) || !nullableString(state?.task?.joint?.decisionId) || !JOINT_STATUSES.has(state?.task?.joint?.status)) errors.push('joint fields are invalid');
-  if (!hasExactKeys(state?.partner, ['transport', 'status', 'thread', 'envelope'])) errors.push('partner shape is invalid');
-  if (state?.partner?.transport !== 'codex-mcp' || !PARTNER_STATUSES.has(state?.partner?.status)) errors.push('partner fields are invalid');
-  if (!hasExactKeys(state?.partner?.thread, ['threadId', 'checkpoint', 'metadata'])) errors.push('canonical partner thread shape is invalid');
-  if (!nullableString(state?.partner?.thread?.threadId)) errors.push('canonical partner thread id is invalid');
-  if (!hasExactKeys(state?.partner?.thread?.checkpoint, ['ownerGoals', 'acceptedDecisions', 'currentStatus'])) errors.push('partner checkpoint shape is invalid');
-  if (!boundedStrings(state?.partner?.thread?.checkpoint?.ownerGoals, 8, 32768)) errors.push('owner goals checkpoint is invalid');
-  if (!boundedStrings(state?.partner?.thread?.checkpoint?.acceptedDecisions, 16, 2048)) errors.push('accepted decisions checkpoint is invalid');
-  if (!nullableString(state?.partner?.thread?.checkpoint?.currentStatus) || Buffer.byteLength(state?.partner?.thread?.checkpoint?.currentStatus ?? '', 'utf8') > 8192) errors.push('current status checkpoint is invalid');
-  if (!hasExactKeys(state?.partner?.thread?.metadata, ['turnCount', 'lastUsedAt', 'repoFingerprint', 'reattachStatus', 'replacementStatus'])) errors.push('partner thread metadata shape is invalid');
-  const metadata = state?.partner?.thread?.metadata;
-  if (!Number.isSafeInteger(metadata?.turnCount) || metadata.turnCount < 0 || !nullableString(metadata?.lastUsedAt) || !REATTACH_STATUSES.has(metadata?.reattachStatus) || !REPLACEMENT_STATUSES.has(metadata?.replacementStatus)) errors.push('partner thread metadata is invalid');
-  if (!hasExactKeys(metadata?.repoFingerprint, ['branch', 'head', 'dirty']) || !nullableString(metadata?.repoFingerprint?.branch) || !nullableString(metadata?.repoFingerprint?.head) || ![null, true, false].includes(metadata?.repoFingerprint?.dirty)) errors.push('repository fingerprint is invalid');
-  if (!hasExactKeys(state?.partner?.envelope, ['cwd', 'sandbox', 'approvalPolicy', 'instructionProfile'])) errors.push('partner envelope shape is invalid');
-  for (const key of ['cwd', 'sandbox', 'approvalPolicy', 'instructionProfile']) if (!nullableString(state?.partner?.envelope?.[key])) errors.push(`partner envelope ${key} is invalid`);
+  if (!hasExactKeys(state?.task, ['id', 'status', 'label', 'joint']) || !nullableString(state?.task?.id) || !TASK_STATUSES.has(state?.task?.status) || !nullableString(state?.task?.label)) errors.push('task fields are invalid');
+  if (!hasExactKeys(state?.task?.joint, ['required', 'status', 'decisionId']) || typeof state?.task?.joint?.required !== 'boolean' || !JOINT_STATUSES.has(state?.task?.joint?.status) || !nullableString(state?.task?.joint?.decisionId)) errors.push('joint task fields are invalid');
+  if (!hasExactKeys(state?.partner, ['transport', 'status', 'thread', 'envelope']) || state?.partner?.transport !== 'codex-sdk' || !PARTNER_STATUSES.has(state?.partner?.status)) errors.push('partner fields are invalid');
+  if (!hasExactKeys(state?.partner?.thread, ['threadId', 'checkpoint', 'metadata']) || !boundedNullableString(state?.partner?.thread?.threadId, 256)) errors.push('canonical partner thread shape is invalid');
+  validateCheckpoint(state?.partner?.thread?.checkpoint, state?.project?.canonicalRoot ?? 'project', errors);
+  if (!hasExactKeys(state?.partner?.thread?.metadata, ['turnCount', 'lastUsedAt', 'repoFingerprint']) || !Number.isSafeInteger(state?.partner?.thread?.metadata?.turnCount) || state.partner.thread.metadata.turnCount < 0 || !boundedNullableString(state.partner.thread.metadata.lastUsedAt, 64) || !validFingerprint(state.partner.thread.metadata.repoFingerprint)) errors.push('partner thread metadata is invalid');
+  if (!hasExactKeys(state?.partner?.envelope, ['cwd', 'sandbox', 'instructionProfile']) || !boundedNullableString(state?.partner?.envelope?.cwd, 4096) || !boundedNullableString(state?.partner?.envelope?.sandbox, 64) || !boundedNullableString(state?.partner?.envelope?.instructionProfile, 128)) errors.push('partner envelope is invalid');
+  const validRunnerPid = state?.controller?.runnerPid === null || (Number.isSafeInteger(state?.controller?.runnerPid) && state.controller.runnerPid > 0);
+  const validActiveId = state?.controller?.activeOperationId === null || UUID_RE.test(state?.controller?.activeOperationId ?? '');
+  if (!hasExactKeys(state?.controller, ['runnerPid', 'activeOperationId']) || !validRunnerPid || !validActiveId) errors.push('controller state is invalid');
   if (!Array.isArray(state?.operations)) errors.push('operations must be an array');
-  for (const operation of state?.operations ?? []) {
-    if (!hasExactKeys(operation, ['id', 'kind', 'name', 'status', 'externalId']) || !UUID_RE.test(operation.id ?? '') || operation.kind !== 'partner' || typeof operation.name !== 'string' || !OPERATION_STATUSES.has(operation.status) || !nullableString(operation.externalId)) errors.push('operation record is invalid');
-  }
+  for (const operation of state?.operations ?? []) validateOperation(operation, errors);
+  const active = (state?.operations ?? []).filter((operation) => operation.status === 'working');
+  if (active.length > 1 || (state?.controller?.activeOperationId ?? null) !== (active[0]?.id ?? null)) errors.push('controller active operation does not match queue state');
+  if (Buffer.byteLength(JSON.stringify(state), 'utf8') > 1024 * 1024) errors.push('state exceeds the hard 1 MiB storage limit');
   if (errors.length) throw new ValidationError('invalid state', errors);
   return state;
 }

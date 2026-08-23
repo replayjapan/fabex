@@ -50,9 +50,9 @@ test('project fields override machine fields without replacing siblings', async 
 test('unknown reasoning effort passes through with a warning', async (t) => {
   const { root, env } = await fixture(t);
   await mkdir(join(root, '.fabex'));
-  await writeFile(join(root, '.fabex', 'config.json'), JSON.stringify({ models: { codex: { reasoningEffort: 'ultra' } } }));
+  await writeFile(join(root, '.fabex', 'config.json'), JSON.stringify({ models: { codex: { reasoningEffort: 'future-effort' } } }));
   const result = await loadEffectiveConfig(root, env);
-  assert.equal(result.config.models.codex.reasoningEffort, 'ultra');
+  assert.equal(result.config.models.codex.reasoningEffort, 'future-effort');
   assert.match(result.warnings.join('\n'), /unknown and was passed through/);
 });
 

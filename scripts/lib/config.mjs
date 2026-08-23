@@ -6,7 +6,7 @@ import { isPlainObject } from './validation.mjs';
 export const CONFIG_SCHEMA_VERSION = 1;
 export const DEFAULTS_FILE = resolve(PLUGIN_ROOT, 'config', 'defaults.json');
 export const PROJECT_CONFIG_RELATIVE_PATH = '.fabex/config.json';
-export const CODEX_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+export const CODEX_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 export const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const KEYS = {
   '': new Set(['schemaVersion', 'models', 'collaboration', 'display']),

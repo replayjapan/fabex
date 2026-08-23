@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.4.0 - 2026-08-23
+
+### Why we made this change
+
+The synchronous MCP transport shipped in 1.3.0 lasted one day. Dogfooding confirmed two transport defects rather than a theoretical preference: Claude Code backgrounds a long MCP call at roughly 120 seconds, and the PostToolUse payload can omit the `structuredContent` the recorder required even when a fast Codex turn succeeded. Together they produced five orphaned threads. The same synchronous call also created a black-hole experience in which genuine progress was unavailable for minutes. Keeping MCP would have meant building more recovery around a boundary that could not reliably record success.
+
+The official TypeScript Codex SDK exposes the primitives Fabex actually needs: `runStreamed()`, persisted thread IDs, `resumeThread()`, per-turn sandbox settings, and abort signals. Replacing MCP also restores mechanical read-only discussion/ask turns without splitting the continuous thread.
+
+### What it gave us
+
+- One exact canonical SDK thread for every joint-mode owner message, cold-resumed across controller and Claude restarts.
+- Immediate operation IDs, durable FIFO queuing, genuine `working`/`command`/`tests`/terminal lifecycle status, and cancellation without intentionally discarding continuity.
+- Per-turn `workspace-write` implementation and `read-only` discussion/ask sandboxes on the same thread.
+- A structured recovery checkpoint whose complete seed has a hard 48 KiB limit, replacing the raw owner-goal list that could exceed the 256 KiB prompt boundary.
+- No credential or billing expansion: Fabex passes no API key and relies on the existing Codex CLI ChatGPT subscription sign-in.
+
+### Tradeoffs we accepted
+
+- The controller is a small detached local Node job runner with durable state. That adds a process and queue lifecycle that must be dogfooded for orphaned processes and RAM accumulation.
+- SDK exec-source threads are expected to stay out of Codex Desktop's default Recents, but that remains an observed product behavior and a hard Beta release criterion rather than a platform guarantee.
+- v1 serializes whole owner turns and does not steer an active turn. A queued correction waits for the current operation to complete or be cancelled.
+- A confirmed missing SDK session requires explicit recovery before a checkpoint-seeded replacement. Ambiguous failures never create a replacement automatically.
+- The plugin now has an installed Node dependency. The SDK is pinned by `package.json` and `pnpm-lock.yaml`; `node_modules` is installed locally and is not committed or bundled.
+
+### Changes
+
+- Replaced `.mcp.json`, the MCP adapter, synchronous result hooks, begin-authorized tools, and MCP recovery paths with `scripts/controller.mjs` and the official `@openai/codex-sdk` 0.149.0.
+- Added a durable serialized operation queue. `submit` returns a UUID immediately; `status`, `result`, and `cancel` are exact guarded controller entry points.
+- Consumes SDK streaming lifecycle events without exposing reasoning or command output. First-event `thread.started` IDs are verified on every turn; continuations must match the persisted canonical ID exactly.
+- Reconstructs the same thread with `resumeThread(exactId, options)` on every execution and reapplies `developer_instructions`, `compact_prompt`, model settings, working directory, approval policy, and per-turn sandbox.
+- Added AbortSignal cancellation for active turns and direct cancellation for queued turns. Terminal operations erase their retained raw owner message.
+- Added schema v5 with controller ownership, queue lifecycle, SDK transport metadata, and the structured checkpoint. Migration from 1.3.0 schema v4 preserves its exact canonical thread ID and converts its bounded checkpoint; older companion-era IDs remain retired.
+- Detects the SDK's observed `Session not found for thread_id: <id>` text. Only an explicit exact-condition recovery action clears the missing canonical ID for checkpoint-seeded replacement.
+- Enforces the full 49,152-byte recovery-seed limit, including title and framing—not merely per-field limits.
+- Removed MCP gating while preserving exact controller gating, Claude-only denial, Claude main-session Write/Edit/NotebookEdit denial, executor exceptions, and the plugin-scoped operational-agent GitHub push guard.
+- Added Beta markers to README and plugin/marketplace descriptions; live installation, Desktop visibility, process accumulation, and RAM dogfood remain pending.
+- Updated all mode, continuity, restart, progress, installation, dependency, privacy, retention, recovery, and activation documentation for the SDK transport.
+
 ## 1.3.0 - 2026-08-22
 
 ### Why we made this change

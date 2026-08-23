@@ -1,7 +1,7 @@
 {
   "name": "fabex",
-  "version": "1.3.0",
-  "description": "Built for Fable: Claude and Codex collaborate through one continuous MCP thread within documented platform and behavioral limits.",
+  "version": "1.4.0",
+  "description": "Beta — Built for Fable: Claude and Codex collaborate as equal partners through one continuous, resumable Codex SDK thread.",
   "author": {
     "name": "rePlay, LLC"
   },
