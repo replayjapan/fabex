@@ -30,15 +30,26 @@ function simpleTokens(command) {
     const char = command[index];
     if (quote) {
       if (char === quote) { quote = null; started = true; }
-      else {
-        if (quote === '"' && ['$', '`', '\\'].includes(char)) return null;
+      else if (quote === '"' && char === '\\') {
+        const next = command[index + 1];
+        if (next === undefined) return null;
+        if (/\r|\n/.test(next)) { index += 1; continue; }
+        // These are the only characters for which a backslash has quoting
+        // meaning inside double quotes. They remain literal argv content.
+        if (['"', '\\', '$', '`'].includes(next)) current += next;
+        else current += `\\${next}`;
+        started = true;
+        index += 1;
+      } else {
+        if (quote === '"' && ['$', '`'].includes(char)) return null;
         current += char;
         started = true;
       }
     } else if (char === '"' || char === "'") { quote = char; started = true; }
     else if (char === '\\') {
       const next = command[index + 1];
-      if (next === undefined || /[\r\n]/.test(next)) return null;
+      if (next === undefined) return null;
+      if (/[\r\n]/.test(next)) { index += 1; continue; }
       current += next;
       started = true;
       index += 1;
@@ -307,7 +318,15 @@ function safeCommandSegments(command) {
       continue;
     }
     if (char === '\\') {
-      if (command[index + 1] === undefined || /[\r\n]/.test(command[index + 1])) return null;
+      const next = command[index + 1];
+      if (next === undefined) return null;
+      if (/[\r\n]/.test(next)) {
+        // A shell line continuation is whitespace within one logical command,
+        // not a command boundary. Raw newlines remain denied below.
+        current += ' ';
+        index += 1;
+        continue;
+      }
       current += char + command[index + 1];
       index += 1;
       continue;

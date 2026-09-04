@@ -18,21 +18,26 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfile, and marketplace metadata agree on 1.5.1 Beta', async () => {
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.5.2 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
-  const lock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
+  const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
+  const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.5.1');
-  assert.equal(pkg.version, '1.5.1');
+  assert.equal(plugin.version, '1.5.2');
+  assert.equal(pkg.version, '1.5.2');
+  assert.equal(npmLock.version, '1.5.2');
+  assert.equal(npmLock.packages[''].version, '1.5.2');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);
   assert.equal(marketplace.plugins[0].source, './');
   assert.equal(marketplace.plugins[0].defaultEnabled, true);
   assert.equal(pkg.dependencies['@openai/codex-sdk'], '0.149.0');
-  assert.match(lock, /'@openai\/codex-sdk':\s*\n\s*specifier: 0\.149\.0\s*\n\s*version: 0\.149\.0/);
+  assert.match(pnpmLock, /'@openai\/codex-sdk':\s*\n\s*specifier: 0\.149\.0\s*\n\s*version: 0\.149\.0/);
+  assert.equal(npmLock.packages['node_modules/@openai/codex-sdk'].version, '0.149.0');
+  assert.equal(npmLock.packages['node_modules/@openai/codex'].version, '0.149.0');
 });
 
 test('hook registration is exec-form with no MCP result recorder', async () => {
@@ -62,15 +67,15 @@ test('only requested public skills are packaged and SDK protocol is authoritativ
 
 test('README documents Beta SDK transport, install, queue, progress, continuity, privacy, and dogfood criteria', async () => {
   const readme = await readFile(resolve(root, 'README.md'), 'utf8');
-  for (const pattern of [/^# Fabex — Beta/m, /Mechanically enforced and platform-limited behavior/, /@openai\/codex-sdk/, /pnpm install --frozen-lockfile/, /runStreamed\(\)/, /resumeThread\(exactId/, /thread\.started/, /durable FIFO/, /Cancellation/, /hard 48 KiB/, /ChatGPT\/Codex subscription/, /no API-key/, /Codex Desktop thread count/, /process accumulation and RAM/, /activation is unknown/i]) assert.match(readme, pattern);
+  for (const pattern of [/^# Fabex — Beta/m, /Mechanically enforced and platform-limited behavior/, /@openai\/codex-sdk/, /npm ci --ignore-scripts/, /plugin marketplace add replayjapan\/fabex/, /runStreamed\(\)/, /resumeThread\(exactId/, /thread\.started/, /durable FIFO/, /Cancellation/, /hard 48 KiB/, /ChatGPT\/Codex subscription/, /no API-key/, /Codex Desktop thread count/, /process accumulation and RAM/, /activation is unknown/i]) assert.match(readme, pattern);
   assert.match(readme, /discussion.*`read-only`/i);
   assert.match(readme, /implementation.*`workspace-write`/i);
 });
 
-test('1.5.1 changelog documents the focused reliability fixes', async () => {
+test('1.5.2 changelog documents marketplace packaging and guarded delivery fixes', async () => {
   const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
-  const release = changelog.split('## 1.5.0')[0];
-  for (const pattern of [/## 1\.5\.1 - 2026-09-04/, /allowedCommandPatterns/, /lock-contention/, /externalWriteRoots/, /claudeReplyStatus/, /captured and live/, /status --all/, /schema 7/]) assert.match(release, pattern);
+  const release = changelog.split('## 1.5.1')[0];
+  for (const pattern of [/## 1\.5\.2 - 2026-09-04/, /package-lock\.json/, /replayjapan\/fabex/, /Anthropic Console/, /multiline commit messages/, /No state schema/]) assert.match(release, pattern);
 });
 
 test('current implementation and consumer docs contain no obsolete MCP invocation paths', async () => {

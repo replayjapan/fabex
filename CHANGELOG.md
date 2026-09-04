@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.2 - 2026-09-04
+
+Fabex 1.5.2 is a focused pre-submission packaging and delivery-guard release. It keeps the 1.5.1 state schema, canonical thread, FIFO controller, Codex-only project writing, operational-only Git delivery, and Beta dogfood gates unchanged.
+
+- Added `package-lock.json` alongside the contributor `pnpm-lock.yaml`, with both locking `@openai/codex-sdk` and its CLI dependency to 0.149.0. Claude Code can now install cached marketplace dependencies automatically with `npm ci --ignore-scripts`; marketplace users no longer need a manual pnpm step.
+- Replaced the stale unassigned-marketplace wording with the public `replayjapan/fabex` install flow, retained local-checkout instructions, and documented validation plus the Anthropic Console submission form.
+- Hardened shell argv parsing for the verified `fabex:fabex-operational` delivery executor so escaped quoted content, parenthesized commit bodies, and quoted multiline commit messages remain direct protected Git commands. The same commands stay denied to the main session and every unverified executor.
+- Made safe command segmentation treat backslash-newline as whitespace inside one logical delivery command, matching argv tokenization. Command substitution, heredoc-built commit messages, and trailing raw shell commands remain denied.
+- Added named regressions for automatic-install lock parity, marketplace/submission documentation, and both reported Git commit-message forms. No state schema or persisted shape changed.
+
 ## 1.5.1 - 2026-09-04
 
 Fabex 1.5.1 is a focused reliability and least-privilege release driven by live long-project dogfooding. It preserves canonical Codex continuity, FIFO execution, Codex-only project writing, operational-only Git delivery, fail-closed guards, and verbatim owner-visible context sharing.

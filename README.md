@@ -1,12 +1,12 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.5.1 is being dogfooded. Do not treat it as marketplace-ready until the live continuity, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.5.2 is being dogfooded. Do not treat it as marketplace-ready until the live continuity, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every owner message in a joint or Codex-participant mode is queued onto one continuous Codex thread; Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Owner-visible Claude replies are shared verbatim with Codex on the next turn; private reasoning and tool logs are never relayed.
 
-## What 1.5.1 changes
+## What 1.5.2 changes
 
-Fabex uses the official TypeScript `@openai/codex-sdk`. Release 1.5.1 adds exact argv-based command patterns, named verification scripts, consistent safe pipelines, bounded lock waiting, scoped external scratch output, explicit both-participant envelopes, factual activation diagnosis, readable status views, and timestamped live-versus-captured repository fingerprints.
+Fabex uses the official TypeScript `@openai/codex-sdk`. Release 1.5.2 prepares the Beta for public installation: Claude Code can install the pinned SDK dependency automatically from `package-lock.json`, the README names the live GitHub marketplace and Anthropic submission path, and the verified operational executor accepts safe quoted multiline and parenthesized Git commit messages without relaxing main-session delivery denial.
 
 There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hook, structured-content recorder, and begin-authorized tool protocol were removed.
 
@@ -107,22 +107,35 @@ Array replacement and progress snapshots read JSON from guarded quoted heredocs.
 
 - Claude Code with local plugin support
 - Node.js 20 or newer
-- pnpm 10 or newer, or a compatible npm client
 - Codex CLI signed in through the owner's existing ChatGPT/Codex subscription
 
-Fabex declares the official SDK in the plugin's `package.json` and pins it in `pnpm-lock.yaml`. The SDK brings its matching `@openai/codex` CLI package. Fabex does not bundle or commit `node_modules`; install the pinned dependency into the plugin checkout before installing or reloading the plugin:
+Fabex declares the official SDK in `package.json` and pins it to the same version in `package-lock.json` and `pnpm-lock.yaml`. The SDK brings its matching `@openai/codex` CLI package. Fabex does not bundle or commit `node_modules`.
 
-```sh
-pnpm install --frozen-lockfile
-```
+Marketplace installation needs no manual dependency command: when Claude Code caches the plugin, it recognizes `package-lock.json` and runs `npm ci --ignore-scripts` automatically. The pnpm lock remains for contributor workflows. See the [Claude Code plugins reference](https://code.claude.com/docs/en/plugins-reference.md#nodejs-package-dependencies).
 
-For npm-based environments, `npm install` from the plugin root installs the same declared dependency, though the committed pnpm lockfile is the release authority.
+Contributors working directly in the checkout use `pnpm install --frozen-lockfile` (pnpm 10 or newer) or `npm ci --ignore-scripts`.
 
 Fabex has no API-key, base-URL, credential entry, or separate billing surface. It neither requests nor stores credentials and passes no `apiKey` to the SDK. It relies only on the existing Codex CLI ChatGPT subscription sign-in. If a future SDK or CLI requires API-key billing for this path, stop: that is a release blocker, not a fallback.
 
 ## Install
 
-The public marketplace location is not assigned. For a development checkout:
+Install the public GitHub marketplace from Claude Code:
+
+```text
+/plugin marketplace add replayjapan/fabex
+/plugin install fabex@fabex
+```
+
+The equivalent CLI commands are:
+
+```sh
+claude plugin marketplace add replayjapan/fabex
+claude plugin install fabex@fabex
+```
+
+Claude Code installs the pinned Node dependency automatically. After installation, restart the session and run `/fabex:diagnose`.
+
+For a development checkout:
 
 ```sh
 git clone <FABEX-REPOSITORY-URL>
@@ -133,6 +146,16 @@ claude plugin install fabex@fabex
 ```
 
 After an update, reload the plugin, run `/fabex:diagnose`, then perform the live dogfood criteria below. Do not point normal use at a mutable plugin cache.
+
+### Submitting to Anthropic's marketplace
+
+Before submission, verify the exact public candidate from its repository root:
+
+```sh
+claude plugin validate .
+```
+
+Then submit its public repository through the [Anthropic Console plugin form](https://platform.claude.com/plugins/submit). Fabex remains Beta until the dogfood criteria below pass, so an official listing should wait for that evidence. See Anthropic's [plugin creation](https://code.claude.com/docs/en/plugins.md) and [plugin discovery](https://code.claude.com/docs/en/discover-plugins.md) documentation.
 
 ### Upgrading an installed checkout
 
@@ -199,7 +222,7 @@ If Desktop thread flooding, orphaned sessions/processes, or material RAM growth 
 
 ## Release activation status
 
-Version 1.5.1 is implemented in this repository. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. It says activation is unknown when runtime evidence is insufficient and never substitutes static release prose for evidence. Fabex remains Beta and is not yet marketplace-ready.
+Version 1.5.2 is implemented in this repository. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. It says activation is unknown when runtime evidence is insufficient and never substitutes static release prose for evidence. Fabex remains Beta and is not yet marketplace-ready.
 
 ## Platform support
 

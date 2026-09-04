@@ -157,7 +157,7 @@ test('controls resolve subdirectories to owning workstream and diagnose pinned S
   assert.equal(checkpoint.code, 0, checkpoint.stderr);
   assert.deepEqual((await readState(project, env)).state.partner.thread.checkpoint.acceptedDecisions, ['from child']);
   const diagnosed = JSON.parse((await controlRun(project, env, 'diagnose')).stdout);
-  assert.equal(diagnosed.plugin.version, '1.5.1');
+  assert.equal(diagnosed.plugin.version, '1.5.2');
   assert.equal(diagnosed.codex.transport, 'official TypeScript SDK');
   assert.equal(diagnosed.codex.installed, true);
   assert.equal(diagnosed.codex.dependency, '0.149.0');
