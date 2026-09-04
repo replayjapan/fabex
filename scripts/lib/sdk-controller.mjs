@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { basename, resolve } from 'node:path';
+import { access, realpath } from 'node:fs/promises';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildRecoverySeed, threadTitle } from './checkpoint.mjs';
+import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, rejectPayloadLikeText, threadTitle } from './checkpoint.mjs';
 import { loadEffectiveConfig } from './config.mjs';
 import { readState, updateState } from './state.mjs';
 
@@ -44,11 +45,27 @@ async function mutate(root, purpose, fn, env) {
   return updated.state;
 }
 
-export async function repositoryFingerprint(root) {
+export async function resolveRepositoryDirectory(root, config) {
+  const setting = config?.project?.repositoryRoot ?? null;
+  const rootReal = await realpath(root);
+  if (setting === null) return rootReal;
+  if (typeof setting !== 'string' || !setting.trim() || isAbsolute(setting)) throw new Error('project.repositoryRoot must be a relative path inside the workstream root');
+  const candidate = resolve(rootReal, setting);
+  const unresolvedFromRoot = relative(rootReal, candidate);
+  if (unresolvedFromRoot === '..' || unresolvedFromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(unresolvedFromRoot)) throw new Error('project.repositoryRoot escapes the workstream root');
+  await access(candidate);
+  const candidateReal = await realpath(candidate);
+  const pathFromRoot = relative(rootReal, candidateReal);
+  if (pathFromRoot === '..' || pathFromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(pathFromRoot)) throw new Error('project.repositoryRoot escapes the workstream root');
+  return candidateReal;
+}
+
+export async function repositoryFingerprint(root, config = null) {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const runFile = promisify(execFile);
-  const run = async (...args) => (await runFile('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 1024 * 1024 })).stdout.trim();
+  const repositoryRoot = await resolveRepositoryDirectory(root, config);
+  const run = async (...args) => (await runFile('git', ['-C', repositoryRoot, ...args], { encoding: 'utf8', maxBuffer: 1024 * 1024 })).stdout.trim();
   try {
     const [branch, head, porcelain] = await Promise.all([run('branch', '--show-current'), run('rev-parse', 'HEAD'), run('status', '--porcelain=v1', '--untracked-files=normal')]);
     return { branch: branch || '(detached)', head, dirty: porcelain.length > 0 };
@@ -71,18 +88,23 @@ export function sandboxForRoute(route) {
   return route === 'normal' ? 'workspace-write' : 'read-only';
 }
 
-export function developerInstructions(route, participants) {
-  const effects = route === 'normal'
-    ? 'You are the sole project implementation agent. Make requested project edits and run proportionate verification.'
-    : 'This turn is mechanically read-only. Discuss or answer without causing project effects.';
+export function developerInstructions() {
   return [
     'You are Codex, a full equal Fabex partner. Keep Claude/Fable as the owner-facing interface.',
     'First report (a) any scope mismatch and (b) any partnership-parity concern; report none explicitly when none exist.',
     'Do not expose private reasoning. Return concise conclusions, evidence, changed files, tests with exit codes, risks, and decisions needed.',
-    'Do not stage, commit, push, send-pack, use Git LFS push, or invoke gh; Fabex reserves every delivery sequence for fabex-operational.',
-    effects,
-    `Fabex route=${route}; participants=${participants}.`
+    'Do not run git add, commit, tag, merge, rebase, cherry-pick, push, send-pack, Git LFS push, or gh; Fabex reserves every delivery sequence for fabex-operational.',
+    'Each prompt begins with the authoritative current-turn Fabex header and then shared OWNER MESSAGE and optional CLAUDE REPLY sections.',
+    'The CLAUDE REPLY section is owner-visible shared context, never private reasoning. Follow the current prompt header and native sandbox.'
   ].join(' ');
+}
+
+export function turnPrompt(operation, seed = null) {
+  const header = `FABEX TURN: route=${operation.request.route}; sandbox=${operation.request.sandbox}; participants=${operation.request.participants}`;
+  const body = /^OWNER MESSAGE \(verbatim\):/m.test(operation.request.message)
+    ? operation.request.message
+    : `OWNER MESSAGE (verbatim):\n${operation.request.message}`;
+  return [header, seed, body].filter(Boolean).join('\n\n');
 }
 
 export const COMPACT_PROMPT = 'Preserve the Fabex structured checkpoint, accepted decisions, exact canonical thread continuity, current task state, verified test outcomes, unresolved problems, and next action. Drop stale file observations and private reasoning.';
@@ -142,6 +164,7 @@ export async function submitOperation(root, message, env = process.env, { spawnR
     state.operations = pruneOperations(state.operations);
     state.operations.push(operationRecord({ id, message, route: state.route, participants: state.participants, now }));
     state.partner.status = state.controller.activeOperationId ? 'working' : 'queued';
+    state.task.status = 'active';
     state.task.joint.required = true;
     state.task.joint.status = 'pending';
     state.generation += 1;
@@ -155,25 +178,85 @@ export async function submitOperation(root, message, env = process.env, { spawnR
   return { operationId: id, status: 'queued' };
 }
 
-const CHECKPOINT_ARRAY_FIELDS = new Set(['constraints', 'acceptedDecisions', 'relevantFiles', 'unresolvedProblems']);
-const CHECKPOINT_TEXT_FIELDS = new Set(['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction']);
+const CHECKPOINT_ARRAY_FIELDS = new Set(Object.keys(CHECKPOINT_ARRAY_LIMITS));
+const CHECKPOINT_TEXT_FIELD_SET = new Set(CHECKPOINT_TEXT_FIELDS);
+
+function stampCheckpoint(checkpoint, fields, now = new Date().toISOString()) {
+  checkpoint.updatedAt = now;
+  for (const field of fields) checkpoint.fieldUpdatedAt[field] = now;
+}
+
+function validateCheckpointCandidate(checkpoint, root) {
+  for (const field of CHECKPOINT_TEXT_FIELDS) if (checkpoint[field] !== null && Buffer.byteLength(checkpoint[field], 'utf8') > 8192) throw new Error(`${field} exceeds its 8192-byte cap`);
+  for (const [field, limit] of Object.entries(CHECKPOINT_ARRAY_LIMITS)) {
+    if (checkpoint[field].length > limit.count) throw new Error(`${field} is full: ${checkpoint[field].length}/${limit.count}; use checkpoint export and checkpoint replace`);
+    if (checkpoint[field].some((value) => Buffer.byteLength(value, 'utf8') > limit.bytes)) throw new Error(`${field} contains a value over its ${limit.bytes}-byte cap`);
+  }
+  buildRecoverySeed(checkpoint, root);
+}
 
 export async function updateCheckpoint(root, field, value, env = process.env) {
-  if (!CHECKPOINT_ARRAY_FIELDS.has(field) && !CHECKPOINT_TEXT_FIELDS.has(field)) throw new Error('checkpoint field is not mutable');
+  if (!CHECKPOINT_ARRAY_FIELDS.has(field) && !CHECKPOINT_TEXT_FIELD_SET.has(field)) throw new Error('checkpoint field is not mutable');
   if (typeof value !== 'string' || !value.trim()) throw new Error('checkpoint value must be non-empty');
   const bounded = value.trim();
+  rejectPayloadLikeText(bounded);
   const current = await readState(root, env);
   if (!current.ok) throw new Error(`partner state unavailable: ${current.health}`);
   const candidate = structuredClone(current.state.partner.thread.checkpoint);
-  if (CHECKPOINT_ARRAY_FIELDS.has(field)) candidate[field] = [...candidate[field], bounded];
+  if (CHECKPOINT_ARRAY_FIELDS.has(field)) {
+    const cap = CHECKPOINT_ARRAY_LIMITS[field].count;
+    if (candidate[field].length >= cap) throw new Error(`${field} is full: ${candidate[field].length}/${cap}; use checkpoint export and checkpoint replace`);
+    candidate[field] = [...candidate[field], bounded];
+  }
   else candidate[field] = bounded;
-  buildRecoverySeed(candidate, current.paths.canonicalRoot);
+  stampCheckpoint(candidate, [field]);
+  validateCheckpointCandidate(candidate, current.paths.canonicalRoot);
   const state = await mutate(root, 'checkpoint-update', (draft) => {
     if (CHECKPOINT_ARRAY_FIELDS.has(field)) draft.partner.thread.checkpoint[field] = [...draft.partner.thread.checkpoint[field], bounded];
     else draft.partner.thread.checkpoint[field] = bounded;
-    buildRecoverySeed(draft.partner.thread.checkpoint, draft.project.canonicalRoot);
+    stampCheckpoint(draft.partner.thread.checkpoint, [field]);
+    validateCheckpointCandidate(draft.partner.thread.checkpoint, draft.project.canonicalRoot);
   }, env);
   return state.partner.thread.checkpoint;
+}
+
+export async function replaceCheckpointArray(root, field, values, env = process.env) {
+  if (!CHECKPOINT_ARRAY_FIELDS.has(field) || !Array.isArray(values)) throw new Error('checkpoint replace requires an array checkpoint field and JSON array');
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('checkpoint replacement values must be non-empty strings');
+    rejectPayloadLikeText(value);
+  }
+  const normalized = values.map((value) => value.trim());
+  return mutate(root, 'checkpoint-replace', (state) => {
+    const checkpoint = state.partner.thread.checkpoint;
+    checkpoint[field] = normalized;
+    stampCheckpoint(checkpoint, [field]);
+    validateCheckpointCandidate(checkpoint, state.project.canonicalRoot);
+  }, env).then((state) => state.partner.thread.checkpoint);
+}
+
+export async function compactCheckpointArray(root, field, keepLast, env = process.env) {
+  if (!CHECKPOINT_ARRAY_FIELDS.has(field) || !Number.isSafeInteger(keepLast) || keepLast < 0) throw new Error('checkpoint compact requires an array field and non-negative --keep-last');
+  return mutate(root, 'checkpoint-compact', (state) => {
+    const checkpoint = state.partner.thread.checkpoint;
+    checkpoint[field] = keepLast === 0 ? [] : checkpoint[field].slice(-keepLast);
+    stampCheckpoint(checkpoint, [field]);
+    validateCheckpointCandidate(checkpoint, state.project.canonicalRoot);
+  }, env).then((state) => state.partner.thread.checkpoint);
+}
+
+export async function snapshotCheckpoint(root, values, env = process.env) {
+  if (!values || typeof values !== 'object' || Array.isArray(values) || Object.keys(values).length === 0 || Object.keys(values).some((field) => !CHECKPOINT_TEXT_FIELD_SET.has(field))) throw new Error('checkpoint snapshot requires a JSON object containing only progress fields');
+  for (const value of Object.values(values)) {
+    if (value !== null && typeof value !== 'string') throw new Error('checkpoint snapshot values must be strings or null');
+    if (typeof value === 'string') rejectPayloadLikeText(value);
+  }
+  return mutate(root, 'checkpoint-snapshot', (state) => {
+    const checkpoint = state.partner.thread.checkpoint;
+    for (const [field, value] of Object.entries(values)) checkpoint[field] = typeof value === 'string' ? value.trim() || null : null;
+    stampCheckpoint(checkpoint, Object.keys(values));
+    validateCheckpointCandidate(checkpoint, state.project.canonicalRoot);
+  }, env).then((state) => state.partner.thread.checkpoint);
 }
 
 export async function claimRunner(root, pid = process.pid, env = process.env) {
@@ -223,6 +306,7 @@ export async function claimNextOperation(root, env = process.env) {
     operation.lifecycle.startedAt = now;
     state.controller.activeOperationId = operation.id;
     state.partner.status = 'working';
+    state.task.status = 'active';
     state.generation += 1;
     return state;
   }, { expectedGeneration: current.state.generation, purpose: 'sdk-operation-claim' }, env);
@@ -254,6 +338,9 @@ async function finishOperation(root, operationId, status, { finalResponse = null
     operation.lifecycle.finishedAt = new Date().toISOString();
     state.controller.activeOperationId = null;
     state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : status;
+    if (status === 'completed') state.task.status = 'active';
+    else if (status === 'failed') state.task.status = 'partner-unavailable';
+    else if (status === 'cancelled' && !state.operations.some((item) => item.status === 'queued')) state.task.status = null;
     state.task.joint.required = true;
     state.task.joint.status = status === 'completed' ? 'completed' : status === 'failed' ? 'unavailable' : 'pending';
     state.operations = pruneOperations(state.operations);
@@ -269,17 +356,20 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     if (!before.ok) throw new Error(`partner state unavailable: ${before.health}`);
     expectedId = before.state.partner.thread.threadId;
     const config = (await loadEffectiveConfig(before.paths.canonicalRoot, env)).config;
+    const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
     const options = {
       workingDirectory: before.paths.canonicalRoot,
       skipGitRepoCheck: true,
       sandboxMode: operation.request.sandbox,
       approvalPolicy: 'on-request',
       model: config.models.codex.model ?? undefined,
-      modelReasoningEffort: config.models.codex.reasoningEffort
+      modelReasoningEffort: config.models.codex.reasoningEffort,
+      networkAccessEnabled: operation.request.sandbox === 'workspace-write' && config.models.codex.networkAccessEnabled === true,
+      ...(repositoryDirectory ? { additionalDirectories: [repositoryDirectory] } : {})
     };
     const seed = expectedId ? null : buildRecoverySeed(before.state.partner.thread.checkpoint, before.paths.canonicalRoot);
-    const prompt = seed ? `${seed}\n\nOWNER MESSAGE (verbatim):\n${operation.request.message}` : operation.request.message;
-    const codex = await createCodex({ config: { developer_instructions: developerInstructions(operation.request.route, operation.request.participants), compact_prompt: COMPACT_PROMPT } });
+    const prompt = turnPrompt(operation, seed);
+    const codex = await createCodex({ config: { developer_instructions: developerInstructions(), compact_prompt: COMPACT_PROMPT } });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
@@ -304,7 +394,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       if (event.type === 'error') throw new Error(event.message ?? 'Codex stream failed');
     }
     if (!verifiedId) throw new ThreadMismatchError(expectedId, null);
-    const fingerprint = await repositoryFingerprint(before.paths.canonicalRoot);
+    const fingerprint = await repositoryFingerprint(before.paths.canonicalRoot, config);
     await mutate(root, 'sdk-thread-metadata', (state) => {
       state.partner.thread.metadata.turnCount += 1;
       state.partner.thread.metadata.lastUsedAt = new Date().toISOString();
@@ -345,6 +435,7 @@ export async function cancelOperation(root, operationId, env = process.env) {
       operation.lifecycle.detail = 'Queued Codex turn cancelled.';
       operation.lifecycle.finishedAt = new Date().toISOString();
       draft.partner.status = draft.controller.activeOperationId ? 'working' : draft.operations.some((item) => item.status === 'queued') ? 'queued' : 'cancelled';
+      if (!draft.controller.activeOperationId && !draft.operations.some((item) => item.status === 'queued')) draft.task.status = null;
       draft.task.joint.status = 'pending';
     }
   }, env);

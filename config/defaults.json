@@ -3,7 +3,8 @@
   "models": {
     "codex": {
       "model": null,
-      "reasoningEffort": "high"
+      "reasoningEffort": "high",
+      "networkAccessEnabled": false
     },
     "operational": "sonnet"
   },
@@ -12,5 +13,12 @@
   },
   "display": {
     "replyModeBadge": "always"
+  },
+  "project": {
+    "repositoryRoot": null
+  },
+  "guard": {
+    "allowedCommands": [],
+    "readOnlyMcpTools": ["mcp__context7__*", "mcp__ide__getDiagnostics"]
   }
 }

@@ -1,7 +1,7 @@
-import { buildRecoverySeed } from './checkpoint.mjs';
+import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_MUTABLE_FIELDS } from './checkpoint.mjs';
 import { isValidMode, PARTICIPANTS } from './mode.mjs';
 
-export const STATE_SCHEMA_VERSION = 5;
+export const STATE_SCHEMA_VERSION = 6;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -33,6 +33,7 @@ const nullableString = (value) => value === null || typeof value === 'string';
 const boundedString = (value, bytes) => typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= bytes;
 const boundedNullableString = (value, bytes) => value === null || boundedString(value, bytes);
 const boundedStrings = (value, count, bytes) => Array.isArray(value) && value.length <= count && value.every((item) => boundedString(item, bytes));
+const nullableIsoString = (value) => value === null || (boundedString(value, 64) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value);
 
 function validFingerprint(value) {
   return hasExactKeys(value, ['branch', 'head', 'dirty'])
@@ -40,16 +41,15 @@ function validFingerprint(value) {
 }
 
 function validateCheckpoint(checkpoint, projectRoot, errors) {
-  const keys = ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint'];
+  const keys = ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'updatedAt', 'fieldUpdatedAt'];
   if (!hasExactKeys(checkpoint, keys)) { errors.push('partner checkpoint shape is invalid'); return; }
   for (const key of ['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction']) {
     if (!boundedNullableString(checkpoint[key], 8192)) errors.push(`checkpoint ${key} is invalid`);
   }
-  if (!boundedStrings(checkpoint.constraints, 24, 4096)) errors.push('checkpoint constraints are invalid');
-  if (!boundedStrings(checkpoint.acceptedDecisions, 24, 4096)) errors.push('checkpoint acceptedDecisions are invalid');
-  if (!boundedStrings(checkpoint.relevantFiles, 64, 1024)) errors.push('checkpoint relevantFiles are invalid');
-  if (!boundedStrings(checkpoint.unresolvedProblems, 24, 4096)) errors.push('checkpoint unresolvedProblems are invalid');
+  for (const [field, limit] of Object.entries(CHECKPOINT_ARRAY_LIMITS)) if (!boundedStrings(checkpoint[field], limit.count, limit.bytes)) errors.push(`checkpoint ${field} is invalid`);
   if (!validFingerprint(checkpoint.repoFingerprint)) errors.push('checkpoint repoFingerprint is invalid');
+  if (!nullableIsoString(checkpoint.updatedAt)) errors.push('checkpoint updatedAt is invalid');
+  if (!hasExactKeys(checkpoint.fieldUpdatedAt, CHECKPOINT_MUTABLE_FIELDS) || CHECKPOINT_MUTABLE_FIELDS.some((field) => !nullableIsoString(checkpoint.fieldUpdatedAt?.[field]))) errors.push('checkpoint fieldUpdatedAt is invalid');
   try { buildRecoverySeed(checkpoint, projectRoot); } catch (error) { errors.push(error.message); }
 }
 
@@ -71,7 +71,7 @@ function validateOperation(operation, errors) {
 
 export function validateState(state, identity) {
   const errors = [];
-  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations'])) errors.push('state has unexpected or missing top-level fields');
+  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException'])) errors.push('state has unexpected or missing top-level fields');
   if (state?.schemaVersion !== STATE_SCHEMA_VERSION) errors.push('state schemaVersion is incompatible');
   if (!Number.isSafeInteger(state?.generation) || state.generation < 0) errors.push('generation must be a non-negative integer');
   if (!hasExactKeys(state?.project, ['id', 'canonicalRoot'])) errors.push('project shape is invalid');
@@ -82,6 +82,7 @@ export function validateState(state, identity) {
   if (state?.route !== 'ask-once' && state?.returnTo !== null) errors.push('returnTo is only valid in ask-once mode');
   if (!hasExactKeys(state?.task, ['id', 'status', 'label', 'joint']) || !nullableString(state?.task?.id) || !TASK_STATUSES.has(state?.task?.status) || !nullableString(state?.task?.label)) errors.push('task fields are invalid');
   if (!hasExactKeys(state?.task?.joint, ['required', 'status', 'decisionId']) || typeof state?.task?.joint?.required !== 'boolean' || !JOINT_STATUSES.has(state?.task?.joint?.status) || !nullableString(state?.task?.joint?.decisionId)) errors.push('joint task fields are invalid');
+  if (state?.executorException !== null && (!hasExactKeys(state.executorException, ['executor', 'scope', 'reason', 'authorizedAt']) || !boundedString(state.executorException.executor, 128) || !boundedString(state.executorException.scope, 256) || !boundedString(state.executorException.reason, 4096) || !nullableIsoString(state.executorException.authorizedAt))) errors.push('executorException is invalid');
   if (!hasExactKeys(state?.partner, ['transport', 'status', 'thread', 'envelope']) || state?.partner?.transport !== 'codex-sdk' || !PARTNER_STATUSES.has(state?.partner?.status)) errors.push('partner fields are invalid');
   if (!hasExactKeys(state?.partner?.thread, ['threadId', 'checkpoint', 'metadata']) || !boundedNullableString(state?.partner?.thread?.threadId, 256)) errors.push('canonical partner thread shape is invalid');
   validateCheckpoint(state?.partner?.thread?.checkpoint, state?.project?.canonicalRoot ?? 'project', errors);

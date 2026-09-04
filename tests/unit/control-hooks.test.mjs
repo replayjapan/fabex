@@ -70,7 +70,7 @@ test('session contexts describe SDK queue continuity and mechanical read-only di
   const config = { collaboration: { jointByDefault: true }, display: { replyModeBadge: 'always' } };
   const work = renderSessionContext('normal', 'both', config);
   assert.match(work, /canonical Codex SDK thread/);
-  assert.match(work, /Write\/Edit\/NotebookEdit is denied/);
+  assert.match(work, /Claude project writes are denied/);
   assert.match(work, /thread\.started/);
   assert.ok(Buffer.byteLength(work, 'utf8') <= 900);
   const discussion = renderSessionContext('discussion', 'both', config);
@@ -91,6 +91,9 @@ test('structured checkpoint controls update bounded fields and status omits thei
   assert.equal(status.code, 0, status.stderr);
   assert.doesNotMatch(status.stdout, /ship one SDK thread|SDK first|unit tests passing/);
   assert.match(status.stdout, /recoverySeedLimitBytes/);
+  const statusJson = JSON.parse(status.stdout);
+  assert.match(statusJson.partner.checkpoint.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(Array.isArray(statusJson.partner.checkpoint.warnings), true);
 });
 
 test('controller status, result, and queued cancellation use isolated state', async (t) => {
@@ -154,7 +157,7 @@ test('controls resolve subdirectories to owning workstream and diagnose pinned S
   assert.equal(checkpoint.code, 0, checkpoint.stderr);
   assert.deepEqual((await readState(project, env)).state.partner.thread.checkpoint.acceptedDecisions, ['from child']);
   const diagnosed = JSON.parse((await controlRun(project, env, 'diagnose')).stdout);
-  assert.equal(diagnosed.plugin.version, '1.4.0');
+  assert.equal(diagnosed.plugin.version, '1.5.0');
   assert.equal(diagnosed.codex.transport, 'official TypeScript SDK');
   assert.equal(diagnosed.codex.installed, true);
   assert.equal(diagnosed.codex.dependency, '0.149.0');

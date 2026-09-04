@@ -2,6 +2,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEffectiveConfig } from './lib/config.mjs';
+import { checkpointWarnings } from './lib/checkpoint.mjs';
 import { formatMode, replyBadgeInstruction } from './lib/mode.mjs';
 import { rootFromHookInput } from './lib/paths.mjs';
 import { initializeState, readState, updateState } from './lib/state.mjs';
@@ -17,15 +18,15 @@ export function renderSessionContext(route, participants, config) {
   const badge = replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always');
   if (route === 'normal' && participants === 'both') {
     const joint = config.collaboration.jointByDefault ? 'on' : 'off';
-    return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Both means every owner message is queued on one canonical Codex SDK thread across mode changes and restarts. Questions authorize answers only. Codex alone edits files; Claude main-session Write/Edit/NotebookEdit is denied unless an owner-named executor exception is recorded. Submit through the Fabex controller, report genuine lifecycle status, verify the exact thread.started ID, and relay scope/parity flags unedited. Delegate image/screenshot, GitHub/gh, and log chores to fabex-operational with the configured model explicitly.`;
+    return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Both means every owner message is queued on one canonical Codex SDK thread across mode changes and restarts. Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Questions authorize answers only. Codex alone edits files; Claude project writes are denied unless a structured owner-named executor exception is active. Submit through the Fabex controller, report genuine lifecycle status, verify the exact thread.started ID, and relay scope/parity flags unedited. Delegate the Git delivery lane to fabex-operational.`;
   }
   if (route === 'normal' && participants === 'claude') {
-    return `Fabex mode: ${label}. ${badge} Questions authorize answers only. Do not consult Codex or place raw Claude-only questions/answers in its checkpoint. For any implementation invoke /fabex:jointly first; it switches to both. Claude main-session Write/Edit/NotebookEdit is denied unless an owner-named executor exception is recorded. Delegate image/screenshot, GitHub/gh, and log chores to fabex-operational with the configured model explicitly.`;
+    return `Fabex mode: ${label}. ${badge} Questions authorize answers only. Do not consult Codex or place raw Claude-only questions/answers in its checkpoint. For implementation invoke /fabex:jointly first; it switches to both. Claude project writes are allowlist-controlled unless a structured owner-named executor exception is active. Delegate the full Git delivery lane to fabex-operational.`;
   }
-  if (route === 'discussion' && participants === 'both') return `Fabex mode: ${label}. ${badge} Persistent joint discussion. Queue every owner message on the canonical Codex SDK thread with a per-turn read-only sandbox, then converge. /work exits.`;
+  if (route === 'discussion' && participants === 'both') return `Fabex mode: ${label}. ${badge} Persistent joint discussion. Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Queue every owner message on the canonical Codex SDK thread with a per-turn read-only sandbox, then converge. /work exits.`;
   if (route === 'discussion' && participants === 'claude') return `Fabex mode: ${label}. ${badge} Persistent Claude-only read-only discussion. Do not submit a Codex SDK turn or checkpoint raw Claude-only questions or answers. /workClaude exits.`;
   if (route === 'discussion' && participants === 'codex') return `Fabex mode: ${label}. ${badge} Persistent read-only Codex relay on the canonical SDK thread. Relay with Codex attribution and keep Claude substantively silent. /work exits without clearing continuity.`;
-  if (route === 'ask-once' && participants === 'both') return `Fabex mode: ${label}. ${badge} One-shot joint read-only answer on the canonical SDK thread. The next prompt restores the prior mode.`;
+  if (route === 'ask-once' && participants === 'both') return `Fabex mode: ${label}. ${badge} One-shot joint read-only answer on the canonical SDK thread. Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. The next prompt restores the prior mode.`;
   if (route === 'ask-once' && participants === 'claude') return `Fabex mode: ${label}. ${badge} One-shot Claude-only read-only answer. Do not submit a Codex SDK turn or checkpoint raw Q&A. The next prompt restores the prior mode.`;
   if (route === 'ask-once' && participants === 'codex') return `Fabex mode: ${label}. ${badge} One-shot read-only Codex relay on the canonical SDK thread. The next prompt restores the prior mode.`;
   return `Fabex mode: ${label}. ${badge} Cause no project effects; use /fabex:recover.`;
@@ -54,6 +55,10 @@ export async function main() {
       ? renderSessionContext(result.state.route, result.state.participants, effective.config)
       : `Fabex state: ${result.health}. Route: recovery-read-only; use /fabex:recover.`;
     if (result.ok && result.state.partner.thread.threadId) context += ' The next Codex turn must resume this exact persisted SDK thread ID and verify the thread.started event before accepting output.';
+    if (result.ok) {
+      const warnings = checkpointWarnings(result.state.partner.thread.checkpoint, result.state.partner.thread.metadata, { repositoryRootConfigured: effective.config.project.repositoryRoot !== null });
+      if (warnings.length) context += ` Checkpoint freshness warnings: ${warnings.length}; run Fabex status.`;
+    }
     process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: context } })}\n`);
   } catch {
     process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: 'Fabex state initialization failed. Remain recovery-read-only; use /fabex:diagnose or /fabex:recover.' } })}\n`);

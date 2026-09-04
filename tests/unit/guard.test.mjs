@@ -17,13 +17,13 @@ async function fixture(t) {
 
 const classify = (ctx, toolName, toolInput, executor = {}) => classifyToolUse({ toolName, toolInput, state: ctx.state, paths: ctx.paths, executor });
 
-test('normal mode preserves Codex edit authority and the recorded owner-named exception', async (t) => {
+test('normal mode preserves Codex edit authority and the structured owner-named exception', async (t) => {
   const ctx = await fixture(t);
   assert.equal((await classify(ctx, 'Write', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'deny');
   assert.equal((await classify(ctx, 'Read', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'defer');
-  ctx.state.partner.thread.checkpoint.acceptedDecisions.push('Executor exception authorized: executor=claude-main; scope=project file edits; reason=owner named');
+  ctx.state.executorException = { executor: 'claude-main', scope: 'project file edits', reason: 'owner named', authorizedAt: new Date().toISOString() };
   assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'defer');
-  ctx.state.partner.thread.checkpoint.acceptedDecisions.push('Executor exception reconciled: executor=claude-main; scope=project file edits; outcome=done');
+  ctx.state.executorException = null;
   assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'deny');
 });
 
@@ -42,6 +42,9 @@ test('exact SDK controller entry points are gated and the internal runner is den
     assert.equal(parseControllerCommand(command).kind, `controller-${action}`);
     assert.equal((await classify(ctx, 'Bash', { command })).decision, 'defer');
   }
+  const wait = `node ${controller} wait --operation-id ${id} --timeout 30`;
+  assert.equal(parseControllerCommand(wait).kind, 'controller-wait');
+  assert.equal((await classify(ctx, 'Bash', { command: wait })).decision, 'defer');
   assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} runner --root ${ctx.paths.canonicalRoot}` })).decision, 'deny');
   assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message x extra` })).decision, 'deny');
 });
@@ -65,9 +68,10 @@ test('discussion allows exact SDK controls but denies writes and unrelated effec
   assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'obsolete' })).decision, 'deny');
 });
 
-test('MCP transport has no special tool gate in normal mode', async (t) => {
+test('normal mode MCP tools use a read-only allowlist', async (t) => {
   const ctx = await fixture(t);
-  assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'not a Fabex path' })).decision, 'defer');
+  assert.equal((await classify(ctx, 'mcp__context7__query-docs', { libraryId: 'x' })).decision, 'defer');
+  assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'not a Fabex path' })).decision, 'deny');
 });
 
 test('control parser permits current checkpoint, mode, diagnostic, and recovery paths only', () => {
@@ -101,7 +105,7 @@ test('unhealthy and recovery routes permit only bounded status/cancel and recove
   const id = '11111111-1111-4111-8111-111111111111';
   for (const command of [
     `node ${control} status`, `node ${control} diagnose`, `node ${control} recover inspect --operation-id ${id}`,
-    `node ${controller} status --operation-id ${id}`, `node ${controller} result --operation-id ${id}`, `node ${controller} cancel --operation-id ${id}`
+    `node ${controller} status --operation-id ${id}`, `node ${controller} result --operation-id ${id}`, `node ${controller} cancel --operation-id ${id}`, `node ${controller} wait --operation-id ${id} --timeout 30`
   ]) assert.equal(classifyUnhealthyToolUse({ toolName: 'Bash', toolInput: { command }, health: 'corrupt' }).decision, 'defer', command);
   ctx.state.route = 'recovery-read-only';
   assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message no` })).decision, 'deny');

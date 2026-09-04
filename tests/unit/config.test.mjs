@@ -19,9 +19,11 @@ test('shipped defaults load without configuration', async (t) => {
   const result = await loadEffectiveConfig(root, env);
   assert.deepEqual(result.config, {
     schemaVersion: 1,
-    models: { codex: { model: null, reasoningEffort: 'high' }, operational: 'sonnet' },
+    models: { codex: { model: null, reasoningEffort: 'high', networkAccessEnabled: false }, operational: 'sonnet' },
     collaboration: { jointByDefault: true },
-    display: { replyModeBadge: 'always' }
+    display: { replyModeBadge: 'always' },
+    project: { repositoryRoot: null },
+    guard: { allowedCommands: [], readOnlyMcpTools: ['mcp__context7__*', 'mcp__ide__getDiagnostics'] }
   });
   assert.equal(result.sources.shippedLoaded, true);
   assert.equal(result.sources.machine, join(data, 'config.json'));
@@ -40,11 +42,24 @@ test('project fields override machine fields without replacing siblings', async 
   await mkdir(join(root, '.fabex'));
   await writeFile(join(root, '.fabex', 'config.json'), JSON.stringify({ models: { codex: { reasoningEffort: 'xhigh' } } }));
   const result = await loadEffectiveConfig(root, env);
-  assert.deepEqual(result.config.models.codex, { model: 'gpt-machine', reasoningEffort: 'xhigh' });
+  assert.deepEqual(result.config.models.codex, { model: 'gpt-machine', reasoningEffort: 'xhigh', networkAccessEnabled: false });
   assert.equal(result.config.models.operational, 'haiku');
   assert.equal(result.config.collaboration.jointByDefault, false);
   assert.equal(result.sources.machineLoaded, true);
   assert.equal(result.sources.projectLoaded, true);
+});
+
+test('local network access can be enabled only by project config', async (t) => {
+  const { root, data, env } = await fixture(t);
+  await mkdir(data);
+  await writeFile(join(data, 'config.json'), JSON.stringify({ models: { codex: { networkAccessEnabled: true } } }));
+  let result = await loadEffectiveConfig(root, env);
+  assert.equal(result.config.models.codex.networkAccessEnabled, false);
+  assert.match(result.warnings.join('\n'), /project-layer only/);
+  await mkdir(join(root, '.fabex'));
+  await writeFile(join(root, '.fabex', 'config.json'), JSON.stringify({ models: { codex: { networkAccessEnabled: true } } }));
+  result = await loadEffectiveConfig(root, env);
+  assert.equal(result.config.models.codex.networkAccessEnabled, true);
 });
 
 test('unknown reasoning effort passes through with a warning', async (t) => {

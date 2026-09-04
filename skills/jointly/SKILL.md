@@ -7,15 +7,25 @@ description: Use for every owner turn in both-participant work mode; queue one c
 
 Both means both on every owner turn. Questions authorize answers only. Codex performs every project file edit; Claude coordinates and verifies. Native permissions remain authoritative.
 
-Every Codex turn contains the owner's message verbatim. Fabex developer instructions require Codex to report first (a) any scope mismatch and (b) any partnership-parity concern—a rule or change that would make Codex less than a full equal partner. Relay each flag to the owner unedited.
+Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Every Codex turn contains the owner's message verbatim and uses this shared envelope, omitting the Claude section only when no previous owner-visible Claude reply exists:
+
+```text
+OWNER MESSAGE (verbatim):
+<owner words>
+
+CLAUDE REPLY (owner-visible, verbatim):
+<previous owner-visible Claude reply>
+```
+
+Fabex developer instructions require Codex to report first (a) any scope mismatch and (b) any partnership-parity concern—a rule or change that would make Codex less than a full equal partner. Relay each flag to the owner unedited.
 
 ## Executor authority
 
 - Codex performs project edits through the canonical SDK thread.
 - `fabex-operational` performs every GitHub or `gh` sequence, including delivery preflight, staging, commit, and push. Read effective `models.operational` first and pass it explicitly when creating the agent.
-- Claude coordinates and verifies. Normal-mode main-session Write/Edit/NotebookEdit is mechanically denied.
+- Claude coordinates and verifies. Normal-mode project writes by every Claude executor are allowlist-controlled.
 
-Owner approval does not change the prescribed executor. An exception is valid only when the owner explicitly names the alternate executor. Record it with `control.mjs checkpoint decision 'Executor exception authorized: executor=<name>; scope=<scope>; reason=<reason>'`; record the matching `Executor exception reconciled` decision afterward.
+Owner approval does not change the prescribed executor. An exception is valid only when the owner explicitly names the alternate executor. Record it with `control.mjs executor-exception authorize --executor '<name>' --scope '<scope>' --reason '<reason>'`; clear it with `executor-exception reconcile --outcome '<outcome>'`. Decision prose never grants permission.
 
 ## Canonical SDK protocol
 
@@ -31,7 +41,7 @@ FABEX_OWNER_7F3A2C91
 
 The returned UUID is immediate. Do not invoke the internal runner, call the SDK directly, create another thread, or use retired MCP tools.
 
-Poll `controller.mjs status --operation-id <uuid>` and surface concise changed lifecycle states only. Genuine states are queued, working, command, tests, completed, failed, and cancelled; never expose reasoning events or command output. Use `controller.mjs result --operation-id <uuid>` only after a terminal state.
+Use `controller.mjs wait --operation-id <uuid> --timeout <seconds>` when the turn must block until completion or a bounded timeout. Poll `controller.mjs status --operation-id <uuid>` only for nonblocking progress. Genuine states are queued, working, command, tests, completed, failed, and cancelled; never expose reasoning events or command output. Use `controller.mjs result --operation-id <uuid>` only after a terminal state.
 
 Messages received while Codex is busy must each be submitted once. The durable FIFO queue processes them sequentially on the same canonical thread. v1 has no steering; cancel the active operation explicitly when waiting is wrong.
 
@@ -57,4 +67,4 @@ The controller verifies the first `thread.started` event and requires its `threa
 3. Present both conclusions, relay flags unedited, identify disagreement, and converge. Record accepted decisions with `control.mjs checkpoint decision`.
 4. If implementation is requested after convergence, enter the Implement lane on the same thread.
 
-Never relay full transcripts. Keep checkpoint fields bounded under the total 48 KiB recovery-seed limit.
+Use `checkpoint capacity` before long projects. Compact or export and atomically replace bounded arrays instead of discarding current task context. Keep checkpoint fields under the total 48 KiB recovery-seed limit.

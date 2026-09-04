@@ -14,13 +14,13 @@ async function fixture(t) {
   return { project, env: { ...process.env, FABEX_HOME: join(directory, 'data') } };
 }
 
-test('initial state is schema v5 with SDK controller and structured checkpoint', () => {
+test('initial state is schema v6 with SDK controller and structured checkpoint', () => {
   const state = initialState({ projectId: '0000000000000000', canonicalRoot: '/synthetic/project' });
-  assert.equal(state.schemaVersion, 5);
+  assert.equal(state.schemaVersion, 6);
   assert.equal(state.partner.transport, 'codex-sdk');
-  assert.deepEqual(Object.keys(state.partner.thread.checkpoint), ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint']);
+  assert.deepEqual(Object.keys(state.partner.thread.checkpoint), ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'updatedAt', 'fieldUpdatedAt']);
   assert.deepEqual(state.controller, { runnerPid: null, activeOperationId: null });
-  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'controller', 'project', 'returnTo', 'route', 'schemaVersion', 'task'].sort());
+  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'controller', 'project', 'returnTo', 'route', 'schemaVersion', 'task', 'executorException'].sort());
 });
 
 test('1.3.0 schema v4 migrates atomically and preserves the exact canonical thread id', async (t) => {
@@ -39,7 +39,7 @@ test('1.3.0 schema v4 migrates atomically and preserves the exact canonical thre
   await writeFile(initialized.paths.stateFile, `${JSON.stringify(v4)}\n`);
   const loaded = await readState(project, env);
   assert.equal(loaded.ok, true);
-  assert.equal(loaded.state.schemaVersion, 5);
+  assert.equal(loaded.state.schemaVersion, 6);
   assert.equal(loaded.state.partner.transport, 'codex-sdk');
   assert.equal(loaded.state.partner.thread.threadId, 'canonical-from-1.3');
   assert.equal(loaded.state.partner.thread.checkpoint.objective, 'ship SDK');
@@ -51,7 +51,7 @@ test('1.3.0 schema v4 migrates atomically and preserves the exact canonical thre
   await assert.rejects(access(initialized.paths.transactionFile));
 });
 
-test('oversized 1.3.0 checkpoint compacts into the v5 recovery budget during migration', async (t) => {
+test('oversized 1.3.0 checkpoint compacts into the current recovery budget during migration', async (t) => {
   const { project, env } = await fixture(t);
   const initialized = await initializeState(project, env);
   const v4 = structuredClone(initialized.state);
@@ -88,7 +88,7 @@ test('older companion schema migration retires incompatible companion thread ids
   v3.operations = [];
   await writeFile(initialized.paths.stateFile, `${JSON.stringify(v3)}\n`);
   const loaded = await readState(project, env);
-  assert.equal(loaded.state.schemaVersion, 5);
+  assert.equal(loaded.state.schemaVersion, 6);
   assert.equal(loaded.state.partner.thread.threadId, null);
   assert.equal(loaded.state.partner.thread.checkpoint.objective, 'goal');
 });

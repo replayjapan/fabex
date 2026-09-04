@@ -1,6 +1,18 @@
 import { basename } from 'node:path';
 
 export const MAX_RECOVERY_SEED_BYTES = 48 * 1024;
+export const CHECKPOINT_ARRAY_LIMITS = Object.freeze({
+  constraints: { count: 24, bytes: 4096 },
+  acceptedDecisions: { count: 24, bytes: 4096 },
+  relevantFiles: { count: 64, bytes: 1024 },
+  unresolvedProblems: { count: 24, bytes: 4096 }
+});
+export const CHECKPOINT_TEXT_FIELDS = Object.freeze(['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction']);
+export const CHECKPOINT_MUTABLE_FIELDS = Object.freeze([...CHECKPOINT_TEXT_FIELDS, ...Object.keys(CHECKPOINT_ARRAY_LIMITS)]);
+
+export function emptyFieldUpdatedAt() {
+  return Object.fromEntries(CHECKPOINT_MUTABLE_FIELDS.map((field) => [field, null]));
+}
 
 export function emptyCheckpoint() {
   return {
@@ -13,7 +25,9 @@ export function emptyCheckpoint() {
     testStatus: null,
     unresolvedProblems: [],
     nextAction: null,
-    repoFingerprint: { branch: null, head: null, dirty: null }
+    repoFingerprint: { branch: null, head: null, dirty: null },
+    updatedAt: null,
+    fieldUpdatedAt: emptyFieldUpdatedAt()
   };
 }
 
@@ -54,4 +68,29 @@ export function buildRecoverySeed(checkpoint, projectRoot = 'project') {
 
 export function recoverySeedBytes(checkpoint, projectRoot = 'project') {
   return Buffer.byteLength(buildRecoverySeed(checkpoint, projectRoot), 'utf8');
+}
+
+export function rejectPayloadLikeText(value) {
+  if (typeof value !== 'string') return;
+  const forbidden = /<task-notification>|<system-reminder>|<result>|hookSpecificOutput|tool_use_id/i;
+  let objectLike = false;
+  try {
+    const parsed = JSON.parse(value);
+    objectLike = parsed !== null && !Array.isArray(parsed) && typeof parsed === 'object';
+  } catch {}
+  if (forbidden.test(value) || objectLike) throw new Error('checkpoint values must be owner-visible prose, not tool or notification payloads');
+}
+
+export function checkpointWarnings(checkpoint, metadata = {}, { repositoryRootConfigured = true } = {}) {
+  const warnings = [];
+  if (!checkpoint.objective?.trim()) warnings.push('objective is empty');
+  if (checkpoint.currentTask?.trim() && !checkpoint.nextAction?.trim()) warnings.push('nextAction is empty while currentTask is set');
+  const testAt = checkpoint.fieldUpdatedAt?.testStatus;
+  const implementationAt = checkpoint.fieldUpdatedAt?.implementationStatus;
+  if (testAt && implementationAt && testAt < implementationAt) warnings.push('testStatus predates implementationStatus');
+  if (checkpoint.updatedAt && metadata.lastUsedAt && checkpoint.updatedAt < metadata.lastUsedAt) warnings.push('checkpoint older than the last thread turn');
+  const fingerprint = checkpoint.repoFingerprint;
+  if (!repositoryRootConfigured && (!fingerprint || fingerprint.head === null)) warnings.push('repositoryRoot is not configured; fingerprint unavailable');
+  else if (!fingerprint || fingerprint.head === null) warnings.push('repoFingerprint unavailable');
+  return warnings.slice(0, 16).map((warning) => warning.slice(0, 256));
 }

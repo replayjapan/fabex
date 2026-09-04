@@ -16,6 +16,20 @@ function option(args, name) {
   return args[index + 1];
 }
 
+const terminal = (status) => ['completed', 'failed', 'cancelled'].includes(status);
+const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, lifecycle: result.lifecycle });
+
+export async function waitForOperation(root, operationId, timeoutSeconds, env = process.env, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds))) {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  while (true) {
+    const operation = await operationStatus(root, operationId, env);
+    if (terminal(operation.status)) return { operation: boundedStatus(operation), timedOut: false };
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { operation: boundedStatus(operation), timedOut: true };
+    await pause(Math.min(1000, remaining));
+  }
+}
+
 async function stdinMessage() {
   const chunks = [];
   let size = 0;
@@ -67,9 +81,18 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     if (args.length !== 2 || args[0] !== '--operation-id') throw new ValidationError(`${command} requires exactly --operation-id <uuid>`);
     const id = assertUuid(option(args, '--operation-id'), 'operation id');
     let result = command === 'cancel' ? await cancelOperation(root, id, env) : await operationStatus(root, id, env);
-    if (command === 'result' && !['completed', 'failed', 'cancelled'].includes(result.status)) throw new Error('operation is not complete');
-    if (command === 'status') result = { id: result.id, status: result.status, externalId: result.externalId, lifecycle: result.lifecycle };
+    if (command === 'result' && !terminal(result.status)) throw new Error('operation is not complete');
+    if (command === 'status') result = boundedStatus(result);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (command === 'wait') {
+    if (args.length !== 4 || args[0] !== '--operation-id' || args[2] !== '--timeout') throw new ValidationError('wait requires exactly --operation-id <uuid> --timeout <seconds>');
+    const id = assertUuid(args[1], 'operation id');
+    if (!/^\d+$/.test(args[3]) || Number(args[3]) < 1 || Number(args[3]) > 590) throw new ValidationError('wait timeout must be an integer from 1 to 590 seconds');
+    const waited = await waitForOperation(root, id, Number(args[3]), env);
+    process.stdout.write(`${JSON.stringify(waited.operation, null, 2)}\n`);
+    if (waited.timedOut) process.exitCode = 3;
     return;
   }
   throw new ValidationError('unknown or malformed controller command');

@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { access, chmod, mkdir, open, readFile, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { emptyCheckpoint, migrateLegacyCheckpoint } from './checkpoint.mjs';
+import { emptyCheckpoint, emptyFieldUpdatedAt, migrateLegacyCheckpoint } from './checkpoint.mjs';
 import { projectPaths } from './paths.mjs';
 import { STATE_SCHEMA_VERSION, ValidationError, validateState } from './validation.mjs';
 
@@ -27,6 +27,7 @@ export function initialState(identity) {
     participants: 'both',
     returnTo: null,
     task: { id: null, status: null, label: null, joint: { required: false, status: null, decisionId: null } },
+    executorException: null,
     partner: {
       transport: 'codex-sdk',
       status: 'not-started',
@@ -111,7 +112,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -123,7 +124,7 @@ async function loadValidated(paths) {
     const legacyCheckpoint = state.partner?.threads?.checkpoint ?? state.partner?.thread?.checkpoint ?? { ownerGoals: [], acceptedDecisions: [], currentStatus: null };
     const legacyMetadata = state.partner?.threads?.metadata ?? state.partner?.thread?.metadata ?? {};
     const preservedThreadId = sourceVersion === 4 && typeof state.partner?.thread?.threadId === 'string' ? state.partner.thread.threadId : null;
-    if (state.partner) {
+    if (sourceVersion <= 4 && state.partner) {
       delete state.partner.threadId;
       delete state.partner.threads;
       delete state.partner.thread;
@@ -140,9 +141,21 @@ async function loadValidated(paths) {
       };
       state.partner.thread.checkpoint.repoFingerprint = state.partner.thread.metadata.repoFingerprint;
       state.partner.envelope = { cwd: null, sandbox: null, instructionProfile: null };
+      state.controller = { runnerPid: null, activeOperationId: null };
+      state.operations = [];
     }
-    state.controller = { runnerPid: null, activeOperationId: null };
-    state.operations = [];
+    const checkpoint = state.partner?.thread?.checkpoint;
+    if (checkpoint) {
+      checkpoint.updatedAt ??= null;
+      checkpoint.fieldUpdatedAt = { ...emptyFieldUpdatedAt(), ...(checkpoint.fieldUpdatedAt ?? {}) };
+    }
+    let activeException = null;
+    for (const decision of checkpoint?.acceptedDecisions ?? []) {
+      const authorized = /^Executor exception authorized: executor=([^;]+); scope=([^;]+); reason=(.+)$/i.exec(decision);
+      if (authorized) activeException = { executor: authorized[1].trim(), scope: authorized[2].trim(), reason: authorized[3].trim(), authorizedAt: checkpoint.updatedAt ?? new Date().toISOString() };
+      if (/^Executor exception reconciled:/i.test(decision)) activeException = null;
+    }
+    state.executorException = activeException;
     state.schemaVersion = STATE_SCHEMA_VERSION;
   }
   try { validateState(state, paths); } catch (error) {
@@ -156,7 +169,7 @@ async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v5');
+    await acquireLock(paths, 'schema-migration-to-v6');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { isAbsolute, normalize, resolve } from 'node:path';
 import { dataRoot, PLUGIN_ROOT } from './paths.mjs';
 import { isPlainObject } from './validation.mjs';
 
@@ -9,11 +9,13 @@ export const PROJECT_CONFIG_RELATIVE_PATH = '.fabex/config.json';
 export const CODEX_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 export const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const KEYS = {
-  '': new Set(['schemaVersion', 'models', 'collaboration', 'display']),
+  '': new Set(['schemaVersion', 'models', 'collaboration', 'display', 'project', 'guard']),
   models: new Set(['claudePrimary', 'codex', 'operational']),
-  'models.codex': new Set(['model', 'reasoningEffort']),
+  'models.codex': new Set(['model', 'reasoningEffort', 'networkAccessEnabled']),
   collaboration: new Set(['jointByDefault']),
-  display: new Set(['replyModeBadge'])
+  display: new Set(['replyModeBadge']),
+  project: new Set(['repositoryRoot']),
+  guard: new Set(['allowedCommands', 'readOnlyMcpTools'])
 };
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -26,7 +28,11 @@ function warnUnknown(value, path, warnings) {
   }
 }
 
-function mergeLayer(base, overlay, warnings, name) {
+const exactExecutableArray = (value) => Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === 'string' && /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(item.trim()));
+const toolPatternArray = (value) => Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === 'string' && /^mcp__[A-Za-z0-9_*.-]+(?:__[A-Za-z0-9_*.-]+)+$/.test(item.trim()));
+const relativeRepositoryRoot = (value) => typeof value === 'string' && value.trim() && !isAbsolute(value.trim()) && !normalize(value.trim()).split(/[\\/]/).includes('..');
+
+function mergeLayer(base, overlay, warnings, name, { projectLayer = false } = {}) {
   const result = clone(base);
   if (!isPlainObject(overlay)) {
     warnings.push(`${name} config must be a JSON object; the entire layer was ignored`);
@@ -64,6 +70,11 @@ function mergeLayer(base, overlay, warnings, name) {
               if (!CODEX_REASONING_EFFORTS.has(effort.trim())) warnings.push(`models.codex.reasoningEffort ${JSON.stringify(effort.trim())} is unknown and was passed through`);
             } else warnings.push('models.codex.reasoningEffort must be a non-empty token; using the lower-precedence value');
           }
+          if ('networkAccessEnabled' in overlay.models.codex) {
+            if (overlay.models.codex.networkAccessEnabled === true && !projectLayer && name !== 'shipped') warnings.push(`models.codex.networkAccessEnabled is project-layer only when enabled; ${name} value was ignored`);
+            else if (typeof overlay.models.codex.networkAccessEnabled === 'boolean') result.models.codex.networkAccessEnabled = overlay.models.codex.networkAccessEnabled;
+            else warnings.push('models.codex.networkAccessEnabled must be boolean; using the lower-precedence value');
+          }
         }
       }
     }
@@ -88,6 +99,30 @@ function mergeLayer(base, overlay, warnings, name) {
       }
     }
   }
+  if ('project' in overlay) {
+    if (!projectLayer && name !== 'shipped') warnings.push(`project settings are project-layer only; ${name} project settings were ignored`);
+    else if (!isPlainObject(overlay.project)) warnings.push('project must be an object; using lower-precedence project values');
+    else {
+      warnUnknown(overlay.project, 'project', warnings);
+      if ('repositoryRoot' in overlay.project) {
+        const value = overlay.project.repositoryRoot;
+        if (value === null || relativeRepositoryRoot(value)) result.project.repositoryRoot = value === null ? null : normalize(value.trim());
+        else warnings.push('project.repositoryRoot must be null or a relative path inside the workstream root; using the lower-precedence value');
+      }
+    }
+  }
+  if ('guard' in overlay) {
+    if (!isPlainObject(overlay.guard)) warnings.push('guard must be an object; using lower-precedence guard values');
+    else {
+      warnUnknown(overlay.guard, 'guard', warnings);
+      for (const key of ['allowedCommands', 'readOnlyMcpTools']) {
+        if (!(key in overlay.guard)) continue;
+        const valid = key === 'allowedCommands' ? exactExecutableArray(overlay.guard[key]) : toolPatternArray(overlay.guard[key]);
+        if (valid) result.guard[key] = overlay.guard[key].map((item) => item.trim());
+        else warnings.push(`guard.${key} must be an array of bounded command or tool patterns; using the lower-precedence value`);
+      }
+    }
+  }
   return result;
 }
 
@@ -109,7 +144,7 @@ export async function loadEffectiveConfig(root, env = process.env) {
   const project = await readOptional(projectFile, 'project', warnings);
   let config = mergeLayer(defaults, {}, warnings, 'shipped');
   if (machine.loaded) config = mergeLayer(config, machine.value, warnings, 'machine');
-  if (project.loaded) config = mergeLayer(config, project.value, warnings, 'project');
+  if (project.loaded) config = mergeLayer(config, project.value, warnings, 'project', { projectLayer: true });
   return {
     config,
     sources: {

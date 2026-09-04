@@ -18,14 +18,14 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfile, and marketplace metadata agree on 1.4.0 Beta', async () => {
+test('plugin, package, lockfile, and marketplace metadata agree on 1.5.0 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
   const lock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.4.0');
-  assert.equal(pkg.version, '1.4.0');
+  assert.equal(plugin.version, '1.5.0');
+  assert.equal(pkg.version, '1.5.0');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);
@@ -67,10 +67,10 @@ test('README documents Beta SDK transport, install, queue, progress, continuity,
   assert.match(readme, /implementation.*`workspace-write`/i);
 });
 
-test('1.4.0 changelog gives why, benefits, and tradeoffs including one-day MCP rollback', async () => {
+test('1.5.0 changelog documents the long-project reliability fixes', async () => {
   const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
-  const release = changelog.split('## 1.3.0')[0];
-  for (const pattern of [/## 1\.4\.0 - 2026-08-23/, /lasted one day/, /backgrounds a long MCP call at roughly 120 seconds/, /PostToolUse payload can omit/, /five orphaned threads/, /black-hole/, /What it gave us/, /Tradeoffs we accepted/, /@openai\/codex-sdk` 0\.149\.0/, /48 KiB/, /Beta release criterion/]) assert.match(release, pattern);
+  const release = changelog.split('## 1.4.0')[0];
+  for (const pattern of [/## 1\.5\.0 - 2026-09-04/, /bidirectional/, /checkpoint/, /executor exception/, /repositoryRoot/, /networkAccessEnabled/, /wait/, /FABEX TURN/, /live plugin tree/]) assert.match(release, pattern);
 });
 
 test('current implementation and consumer docs contain no obsolete MCP invocation paths', async () => {

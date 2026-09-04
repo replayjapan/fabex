@@ -78,12 +78,13 @@ test('first turn persists thread.started and subsequent queued turns resume the 
   assert.match(capture[0].prompt, /Fabex continuity checkpoint/);
   assert.equal(capture[1].kind, 'resume');
   assert.equal(capture[1].id, 'canonical-thread');
-  assert.equal(capture[1].prompt, 'second owner message');
+  assert.match(capture[1].prompt, /^FABEX TURN: route=normal; sandbox=workspace-write; participants=both/);
+  assert.match(capture[1].prompt, /OWNER MESSAGE \(verbatim\):\nsecond owner message/);
   assert.equal(capture[0].threadOptions.sandboxMode, 'workspace-write');
   assert.equal(capture[0].threadOptions.approvalPolicy, 'on-request');
   assert.equal(capture[0].codexOptions.apiKey, undefined);
   assert.match(capture[0].codexOptions.config.developer_instructions, /full equal Fabex partner/);
-  assert.match(capture[0].codexOptions.config.developer_instructions, /Do not stage, commit, push/);
+  assert.match(capture[0].codexOptions.config.developer_instructions, /Do not run git add, commit, tag/);
   assert.match(capture[0].codexOptions.config.compact_prompt, /structured checkpoint/);
 });
 
@@ -205,6 +206,6 @@ test('complete recovery seed has a hard 48 KiB budget', async (t) => {
   assert.ok(Buffer.byteLength(seed, 'utf8') < MAX_RECOVERY_SEED_BYTES);
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  await assert.rejects(updateCheckpoint(project, 'objective', 'x'.repeat(MAX_RECOVERY_SEED_BYTES), env), /49152-byte budget|invalid state/);
+  await assert.rejects(updateCheckpoint(project, 'objective', 'x'.repeat(MAX_RECOVERY_SEED_BYTES), env), /8192-byte cap|49152-byte budget|invalid state/);
   assert.equal((await readState(project, env)).state.partner.thread.checkpoint.objective, null);
 });

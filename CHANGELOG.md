@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.0 - 2026-09-04
+
+Fabex 1.5.0 hardens long-running projects. Codex dogfood feedback identified the first twelve context, checkpoint, authority, repository, network, version, and regression gaps; Claude identified the blocking-wait and substring-guard failures. Integration then exposed the stale resumed-thread instruction and live-plugin update hazards.
+
+- Made context sharing bidirectional: owner-visible Claude replies and owner messages use a shared verbatim envelope; private reasoning and tool logs remain excluded.
+- Added checkpoint capacity, export, atomic array replace/compact, and atomic five-field snapshot controls under the unchanged 48 KiB recovery budget. Full arrays now report their exact capacity instead of a generic invalid-state error, and notification-shaped text is rejected.
+- Added checkpoint `updatedAt`, per-field timestamps, and bounded warnings for empty, contradictory, stale, and unavailable-fingerprint state.
+- Moved executor exceptions from regex-scanned decision prose into schema-v6 structured state, with one-time legacy migration and explicit authorize/reconcile controls.
+- Repaired task status transitions so recovery abandonment, new submissions, successful completion, and non-recovery failures all have documented exits.
+- Added project-only `project.repositoryRoot`; fingerprinting never auto-selects among nested repositories, and the resolved in-workstream repository is passed to the SDK as an additional directory.
+- Replaced normal-route Claude write behavior with file, Bash, verification, and read-only MCP allowlists covering main sessions and subagents. Safe read/verification pipelines are accepted when every segment is allowlisted, while non-mutating host orchestration tools defer and remain subject to the same per-executor mutation guards. Extended the operational-only Git delivery lane through add, commit, tag, merge, rebase, cherry-pick, push, send-pack, Git LFS push, and `gh`.
+- Added project-configurable `models.codex.networkAccessEnabled`, off by default and effective only for workspace-write turns. Fabex never selects `danger-full-access`.
+- Added blocking `controller.mjs wait`, exact invoked-script parsing, and installed-plugin registry diagnostics with upgrade guidance.
+- Fixed stale turn authority on resumed SDK threads. Developer instructions are now route-neutral; every first or resumed prompt begins with an authoritative `FABEX TURN` header. Threads created by 1.4.0 during discussion can retain the old developer message, so the per-turn header is the compatibility fix.
+- Added regression coverage for all reported failures and retained compatibility with the intermediate schema-v6 state produced during development.
+- Documented that the runner, hooks, and guard execute from the live plugin tree. Schema-changing development must occur in a copy and be swapped only after the active runner exits; status polling pauses during that swap. A future migration gate should refuse live migration while an active runner owns an operation.
+
 ## 1.4.0 - 2026-08-23
 
 ### Why we made this change
