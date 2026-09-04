@@ -18,15 +18,29 @@ function option(args, name) {
 
 const terminal = (status) => ['completed', 'failed', 'cancelled'].includes(status);
 const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, lifecycle: result.lifecycle });
+const USAGE = 'Usage: controller.mjs submit < envelope.json | status|result|cancel --operation-id <uuid> | wait --operation-id <uuid> --timeout <1..590>';
 
 export async function waitForOperation(root, operationId, timeoutSeconds, env = process.env, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds))) {
   const deadline = Date.now() + timeoutSeconds * 1000;
+  let lastOperation = null;
   while (true) {
-    const operation = await operationStatus(root, operationId, env);
-    if (terminal(operation.status)) return { operation: boundedStatus(operation), timedOut: false };
     const remaining = deadline - Date.now();
-    if (remaining <= 0) return { operation: boundedStatus(operation), timedOut: true };
-    await pause(Math.min(1000, remaining));
+    if (remaining <= 0) return { operation: lastOperation ?? {
+      id: operationId,
+      status: 'working',
+      externalId: null,
+      lifecycle: { phase: 'working', detail: 'Wait timed out before state became readable.', queuedAt: null, startedAt: null, finishedAt: null, cancelRequested: false }
+    }, timedOut: true };
+    try {
+      const operation = await operationStatus(root, operationId, env, { lockWaitMs: Math.min(400, remaining), pause });
+      lastOperation = boundedStatus(operation);
+      if (terminal(operation.status)) return { operation: lastOperation, timedOut: false };
+    } catch (error) {
+      if (error?.code !== 'lock-contention') throw error;
+    }
+    const afterRead = deadline - Date.now();
+    if (afterRead <= 0) continue;
+    await pause(Math.min(1000, afterRead));
   }
 }
 
@@ -66,6 +80,10 @@ export async function runQueue(root, env = process.env, createCodex = codexFacto
 
 export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), env = process.env } = {}) {
   const [command, ...args] = argv;
+  if ((command === '--help' && args.length === 0) || command === undefined) {
+    process.stdout.write(`${USAGE}\n`);
+    return;
+  }
   if (command === 'runner') {
     if (args.length !== 2 || args[0] !== '--root') throw new ValidationError('runner requires exactly --root <path>');
     return runQueue(resolve(args[1]), env);
@@ -95,7 +113,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     if (waited.timedOut) process.exitCode = 3;
     return;
   }
-  throw new ValidationError('unknown or malformed controller command');
+  throw new ValidationError(`unknown or malformed controller command\n${USAGE}`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

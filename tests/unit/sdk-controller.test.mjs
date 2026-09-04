@@ -12,6 +12,7 @@ import {
   lifecycleUpdate,
   runOperation,
   releaseRunnerIfIdle,
+  submissionEnvelope,
   submitOperation,
   updateCheckpoint,
   verifyThreadStarted
@@ -53,7 +54,7 @@ const completed = (threadId, text = 'done') => [
 ];
 
 async function queued(project, env, message) {
-  const submitted = await submitOperation(project, message, env, { spawnRunner: false });
+  const submitted = await submitOperation(project, submissionEnvelope(message), env, { spawnRunner: false });
   const operation = await claimNextOperation(project, env);
   assert.equal(operation.id, submitted.operationId);
   return operation;
@@ -62,8 +63,8 @@ async function queued(project, env, message) {
 test('first turn persists thread.started and subsequent queued turns resume the exact id in FIFO order', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  await submitOperation(project, 'first owner message', env, { spawnRunner: false });
-  await submitOperation(project, 'second owner message', env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('first owner message'), env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('second owner message'), env, { spawnRunner: false });
   const capture = [];
   const factory = sdkFactory([completed('canonical-thread', 'first result'), completed('canonical-thread', 'second result')], capture);
   const first = await claimNextOperation(project, env);
@@ -122,7 +123,7 @@ test('cancellation records cancelled and keeps canonical continuity', async (t) 
 test('queued cancellation removes the retained message without starting SDK work', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const submitted = await submitOperation(project, 'do not send', env, { spawnRunner: false });
+  const submitted = await submitOperation(project, submissionEnvelope('do not send'), env, { spawnRunner: false });
   await cancelOperation(project, submitted.operationId, env);
   const operation = (await readState(project, env)).state.operations[0];
   assert.equal(operation.status, 'cancelled');
@@ -133,7 +134,7 @@ test('runner does not release ownership while a raced submission is queued', asy
   const { project, env } = await fixture(t);
   await initializeState(project, env);
   assert.equal(await claimRunner(project, process.pid, env), true);
-  await submitOperation(project, 'arrived at idle boundary', env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('arrived at idle boundary'), env, { spawnRunner: false });
   assert.equal(await releaseRunnerIfIdle(project, process.pid, env), false);
   assert.equal((await readState(project, env)).state.controller.runnerPid, process.pid);
 });
@@ -141,8 +142,8 @@ test('runner does not release ownership while a raced submission is queued', asy
 test('runner integration drains the FIFO sequentially and releases process ownership', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  await submitOperation(project, 'one', env, { spawnRunner: false });
-  await submitOperation(project, 'two', env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('one'), env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('two'), env, { spawnRunner: false });
   const capture = [];
   await runQueue(project, env, sdkFactory([completed('runner-thread'), completed('runner-thread')], capture));
   const state = (await readState(project, env)).state;
@@ -155,7 +156,7 @@ test('runner integration drains the FIFO sequentially and releases process owner
 test('a replacement runner fails closed when the previous process died mid-turn', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  await submitOperation(project, 'ambiguous in-flight message', env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('ambiguous in-flight message'), env, { spawnRunner: false });
   await claimNextOperation(project, env);
   const current = await readState(project, env);
   await updateState(project, (state) => { state.controller.runnerPid = 2147483646; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);

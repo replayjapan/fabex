@@ -9,12 +9,14 @@ import { STATE_SCHEMA_VERSION, ValidationError, validateState } from './validati
 
 process.umask(0o077);
 const MAX_STATE_BYTES = 1024 * 1024;
+export const DEFAULT_READ_LOCK_WAIT_MS = 3000;
 
 export class StateStoreError extends Error {
-  constructor(code, message, cause) {
+  constructor(code, message, cause, metadata = null) {
     super(message, { cause });
     this.name = 'StateStoreError';
     this.code = code;
+    this.metadata = metadata;
   }
 }
 
@@ -37,7 +39,9 @@ export function initialState(identity) {
         metadata: {
           turnCount: 0,
           lastUsedAt: null,
-          repoFingerprint: { branch: null, head: null, dirty: null }
+          repoFingerprint: { branch: null, head: null, dirty: null },
+          repoFingerprintCapturedAt: null,
+          lastRecordedTurn: null
         }
       },
       envelope: { cwd: null, sandbox: null, instructionProfile: null }
@@ -112,7 +116,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -136,7 +140,9 @@ async function loadValidated(paths) {
         metadata: {
           turnCount: Number.isSafeInteger(legacyMetadata.turnCount) ? legacyMetadata.turnCount : 0,
           lastUsedAt: legacyMetadata.lastUsedAt ?? null,
-          repoFingerprint: legacyMetadata.repoFingerprint ?? { branch: null, head: null, dirty: null }
+          repoFingerprint: legacyMetadata.repoFingerprint ?? { branch: null, head: null, dirty: null },
+          repoFingerprintCapturedAt: null,
+          lastRecordedTurn: null
         }
       };
       state.partner.thread.checkpoint.repoFingerprint = state.partner.thread.metadata.repoFingerprint;
@@ -148,14 +154,22 @@ async function loadValidated(paths) {
     if (checkpoint) {
       checkpoint.updatedAt ??= null;
       checkpoint.fieldUpdatedAt = { ...emptyFieldUpdatedAt(), ...(checkpoint.fieldUpdatedAt ?? {}) };
+      checkpoint.repoFingerprintCapturedAt ??= checkpoint.repoFingerprint?.head ? (state.partner?.thread?.metadata?.lastUsedAt ?? checkpoint.updatedAt ?? null) : null;
     }
-    let activeException = null;
-    for (const decision of checkpoint?.acceptedDecisions ?? []) {
-      const authorized = /^Executor exception authorized: executor=([^;]+); scope=([^;]+); reason=(.+)$/i.exec(decision);
-      if (authorized) activeException = { executor: authorized[1].trim(), scope: authorized[2].trim(), reason: authorized[3].trim(), authorizedAt: checkpoint.updatedAt ?? new Date().toISOString() };
-      if (/^Executor exception reconciled:/i.test(decision)) activeException = null;
+    const metadata = state.partner?.thread?.metadata;
+    if (metadata) {
+      metadata.repoFingerprintCapturedAt ??= metadata.repoFingerprint?.head ? (metadata.lastUsedAt ?? checkpoint?.updatedAt ?? null) : null;
+      metadata.lastRecordedTurn ??= null;
     }
-    state.executorException = activeException;
+    if (sourceVersion <= 5) {
+      let activeException = null;
+      for (const decision of checkpoint?.acceptedDecisions ?? []) {
+        const authorized = /^Executor exception authorized: executor=([^;]+); scope=([^;]+); reason=(.+)$/i.exec(decision);
+        if (authorized) activeException = { executor: authorized[1].trim(), scope: authorized[2].trim(), reason: authorized[3].trim(), authorizedAt: checkpoint.updatedAt ?? new Date().toISOString() };
+        if (/^Executor exception reconciled:/i.test(decision)) activeException = null;
+      }
+      state.executorException = activeException;
+    }
     state.schemaVersion = STATE_SCHEMA_VERSION;
   }
   try { validateState(state, paths); } catch (error) {
@@ -165,11 +179,37 @@ async function loadValidated(paths) {
   return { state, migrated };
 }
 
+async function safeLockMetadata(paths) {
+  let owner = {};
+  let lockInfo = null;
+  try { owner = await parseJsonFile(paths.lockOwnerFile); } catch {}
+  try { lockInfo = await stat(paths.lockDir); } catch {}
+  return {
+    pid: Number.isSafeInteger(owner?.pid) && owner.pid > 0 ? owner.pid : null,
+    purpose: typeof owner?.purpose === 'string' ? owner.purpose.slice(0, 128) : null,
+    ageMs: lockInfo ? Math.max(0, Math.round(Date.now() - lockInfo.mtimeMs)) : null
+  };
+}
+
+async function waitForReadableLock(paths, waitMs, pause) {
+  const deadline = Date.now() + waitMs;
+  let delay = 50;
+  while (await exists(paths.lockDir)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      const metadata = await safeLockMetadata(paths);
+      throw new StateStoreError('lock-contention', `state lock remained held after ${waitMs}ms; lock=${JSON.stringify(metadata)}`, undefined, metadata);
+    }
+    await pause(Math.min(delay, remaining));
+    delay = Math.min(delay * 2, 400);
+  }
+}
+
 async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v6');
+    await acquireLock(paths, 'schema-migration-to-v7');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);
@@ -240,17 +280,17 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
   }
 }
 
-export async function readState(root, env = process.env, { checkLock = true } = {}) {
+export async function readState(root, env = process.env, { checkLock = true, lockWaitMs = DEFAULT_READ_LOCK_WAIT_MS, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds)) } = {}) {
   const paths = await projectPaths(root, env);
   try {
-    if (checkLock && await exists(paths.lockDir)) throw new StateStoreError('lock-contention', 'state lock is held');
+    if (checkLock && await exists(paths.lockDir)) await waitForReadableLock(paths, Math.max(0, lockWaitMs), pause);
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete state transaction requires recovery');
     if (!(await exists(paths.stateFile))) return initializeState(root, env);
     const loaded = await loadValidated(paths);
     return { ok: true, state: loaded.migrated ? await persistMigration(paths) : loaded.state, health: 'healthy', paths };
   } catch (error) {
     const wrapped = error instanceof StateStoreError ? error : new StateStoreError('unwritable', 'state cannot be read safely', error);
-    return { ok: false, state: recoveryState(paths), health: wrapped.code, error: wrapped, paths };
+    return { ok: false, state: recoveryState(paths), health: wrapped.code, error: wrapped, lock: wrapped.metadata ?? null, paths };
   }
 }
 

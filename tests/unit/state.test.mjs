@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { claimNextOperation, submitOperation } from '../../scripts/lib/sdk-controller.mjs';
+import { claimNextOperation, submissionEnvelope, submitOperation } from '../../scripts/lib/sdk-controller.mjs';
 import { initialState, initializeState, readState, resolveTransaction, updateState } from '../../scripts/lib/state.mjs';
 
 async function fixture(t) {
@@ -14,11 +14,11 @@ async function fixture(t) {
   return { project, env: { ...process.env, FABEX_HOME: join(directory, 'data') } };
 }
 
-test('initial state is schema v6 with SDK controller and structured checkpoint', () => {
+test('initial state is schema v7 with SDK controller and structured checkpoint', () => {
   const state = initialState({ projectId: '0000000000000000', canonicalRoot: '/synthetic/project' });
-  assert.equal(state.schemaVersion, 6);
+  assert.equal(state.schemaVersion, 7);
   assert.equal(state.partner.transport, 'codex-sdk');
-  assert.deepEqual(Object.keys(state.partner.thread.checkpoint), ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'updatedAt', 'fieldUpdatedAt']);
+  assert.deepEqual(Object.keys(state.partner.thread.checkpoint), ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'repoFingerprintCapturedAt', 'updatedAt', 'fieldUpdatedAt']);
   assert.deepEqual(state.controller, { runnerPid: null, activeOperationId: null });
   assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'controller', 'project', 'returnTo', 'route', 'schemaVersion', 'task', 'executorException'].sort());
 });
@@ -39,7 +39,7 @@ test('1.3.0 schema v4 migrates atomically and preserves the exact canonical thre
   await writeFile(initialized.paths.stateFile, `${JSON.stringify(v4)}\n`);
   const loaded = await readState(project, env);
   assert.equal(loaded.ok, true);
-  assert.equal(loaded.state.schemaVersion, 6);
+  assert.equal(loaded.state.schemaVersion, 7);
   assert.equal(loaded.state.partner.transport, 'codex-sdk');
   assert.equal(loaded.state.partner.thread.threadId, 'canonical-from-1.3');
   assert.equal(loaded.state.partner.thread.checkpoint.objective, 'ship SDK');
@@ -88,7 +88,7 @@ test('older companion schema migration retires incompatible companion thread ids
   v3.operations = [];
   await writeFile(initialized.paths.stateFile, `${JSON.stringify(v3)}\n`);
   const loaded = await readState(project, env);
-  assert.equal(loaded.state.schemaVersion, 6);
+  assert.equal(loaded.state.schemaVersion, 7);
   assert.equal(loaded.state.partner.thread.threadId, null);
   assert.equal(loaded.state.partner.thread.checkpoint.objective, 'goal');
 });
@@ -108,7 +108,7 @@ test('first touch initializes and atomic updates leave restrictive clean state',
 test('dead controller work becomes failed recovery state at SessionStart', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  await submitOperation(project, 'active', env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('active'), env, { spawnRunner: false });
   await claimNextOperation(project, env);
   const recovered = await initializeState(project, env, { recoverUnresolved: true });
   assert.equal(recovered.ok, true);
@@ -123,7 +123,7 @@ test('lock contention, corrupt JSON, and incompatible state fail closed', async 
   const initialized = await initializeState(project, env);
   await mkdir(initialized.paths.lockDir, { mode: 0o700 });
   await writeFile(initialized.paths.lockOwnerFile, '{"pid":1}\n', { mode: 0o600 });
-  assert.equal((await readState(project, env)).health, 'lock-contention');
+  assert.equal((await readState(project, env, { lockWaitMs: 0 })).health, 'lock-contention');
   await rm(initialized.paths.lockDir, { recursive: true });
   await writeFile(initialized.paths.stateFile, '{');
   assert.equal((await readState(project, env)).health, 'corrupt');

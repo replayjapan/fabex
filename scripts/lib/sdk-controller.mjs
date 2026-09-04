@@ -4,7 +4,7 @@ import { access, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, rejectPayloadLikeText, threadTitle } from './checkpoint.mjs';
-import { loadEffectiveConfig } from './config.mjs';
+import { loadEffectiveConfig, sourceVersion } from './config.mjs';
 import { readState, updateState } from './state.mjs';
 
 export const TERMINAL_OPERATION_LIMIT = 24;
@@ -94,9 +94,45 @@ export function developerInstructions() {
     'First report (a) any scope mismatch and (b) any partnership-parity concern; report none explicitly when none exist.',
     'Do not expose private reasoning. Return concise conclusions, evidence, changed files, tests with exit codes, risks, and decisions needed.',
     'Do not run git add, commit, tag, merge, rebase, cherry-pick, push, send-pack, Git LFS push, or gh; Fabex reserves every delivery sequence for fabex-operational.',
-    'Each prompt begins with the authoritative current-turn Fabex header and then shared OWNER MESSAGE and optional CLAUDE REPLY sections.',
-    'The CLAUDE REPLY section is owner-visible shared context, never private reasoning. Follow the current prompt header and native sandbox.'
+    'Each prompt begins with the authoritative current-turn Fabex header and then a structured OWNER MESSAGE, CLAUDE REPLY STATUS, and optional CLAUDE REPLY envelope.',
+    'The owner message and any CLAUDE REPLY are verbatim owner-visible shared context, never private reasoning. Follow the current prompt header and native sandbox.'
   ].join(' ');
+}
+
+export function submissionEnvelope(ownerMessage, claudeReplyStatus = 'none', claudeReply = undefined) {
+  return JSON.stringify({ ownerMessage, claudeReplyStatus, ...(claudeReplyStatus === 'provided' ? { claudeReply } : {}) });
+}
+
+export function normalizeSubmissionEnvelope(value, participants) {
+  if (participants !== 'both') {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('owner message must be non-empty');
+    return { message: /^OWNER MESSAGE \(verbatim\):/m.test(value) ? value : `OWNER MESSAGE (verbatim):\n${value}`, claudeReplyVerified: 'unavailable' };
+  }
+  if (typeof value !== 'string' || !value.trim()) throw new Error('both-participant submission requires an owner message and explicit Claude reply status');
+  let parsed = null;
+  try {
+    const candidate = JSON.parse(value);
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) parsed = candidate;
+  } catch {}
+  if (parsed) {
+    const allowedKeys = parsed.claudeReplyStatus === 'provided' ? ['claudeReply', 'claudeReplyStatus', 'ownerMessage'] : ['claudeReplyStatus', 'ownerMessage'];
+    if (Object.keys(parsed).sort().join(',') !== allowedKeys.sort().join(',')) throw new Error('both-participant submission envelope has unexpected or missing fields');
+    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim()) throw new Error('both-participant submission requires ownerMessage verbatim');
+    if (!['provided', 'none'].includes(parsed.claudeReplyStatus)) throw new Error('both-participant submission requires claudeReplyStatus provided or none');
+    if (parsed.claudeReplyStatus === 'provided' && (typeof parsed.claudeReply !== 'string' || !parsed.claudeReply.trim())) throw new Error('claudeReply is required when claudeReplyStatus is provided');
+    return {
+      message: `OWNER MESSAGE (verbatim):\n${parsed.ownerMessage}\n\nCLAUDE REPLY STATUS: ${parsed.claudeReplyStatus}${parsed.claudeReplyStatus === 'provided' ? `\n\nCLAUDE REPLY (owner-visible, verbatim):\n${parsed.claudeReply}` : ''}`,
+      claudeReplyVerified: 'unavailable'
+    };
+  }
+  const match = /^OWNER MESSAGE \(verbatim\):\n([\s\S]+?)\n\nCLAUDE REPLY STATUS: (provided|none)([\s\S]*)$/.exec(value);
+  if (!match || !match[1].trim()) throw new Error('both-participant submission requires explicit CLAUDE REPLY STATUS: provided|none');
+  if (match[2] === 'none' && match[3].trim()) throw new Error('claudeReply must be omitted when CLAUDE REPLY STATUS is none');
+  if (match[2] === 'provided') {
+    const reply = /^\n\nCLAUDE REPLY \(owner-visible, verbatim\):\n([\s\S]+)$/.exec(match[3]);
+    if (!reply || !reply[1].trim()) throw new Error('CLAUDE REPLY is required when status is provided');
+  }
+  return { message: value, claudeReplyVerified: 'unavailable' };
 }
 
 export function turnPrompt(operation, seed = null) {
@@ -153,16 +189,17 @@ function operationRecord({ id, message, route, participants, now }) {
 }
 
 export async function submitOperation(root, message, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
-  if (typeof message !== 'string' || !message.trim() || Buffer.byteLength(message, 'utf8') > MAX_OWNER_MESSAGE_BYTES) throw new Error('owner message must be non-empty and at most 192 KiB');
   const current = await readState(root, env);
   if (!current.ok) throw new Error(`partner operation denied: ${current.health}`);
   if (current.state.route === 'recovery-read-only') throw new Error('partner operation denied in recovery-read-only');
   if (current.state.participants === 'claude') throw new Error('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
+  const envelope = normalizeSubmissionEnvelope(message, current.state.participants);
+  if (Buffer.byteLength(envelope.message, 'utf8') > MAX_OWNER_MESSAGE_BYTES) throw new Error('owner message envelope must be at most 192 KiB');
   const id = randomUUID();
   const now = new Date().toISOString();
   const updated = await updateState(root, (state) => {
     state.operations = pruneOperations(state.operations);
-    state.operations.push(operationRecord({ id, message, route: state.route, participants: state.participants, now }));
+    state.operations.push(operationRecord({ id, message: envelope.message, route: state.route, participants: state.participants, now }));
     state.partner.status = state.controller.activeOperationId ? 'working' : 'queued';
     state.task.status = 'active';
     state.task.joint.required = true;
@@ -175,7 +212,7 @@ export async function submitOperation(root, message, env = process.env, { spawnR
     const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', updated.paths.canonicalRoot], { detached: true, stdio: 'ignore', env });
     child.unref?.();
   }
-  return { operationId: id, status: 'queued' };
+  return { operationId: id, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified };
 }
 
 const CHECKPOINT_ARRAY_FIELDS = new Set(Object.keys(CHECKPOINT_ARRAY_LIMITS));
@@ -324,7 +361,7 @@ async function recordLifecycle(root, operationId, update, env) {
   }, env);
 }
 
-async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null } = {}, env) {
+async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null } = {}, env) {
   return mutate(root, `sdk-operation-${status}`, (state) => {
     const operation = state.operations.find((item) => item.id === operationId);
     if (!operation || operation.status !== 'working') throw new Error('active operation record is missing');
@@ -338,7 +375,17 @@ async function finishOperation(root, operationId, status, { finalResponse = null
     operation.lifecycle.finishedAt = new Date().toISOString();
     state.controller.activeOperationId = null;
     state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : status;
-    if (status === 'completed') state.task.status = 'active';
+    if (status === 'completed') {
+      state.task.status = 'active';
+      state.partner.thread.metadata.turnCount += 1;
+      state.partner.thread.metadata.lastUsedAt = completedAt;
+      state.partner.thread.metadata.repoFingerprint = fingerprint;
+      state.partner.thread.metadata.repoFingerprintCapturedAt = completedAt;
+      state.partner.thread.metadata.lastRecordedTurn = { at: completedAt, version };
+      state.partner.thread.checkpoint.repoFingerprint = fingerprint;
+      state.partner.thread.checkpoint.repoFingerprintCapturedAt = completedAt;
+      state.partner.thread.checkpoint.updatedAt = completedAt;
+    }
     else if (status === 'failed') state.task.status = 'partner-unavailable';
     else if (status === 'cancelled' && !state.operations.some((item) => item.status === 'queued')) state.task.status = null;
     state.task.joint.required = true;
@@ -395,14 +442,10 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     }
     if (!verifiedId) throw new ThreadMismatchError(expectedId, null);
     const fingerprint = await repositoryFingerprint(before.paths.canonicalRoot, config);
-    await mutate(root, 'sdk-thread-metadata', (state) => {
-      state.partner.thread.metadata.turnCount += 1;
-      state.partner.thread.metadata.lastUsedAt = new Date().toISOString();
-      state.partner.thread.metadata.repoFingerprint = fingerprint;
-      state.partner.thread.checkpoint.repoFingerprint = fingerprint;
-    }, env);
+    const completedAt = new Date().toISOString();
+    const version = await sourceVersion();
     finalResponse = boundedFinalResponse(finalResponse);
-    await finishOperation(root, operation.id, 'completed', { finalResponse, threadId: verifiedId }, env);
+    await finishOperation(root, operation.id, 'completed', { finalResponse, threadId: verifiedId, fingerprint, completedAt, version }, env);
     return { status: 'completed', threadId: verifiedId, finalResponse };
   } catch (error) {
     const cancelled = signal?.aborted || error?.name === 'AbortError';
@@ -443,9 +486,9 @@ export async function cancelOperation(root, operationId, env = process.env) {
   return { operationId, status: state.operations.find((item) => item.id === operationId)?.status };
 }
 
-export async function operationStatus(root, operationId, env = process.env) {
-  const current = await readState(root, env);
-  if (!current.ok) throw new Error(`state is ${current.health}`);
+export async function operationStatus(root, operationId, env = process.env, readOptions = {}) {
+  const current = await readState(root, env, readOptions);
+  if (!current.ok) throw current.error ?? new Error(`state is ${current.health}`);
   const operation = current.state.operations.find((item) => item.id === operationId);
   if (!operation) throw new Error('operation not found');
   return structuredClone(operation);

@@ -7,15 +7,19 @@ description: Use for every owner turn in both-participant work mode; queue one c
 
 Both means both on every owner turn. Questions authorize answers only. Codex performs every project file edit; Claude coordinates and verifies. Native permissions remain authoritative.
 
-Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Every Codex turn contains the owner's message verbatim and uses this shared envelope, omitting the Claude section only when no previous owner-visible Claude reply exists:
+Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Every turn carries the owner's message verbatim, and every both-participant turn declares whether a prior owner-visible Claude reply exists. Missing or ambiguous reply status is rejected:
 
 ```text
 OWNER MESSAGE (verbatim):
 <owner words>
 
+CLAUDE REPLY STATUS: provided
+
 CLAUDE REPLY (owner-visible, verbatim):
 <previous owner-visible Claude reply>
 ```
+
+Use `CLAUDE REPLY STATUS: none` and omit the reply section only when no prior owner-visible reply exists. Claude Code does not provide a reliable owner-visible-only transcript field, so verification is reported as unavailable and the explicit declaration is mandatory.
 
 Fabex developer instructions require Codex to report first (a) any scope mismatch and (b) any partnership-parity concern—a rule or change that would make Codex less than a full equal partner. Relay each flag to the owner unedited.
 
@@ -31,11 +35,14 @@ Owner approval does not change the prescribed executor. An exception is valid on
 
 From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`. If participants are `claude`, switch to `both`. Never implement while discussion or ask-once is active; ask the owner to invoke `/work` or `/workClaude`.
 
-Submit short single-line text with `controller.mjs submit --message '<owner message>'`. For multiline text or any message containing shell-significant characters, use the exact guarded quoted-heredoc form below with a fresh delimiter that does not occur in the message. The quoted delimiter prevents shell interpolation; do not escape or rewrite the body.
+Submit the structured JSON envelope with `controller.mjs submit --message '<json>'`. For multiline text or shell-significant characters, use the exact guarded quoted-heredoc form below with a fresh delimiter. The quoted delimiter prevents shell interpolation; do not escape or rewrite the body.
 
 ```sh
 node "/absolute/plugin/path/scripts/controller.mjs" submit <<'FABEX_OWNER_7F3A2C91'
-<owner message verbatim>
+OWNER MESSAGE (verbatim):
+<owner words>
+
+CLAUDE REPLY STATUS: none
 FABEX_OWNER_7F3A2C91
 ```
 
@@ -57,7 +64,7 @@ The controller verifies the first `thread.started` event and requires its `threa
 1. State one short task-and-criteria framing line from the owner's words.
 2. Submit the owner message once. Poll genuine progress without flooding the owner.
 3. On completion, inspect the bounded result and relay parity flags unedited.
-4. Independently run the owner's verification and collect exit codes and a bounded diffstat.
+4. Independently run the owner's verification and collect exit codes and a bounded diffstat. Safe named package-manager scripts and read-only output-filter pipelines are supported.
 5. If verification fails, submit a correction on the same canonical thread with original criteria and essential evidence, then reverify.
 
 ## Decide lane

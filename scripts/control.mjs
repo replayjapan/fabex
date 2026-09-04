@@ -3,6 +3,7 @@ import { access, readFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, checkpointWarnings, MAX_RECOVERY_SEED_BYTES, recoverySeedBytes } from './lib/checkpoint.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
@@ -11,9 +12,12 @@ import { compactCheckpointArray, replaceCheckpointArray, repositoryFingerprint, 
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 
+const USAGE = 'Usage: control.mjs status [--all|--brief] | config | diagnose | checkpoint [--help|capacity|export|...] | mode | recover | executor-exception';
+const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
+
 async function currentState(root) {
   const result = await readState(root, process.env);
-  if (!result.ok) throw new Error(`state is ${result.health}; remain recovery-read-only and use recover or diagnose`);
+  if (!result.ok) throw result.error ?? new Error(`state is ${result.health}; remain recovery-read-only and use recover or diagnose`);
   return result;
 }
 
@@ -46,20 +50,25 @@ async function mode(root, target, participants = 'both') {
   process.stdout.write(`${formatModeTransition(from, to)}\nNative permissions and sandbox: unchanged. Codex SDK sandbox is selected per queued turn.\n`);
 }
 
-async function status(root) {
+async function status(root, view = 'default') {
   const result = await readState(root, process.env);
   const effective = await loadEffectiveConfig(result.paths.canonicalRoot, process.env);
   let fingerprintError = null;
-  const currentFingerprint = await repositoryFingerprint(result.paths.canonicalRoot, effective.config).catch((error) => {
+  const liveFingerprintValue = await repositoryFingerprint(result.paths.canonicalRoot, effective.config).catch((error) => {
     fingerprintError = error.message;
     return { branch: null, head: null, dirty: null };
   });
   const checkpoint = result.state.partner.thread.checkpoint;
   const warnings = checkpointWarnings(checkpoint, result.state.partner.thread.metadata, { repositoryRootConfigured: effective.config.project.repositoryRoot !== null });
   if (fingerprintError) warnings.push(`repositoryRoot is invalid: ${fingerprintError}`.slice(0, 256));
-  const operations = result.state.operations.map(({ id, status: operationStatus, externalId, lifecycle }) => ({ id, status: operationStatus, externalId, lifecycle }));
-  process.stdout.write(`${JSON.stringify({
+  const capturedValue = result.state.partner.thread.metadata.repoFingerprint;
+  if (!isDeepStrictEqual(capturedValue, liveFingerprintValue)) warnings.push('captured fingerprint differs from live');
+  const terminal = result.state.operations.filter((operation) => ['completed', 'failed', 'cancelled'].includes(operation.status)).slice(-3);
+  const selected = view === 'all' ? result.state.operations : result.state.operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status) || terminal.includes(operation));
+  const operations = selected.map(({ id, status: operationStatus, externalId, lifecycle }) => ({ id, status: operationStatus, externalId, lifecycle }));
+  const output = {
     health: result.health,
+    ...(result.lock ? { lock: result.lock } : {}),
     route: result.state.route,
     participants: result.state.participants,
     returnTo: result.state.returnTo,
@@ -72,12 +81,16 @@ async function status(root) {
       status: result.state.partner.status,
       envelope: result.state.partner.envelope,
       thread: { threadId: result.state.partner.thread.threadId, metadata: result.state.partner.thread.metadata },
-      checkpoint: { updatedAt: checkpoint.updatedAt, warnings, recoverySeedBytes: recoverySeedBytes(checkpoint, result.paths.canonicalRoot), recoverySeedLimitBytes: MAX_RECOVERY_SEED_BYTES }
+      checkpoint: { updatedAt: checkpoint.updatedAt, repoFingerprintCapturedAt: checkpoint.repoFingerprintCapturedAt, warnings, recoverySeedBytes: recoverySeedBytes(checkpoint, result.paths.canonicalRoot), recoverySeedLimitBytes: MAX_RECOVERY_SEED_BYTES }
     },
-    controller: result.state.controller,
-    currentRepoFingerprint: currentFingerprint,
-    operations
-  }, null, 2)}\n`);
+    capturedRepoFingerprint: { ...capturedValue, capturedAt: result.state.partner.thread.metadata.repoFingerprintCapturedAt },
+    liveRepoFingerprint: { ...liveFingerprintValue, computedAt: new Date().toISOString() }
+  };
+  if (view !== 'brief') {
+    output.controller = result.state.controller;
+    output.operations = operations;
+  }
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   if (!result.ok) process.exitCode = 2;
 }
 
@@ -107,6 +120,10 @@ function checkpointCapacity(value, root) {
 }
 
 async function checkpoint(root, args) {
+  if (args.length === 0 || (args.length === 1 && args[0] === '--help')) {
+    process.stdout.write(`${CHECKPOINT_USAGE}\n`);
+    return;
+  }
   const current = await currentState(root);
   const value = current.state.partner.thread.checkpoint;
   if (args[0] === 'capacity' && args.length === 1) {
@@ -165,8 +182,11 @@ async function executorException(root, args) {
 }
 
 async function config(root) {
-  await initializeState(root, process.env);
-  process.stdout.write(`${JSON.stringify(await loadEffectiveConfig(root, process.env), null, 2)}\n`);
+  const state = await readState(root, process.env);
+  const output = await loadEffectiveConfig(root, process.env);
+  if (!state.ok) output.stateRead = { health: state.health, lock: state.lock };
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  if (!state.ok) process.exitCode = 2;
 }
 
 async function recover(root, args) {
@@ -226,7 +246,10 @@ async function diagnose(root) {
   try { metadata = JSON.parse(await readFile(resolve(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')); } catch {}
   const state = await readState(root, process.env);
   let hooksValid = false;
-  try { JSON.parse(await readFile(resolve(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8')); hooksValid = true; } catch {}
+  try {
+    const hooks = JSON.parse(await readFile(resolve(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))?.hooks;
+    hooksValid = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'].every((name) => Array.isArray(hooks?.[name]) && hooks[name].length > 0);
+  } catch {}
   let sdkInstalled = false;
   try { await access(resolve(PLUGIN_ROOT, 'node_modules', '@openai', 'codex-sdk', 'package.json')); sdkInstalled = true; } catch {}
   let packageMetadata = {};
@@ -244,29 +267,47 @@ async function diagnose(root) {
     if (entry && typeof entry === 'object') installed = { registryVersion: entry.version ?? null, installPath: entry.installPath ?? entry.install_path ?? null, matchesSource: entry.version === metadata.version };
   } catch {}
   if (installed.registryVersion && !installed.matchesSource) installWarnings.push('installed Fabex registry metadata differs from the loaded source; update or reinstall the plugin, then restart Claude Code');
+  const lastRecordedTurn = state.state.partner.thread.metadata.lastRecordedTurn;
+  const activationVerified = state.ok && metadata.version && metadata.version !== 'unknown' && lastRecordedTurn?.version === metadata.version;
+  const reloadRequired = installed.registryVersion && !installed.matchesSource ? true
+    : installed.matchesSource && installed.installPath && resolve(installed.installPath) === PLUGIN_ROOT ? false : 'unknown';
+  const activation = {
+    sourceVersion: metadata.version ?? 'unknown',
+    registryVersion: installed.registryVersion,
+    matchesSource: installed.matchesSource,
+    hooksValid,
+    reloadRequired,
+    lastRecordedTurn,
+    verdict: !state.ok ? 'unknown' : activationVerified ? 'verified by a recorded turn on this version' : 'not verified: no turn recorded on this version'
+  };
   process.stdout.write(`${JSON.stringify({
     plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown', loadedRoot: PLUGIN_ROOT, beta: true, installed, warnings: installWarnings },
     node: process.version,
     platform: { value: platform(), support: platform() === 'darwin' ? 'macOS supported' : platform() === 'win32' ? 'Windows experimental' : 'not documented as supported' },
     hooks: { configPresentAndValidJson: hooksValid },
-    state: { health: state.health, route: state.state.route, participants: state.state.participants, label: formatMode(state.state.route, state.state.participants), transaction },
+    state: { health: state.health, ...(state.lock ? { lock: state.lock } : {}), route: state.state.route, participants: state.state.participants, label: formatMode(state.state.route, state.state.participants), transaction },
+    activation,
     codex: {
       transport: 'official TypeScript SDK',
       dependency: packageMetadata.dependencies?.['@openai/codex-sdk'] ?? null,
       installed: sdkInstalled,
-      authentication: 'existing Codex CLI ChatGPT subscription sign-in only; Fabex has no API-key option',
-      activationVerification: 'pending plugin install/reload and live dogfood'
+      authentication: 'existing Codex CLI ChatGPT subscription sign-in only; Fabex has no API-key option'
     },
-    effective: { networkAccessEnabled: effective.config.models.codex.networkAccessEnabled, repositoryRoot: effective.config.project.repositoryRoot }
+    effective: {
+      networkAccessEnabled: effective.config.models.codex.networkAccessEnabled,
+      repositoryRoot: effective.config.project.repositoryRoot,
+      warnings: effective.warnings
+    }
   }, null, 2)}\n`);
 }
 
 export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
   const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
+  if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }
   if (command === 'mode' && args.length === 1) return mode(root, args[0]);
   if (command === 'mode' && args.length === 3 && args[1] === '--participants') return mode(root, args[0], args[2]);
-  if (command === 'status' && args.length === 0) return status(root);
+  if (command === 'status' && (args.length === 0 || args.length === 1 && ['--all', '--brief'].includes(args[0]))) return status(root, args[0] === '--all' ? 'all' : args[0] === '--brief' ? 'brief' : 'default');
   if (command === 'diagnose' && args.length === 0) return diagnose(root);
   if (command === 'config' && args.length === 0) return config(root);
   if (command === 'recover') return recover(root, args);

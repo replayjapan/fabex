@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.1 - 2026-09-04
+
+Fabex 1.5.1 is a focused reliability and least-privilege release driven by live long-project dogfooding. It preserves canonical Codex continuity, FIFO execution, Codex-only project writing, operational-only Git delivery, fail-closed guards, and verbatim owner-visible context sharing.
+
+- Added argv-token `guard.allowedCommandPatterns` with exact arguments and a one-token `*` wildcard. Relative Node script arguments resolve against the configured repository root and cannot escape the workstream. Executable-only `allowedCommands` remains compatible but now produces an explicit broad-authority warning in config and diagnose.
+- Recognized safe named package-manager verification scripts including `test:<name>`, `check`, and `run <name>` forms while continuing to reject snapshot-update, write, fix, force, and similar mutation flags.
+- Unified quote-aware command composition. Every pipeline, `&&`, or `;` segment is independently allowlisted; quoted alternation remains data, safe Fabex status pipelines work, and mutating segments, output `tee`, substitution, or hidden Git delivery fail closed.
+- Restricted Bash scratch output to one absolute target outside the workstream and inside configured `externalWriteRoots`. Quoted heredocs and simple single-target redirects may append only within those roots; defaults cover the OS temporary directory, Claude project memory, and session scratchpads.
+- Added exact read-only help probes for control, checkpoint, and controller usage.
+- Added bounded lock-contention waiting with exponential backoff for read-only state access. Status, diagnose, config, checkpoint reads, controller status/result, and blocking wait tolerate brief runner locks without deleting or stealing them; timeouts expose only safe lock metadata.
+- Replaced static diagnose activation prose with source/registry comparison, hook validity, reload certainty when knowable, and the last successfully recorded Fabex turn/version. Activation remains explicitly unknown when runtime evidence is insufficient.
+- Made both-participant submissions explicit with `ownerMessage`, `claudeReplyStatus`, and conditional `claudeReply`; any provided owner-visible Claude reply is validated before queueing. Claude Code does not provide a sufficiently reliable owner-visible-only prior reply contract, so Fabex reports verification unavailable and rejects ambiguous envelopes without capturing transcripts.
+- Separated captured and live repository fingerprints in status, added capture/computation timestamps, and warns without mutation when they differ. Successful turns atomically refresh checkpoint time, thread metadata, both stored fingerprints, and the recorded Fabex version.
+- Reduced default status history to active/queued operations plus the last three terminal records; added `status --all` and `status --brief`.
+- Fixed guard ordering so validated controller-submit and checkpoint heredoc bodies may quote protected Git text without being misclassified as shell delivery commands; only their exact executable header is authorized.
+- Added schema 7 with lossless schema-6 migration, named regressions for every 1.5.1 finding, and a nested-repository dogfood fixture. No delivery authority or project-write restriction was relaxed.
+
 ## 1.5.0 - 2026-09-04
 
 Fabex 1.5.0 hardens long-running projects. Codex dogfood feedback identified the first twelve context, checkpoint, authority, repository, network, version, and regression gaps; Claude identified the blocking-wait and substring-guard failures. Integration then exposed the stale resumed-thread instruction and live-plugin update hazards.

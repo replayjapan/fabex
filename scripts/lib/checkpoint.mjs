@@ -26,6 +26,7 @@ export function emptyCheckpoint() {
     unresolvedProblems: [],
     nextAction: null,
     repoFingerprint: { branch: null, head: null, dirty: null },
+    repoFingerprintCapturedAt: null,
     updatedAt: null,
     fieldUpdatedAt: emptyFieldUpdatedAt()
   };

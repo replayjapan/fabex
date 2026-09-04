@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { readState } from './lib/state.mjs';
+import { normalizeSubmissionEnvelope } from './lib/sdk-controller.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
@@ -12,7 +13,7 @@ const SKILL_TOOLS = new Set(['Skill', 'SlashCommand']);
 const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'discussionClaude', 'discussionCodex', 'work', 'workClaude', 'status', 'diagnose', 'recover']);
 const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
 const CONTROLLER_PATH = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
-const SAFE_UNHEALTHY = new Set(['status', 'config', 'diagnose', 'controller-status', 'controller-result', 'controller-cancel', 'controller-wait', 'clear-dead-lock', 'recover-inspect', 'recover-abandon', 'recover-replace-missing-thread', 'recover-resolve-transaction']);
+const SAFE_UNHEALTHY = new Set(['help', 'checkpoint-help', 'status', 'config', 'diagnose', 'controller-help', 'controller-status', 'controller-result', 'controller-cancel', 'controller-wait', 'clear-dead-lock', 'recover-inspect', 'recover-abandon', 'recover-replace-missing-thread', 'recover-resolve-transaction']);
 const OPERATIONAL_AGENT = 'fabex-operational';
 // Plugin-defined agents are reported by the hook harness with their plugin-scoped type.
 // Reject the bare agent name so an identity outside that contract cannot gain push authority.
@@ -126,7 +127,10 @@ export function parseControlCommand(command) {
   const tokens = simpleTokens(command);
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
-  if (['status', 'config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
+  if (args.length === 0 || args.length === 1 && args[0] === '--help') return { kind: 'help' };
+  if (args[0] === 'status' && (args.length === 1 || args.length === 2 && ['--all', '--brief'].includes(args[1]))) return { kind: 'status' };
+  if (['config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
+  if (args[0] === 'checkpoint' && (args.length === 1 || args.length === 2 && args[1] === '--help')) return { kind: 'checkpoint-help' };
   if (args[0] === 'checkpoint' && ['capacity', 'export'].includes(args[1]) && args.length === 2) return { kind: `checkpoint-${args[1]}` };
   const fields = new Set(['objective', 'current-task', 'constraint', 'decision', 'relevant-file', 'implementation-status', 'test-status', 'unresolved-problem', 'next-action']);
   if (args[0] === 'checkpoint' && fields.has(args[1]) && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 8192 && args.length === 3) return { kind: 'checkpoint' };
@@ -143,20 +147,27 @@ export function parseControlCommand(command) {
   return null;
 }
 
-export function parseControllerCommand(command) {
+export function parseControllerCommand(command, { participants = null } = {}) {
+  const acceptedSubmit = (message) => {
+    if (participants === 'both') {
+      try { normalizeSubmissionEnvelope(message, participants); } catch { return null; }
+    }
+    return { kind: 'controller-submit', message };
+  };
   if (typeof command === 'string' && command.includes('\n')) {
     const lines = command.split('\n');
     if (lines.at(-1) === '') lines.pop();
     const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+submit\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
     if (header && resolve(header[1] ?? header[2] ?? header[3]) === CONTROLLER_PATH && lines.at(-1) === header[4]) {
       const message = lines.slice(1, -1).join('\n');
-      if (message.trim() && Buffer.byteLength(message, 'utf8') <= 192 * 1024) return { kind: 'controller-submit' };
+      if (message.trim() && Buffer.byteLength(message, 'utf8') <= 192 * 1024) return acceptedSubmit(message);
     }
   }
   const tokens = simpleTokens(command);
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROLLER_PATH) return null;
   const args = tokens.slice(2);
-  if (args[0] === 'submit' && args.length === 3 && args[1] === '--message' && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 192 * 1024) return { kind: 'controller-submit' };
+  if (args.length === 1 && args[0] === '--help') return { kind: 'controller-help' };
+  if (args[0] === 'submit' && args.length === 3 && args[1] === '--message' && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 192 * 1024) return acceptedSubmit(args[2]);
   if (['status', 'result', 'cancel'].includes(args[0]) && args.length === 3 && args[1] === '--operation-id' && UUID_RE.test(args[2])) return { kind: `controller-${args[0]}` };
   if (args[0] === 'wait' && args.length === 5 && args[1] === '--operation-id' && UUID_RE.test(args[2]) && args[3] === '--timeout' && /^\d+$/.test(args[4]) && Number(args[4]) >= 1 && Number(args[4]) <= 590) return { kind: 'controller-wait' };
   return null;
@@ -210,7 +221,26 @@ function commandIndex(tokens) {
   return index;
 }
 
-function allowedBashCommand(command, config) {
+function commandPatternMatches(tokens, config, root) {
+  const index = commandIndex(tokens);
+  const executable = executableName(tokens[index]);
+  const args = tokens.slice(index + 1);
+  const repositoryBase = resolve(root, config?.project?.repositoryRoot ?? '.');
+  return (config?.guard?.allowedCommandPatterns ?? []).some((pattern) => {
+    if (executableName(pattern.executable) !== executable || pattern.args.length !== args.length) return false;
+    return pattern.args.every((expected, argumentIndex) => {
+      const actual = args[argumentIndex];
+      if (expected === '*') return true;
+      const scriptPath = executable === 'node' && argumentIndex === 0 && !expected.startsWith('-');
+      if (!scriptPath) return actual === expected;
+      const expectedPath = resolve(repositoryBase, expected);
+      const actualPath = resolve(repositoryBase, actual);
+      return insideRoot(expectedPath, root) && insideRoot(actualPath, root) && expectedPath === actualPath;
+    });
+  });
+}
+
+function allowedBashCommand(command, config, root) {
   const tokens = simpleTokens(command);
   if (!tokens) return false;
   const index = commandIndex(tokens);
@@ -218,12 +248,18 @@ function allowedBashCommand(command, config) {
   const args = tokens.slice(index + 1);
   const extras = new Set((config?.guard?.allowedCommands ?? []).map((value) => executableName(value)));
   if (extras.has(executable)) return true;
+  if (commandPatternMatches(tokens, config, root)) return true;
   if (executable === 'sed') return args.includes('-n') && !args.some((arg) => arg === '-i' || arg.startsWith('-i'));
   if (executable === 'env') return args.length === 0;
   if (executable === 'find') return !args.some((arg) => ['-delete', '-exec', '-execdir', '-ok', '-okdir'].includes(arg));
   if (BASE_READ_COMMANDS.has(executable)) return true;
   if (executable === 'node') return args.length === 1 && args[0] === '--version' || args[0] === '--test';
-  if (['pnpm', 'npm', 'yarn'].includes(executable)) return ['test', 'lint', 'build', 'typecheck'].includes(args[0]) && !args.some((arg) => ['--write', '--fix', '--update', '-u'].includes(arg));
+  if (['pnpm', 'npm', 'yarn'].includes(executable)) {
+    const mutationFlags = new Set(['--update', '-u', '--update-snapshot', '--write', '--fix', '--force']);
+    if (args.some((arg) => mutationFlags.has(arg) || [...mutationFlags].some((flag) => arg.startsWith(`${flag}=`)))) return false;
+    const script = args[0] === 'run' ? args[1] : args[0];
+    return ['test', 'lint', 'typecheck', 'build', 'check'].includes(script) || /^test:[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/.test(script ?? '');
+  }
   if (executable === 'npx') return ['vitest', 'jest', 'tsc'].includes(executableName(args[0])) && !args.some((arg) => ['--write', '--fix', '--update', '-u'].includes(arg));
   if (executable === 'git') {
     let cursor = index + 1;
@@ -302,30 +338,64 @@ function safeCommandSegments(command) {
   return segments;
 }
 
-function allowedComposedBashCommand(command, config) {
+const SAFE_COMPOSED_CONTROLS = new Set(['status', 'config', 'diagnose', 'checkpoint-capacity', 'checkpoint-export', 'help', 'checkpoint-help', 'controller-status', 'controller-result', 'controller-wait', 'controller-help']);
+
+function allowedSafeSegment(segment, config, root) {
+  const control = parseControlCommand(segment) ?? parseControllerCommand(segment);
+  if (control) return SAFE_COMPOSED_CONTROLS.has(control.kind);
+  const tokens = simpleTokens(segment);
+  if (!tokens) return false;
+  const index = commandIndex(tokens);
+  const executable = executableName(tokens[index]);
+  if (executable === 'cd') return tokens.length === index + 2;
+  if (executable === 'xargs') {
+    const nested = tokens.slice(index + 1);
+    return nested.length > 0 && !nested[0].startsWith('-') && allowedBashCommand(nested.join(' '), config, root);
+  }
+  return allowedBashCommand(segment, config, root);
+}
+
+function allowedComposedBashCommand(command, config, root) {
   const segments = safeCommandSegments(command);
   if (!segments) return false;
-  return segments.every((segment) => {
-    const tokens = simpleTokens(segment);
-    if (tokens && executableName(tokens[commandIndex(tokens)]) === 'cd') return tokens.length === commandIndex(tokens) + 2;
-    return allowedBashCommand(segment, config);
+  return segments.every((segment) => allowedSafeSegment(segment, config, root));
+}
+
+function directOperationalDeliverySegment(segment) {
+  const tokens = simpleTokens(segment);
+  if (!tokens || !protectedSimpleCommand(tokens)) return false;
+  const index = commandIndex(tokens);
+  const executable = executableName(tokens[index]);
+  return ['git', 'gh', 'command', 'env', 'exec'].includes(executable);
+}
+
+function allowedOperationalDelivery(command, config, root) {
+  const segments = safeCommandSegments(command);
+  return Boolean(segments?.every((segment) => directOperationalDeliverySegment(segment) || allowedSafeSegment(segment, config, root)));
+}
+
+function permittedExternalTarget(target, root, config) {
+  if (!isAbsolute(target) || insideRoot(target, root)) return false;
+  const normalized = resolve(target);
+  return (config?.guard?.externalWriteRoots ?? []).some((pattern) => {
+    const absolutePattern = resolve(pattern);
+    if (!absolutePattern.includes('*')) return insideRoot(normalized, absolutePattern);
+    const escaped = absolutePattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '[^/]*');
+    return new RegExp(`^${escaped}(?:/.*)?$`).test(normalized);
   });
 }
 
-function externalOnlyWriteCommand(command, root) {
+function externalOnlyWriteCommand(command, root, config) {
   const lines = typeof command === 'string' ? command.split('\n') : [];
-  const heredoc = /^\s*cat\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'\s*>\s*("[^"]+"|'[^']+'|\/[^\s;]+)\s*$/.exec(lines[0] ?? '')
-    ?? /^\s*cat\s*>\s*("[^"]+"|'[^']+'|\/[^\s;]+)\s*<<'([A-Za-z][A-Za-z0-9_]{7,63})'\s*$/.exec(lines[0] ?? '');
+  const heredoc = /^\s*cat\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'\s*(>|>>)\s*("[^"]+"|'[^']+'|\/[^\s;]+)\s*$/.exec(lines[0] ?? '');
   if (heredoc) {
-    const delimiterFirst = lines[0].includes("<<'") && lines[0].indexOf("<<'") < lines[0].indexOf('>');
-    const delimiter = delimiterFirst ? heredoc[1] : heredoc[2];
-    const target = (delimiterFirst ? heredoc[2] : heredoc[1]).replace(/^['"]|['"]$/g, '');
-    return lines.at(-1) === delimiter && isAbsolute(target) && !insideRoot(target, root);
+    const target = heredoc[3].replace(/^['"]|['"]$/g, '');
+    return lines.at(-1) === heredoc[1] && permittedExternalTarget(target, root, config);
   }
-  if (typeof command !== 'string' || /(?:^|[^>])>>(?!>)/.test(command)) return false;
-  const targets = [...command.matchAll(/(?:^|[^>])>\s*("[^"]+"|'[^']+'|\/[^\s\n;]+)/g)].map((match) => match[1].replace(/^['"]|['"]$/g, ''));
-  if (targets.length !== 1 || !isAbsolute(targets[0]) || insideRoot(targets[0], root)) return false;
-  return /^\s*(?:cat|echo|printf)\b/.test(command) && !/[;&|`$()]/.test(command.replace(/<<'[^']+'/g, ''));
+  if (lines.length !== 1 || /[`$();|&<>]/.test(command.replace(/\s*(?:>|>>)\s*(?:"[^"]+"|'[^']+'|\/[^\s;]+)\s*$/, ''))) return false;
+  const simple = /^\s*(?:cat|echo|printf)\b([^\n]*?)\s*(>|>>)\s*("[^"]+"|'[^']+'|\/[^\s;]+)\s*$/.exec(command);
+  if (!simple || /[`$();|&<>]/.test(simple[1])) return false;
+  return permittedExternalTarget(simple[3].replace(/^['"]|['"]$/g, ''), root, config);
 }
 
 function readOnlyMcpTool(toolName, config) {
@@ -354,13 +424,22 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
 
 export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {}, config = null }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
+  const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
+  const controller = toolName === 'Bash' ? parseControllerCommand(toolInput.command, { participants: state.participants }) : null;
+  const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
+  if (toolName === 'Bash' && structuralController?.kind === 'controller-submit' && !controller) return deny('both-participant submit requires an explicit valid Claude reply status');
+  if (toolName === 'Bash' && (controller?.kind === 'controller-submit' || ['checkpoint-replace', 'checkpoint-snapshot'].includes(control?.kind))) {
+    if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
+    if (state.route === 'recovery-read-only') return deny('recovery-read-only denies this command');
+    return defer();
+  }
   const protectedOperation = toolName === 'Bash' ? protectedGithubOperation(toolInput.command) : null;
   if (protectedOperation && !isOperationalExecutor(executor)) {
     return deny(`${protectedOperation} requires a verified ${OPERATIONAL_AGENT} subagent; main-session, alternate-agent, and ambiguous executor identities are denied`);
   }
+  if (protectedOperation && !allowedOperationalDelivery(toolInput.command, config, paths.canonicalRoot)) return deny('Git delivery commands must be direct, parseable, and composed only with allowlisted read or delivery segments');
   if (toolName === 'Bash') {
-    const controller = parseControllerCommand(toolInput.command);
-    if (invokesFabexScript(toolInput.command, CONTROLLER_PATH) && !controller) return deny('only exact Fabex controller submit, status, result, cancel, and wait entry points are allowed');
+    if (invokesFabexScript(toolInput.command, CONTROLLER_PATH) && !controller) return deny('only exact Fabex controller submit, status, result, cancel, wait, and help entry points are allowed');
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
     if (controller?.kind === 'controller-submit' && state.route === 'recovery-read-only') return deny('recovery-read-only denies new Codex SDK turns');
   }
@@ -372,10 +451,10 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     if (WRITE_TOOLS.has(toolName)) return defer();
     if (READ_TOOLS.has(toolName) || isPluginSkill(toolName, toolInput)) return defer();
     if (toolName === 'Bash') {
-      const control = parseControlCommand(toolInput.command) ?? parseControllerCommand(toolInput.command);
-      if (control) return defer();
+      const exactControl = control ?? controller;
+      if (exactControl) return defer();
       if (activeExecutorException(state, toolName, executor)) return defer();
-      if (allowedBashCommand(toolInput.command, config) || allowedComposedBashCommand(toolInput.command, config) || externalOnlyWriteCommand(toolInput.command, paths.canonicalRoot)) return defer();
+      if (allowedBashCommand(toolInput.command, config, paths.canonicalRoot) || allowedComposedBashCommand(toolInput.command, config, paths.canonicalRoot) || externalOnlyWriteCommand(toolInput.command, paths.canonicalRoot, config)) return defer();
       return deny('normal Fabex mode permits Bash only through the read/verification allowlist, exact Fabex controls, or writes whose only target is an absolute path outside the workstream root');
     }
     if (toolName.startsWith('mcp__')) return readOnlyMcpTool(toolName, config) || activeExecutorException(state, toolName, executor) ? defer() : deny('normal Fabex mode permits only allowlisted read-only MCP tools');

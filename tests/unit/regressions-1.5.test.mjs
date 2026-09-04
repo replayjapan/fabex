@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { checkpointWarnings } from '../../scripts/lib/checkpoint.mjs';
 import { loadEffectiveConfig } from '../../scripts/lib/config.mjs';
 import { classifyToolUse, parseControllerCommand, parseControlCommand, protectedGithubOperation } from '../../scripts/hook-route-guard.mjs';
-import { developerInstructions, resolveRepositoryDirectory, runOperation, submitOperation, claimNextOperation, turnPrompt } from '../../scripts/lib/sdk-controller.mjs';
+import { developerInstructions, resolveRepositoryDirectory, runOperation, submissionEnvelope, submitOperation, claimNextOperation, turnPrompt } from '../../scripts/lib/sdk-controller.mjs';
 import { initialState, initializeState, readState, updateState } from '../../scripts/lib/state.mjs';
 
 const pluginRoot = resolve(import.meta.dirname, '..', '..');
@@ -103,7 +103,7 @@ test('item 3: structured executor exceptions survive decision compaction and pro
 test('item 4: abandon then submit then complete clears sticky partner-unavailable state', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const failed = await submitOperation(project, 'old', env, { spawnRunner: false });
+  const failed = await submitOperation(project, submissionEnvelope('old'), env, { spawnRunner: false });
   await claimNextOperation(project, env);
   let current = await readState(project, env);
   await updateState(project, (state) => {
@@ -112,7 +112,7 @@ test('item 4: abandon then submit then complete clears sticky partner-unavailabl
   }, { expectedGeneration: current.state.generation }, env);
   assert.equal((await run(control, ['recover', 'abandon', '--operation-id', failed.operationId], { cwd: project, env })).code, 0);
   assert.equal((await readState(project, env)).state.task.status, null);
-  await submitOperation(project, 'new', env, { spawnRunner: false });
+  await submitOperation(project, submissionEnvelope('new'), env, { spawnRunner: false });
   const operation = await claimNextOperation(project, env);
   await runOperation(project, operation, { createCodex: sdkFactory([]), signal: new AbortController().signal }, env);
   assert.equal((await readState(project, env)).state.task.status, 'active');
@@ -156,9 +156,10 @@ test('item 8: normal route enforces Bash, subagent edit, and MCP allowlists', as
   assert.equal((await classify('Edit', { file_path: join(project, 'x') }, { agentId: 'sub', agentType: 'worker' })).decision, 'deny');
   for (const command of ['grep x file', "sed -n '1,2p' file", 'git status', 'pnpm test']) assert.equal((await classify('Bash', { command })).decision, 'defer', command);
   for (const command of ["sed -i 's/x/y/' file", 'echo x > file', 'env touch file', 'find . -delete', 'git branch -D old', 'git branch new', 'git diff --output=patch.txt', 'pnpm test -- --update']) assert.equal((await classify('Bash', { command })).decision, 'deny', command);
-  assert.equal((await classify('Bash', { command: `echo x > ${join(project, '..', 'outside.txt')}` })).decision, 'defer');
+  const config = { guard: { externalWriteRoots: [join(project, '..')] } };
+  assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: `echo x > ${join(project, '..', 'outside.txt')}` }, state, paths, config })).decision, 'defer');
   const outside = join(project, '..', 'outside-note');
-  assert.equal((await classify('Bash', { command: `cat <<'FABEX_OUT_12345678' > ${outside}\n$ literal owner text\nFABEX_OUT_12345678` })).decision, 'defer');
+  assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: `cat <<'FABEX_OUT_12345678' > ${outside}\n$ literal owner text\nFABEX_OUT_12345678` }, state, paths, config })).decision, 'defer');
   assert.equal((await classify('mcp__context7__query-docs', {})).decision, 'defer');
   assert.equal((await classify('mcp__service__create_item', {})).decision, 'deny');
   assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: 'custom-verify --check' }, state, paths, config: { guard: { allowedCommands: ['custom-verify'], readOnlyMcpTools: [] } } })).decision, 'defer');
@@ -192,11 +193,11 @@ test('item 9: the entire Git delivery lane is operational-agent-only', () => {
 test('item 10: network is opt-in only for workspace-write and sandbox never becomes danger-full-access', async (t) => {
   const { project, env } = await fixture(t); await mkdir(join(project, '.fabex'));
   await writeFile(join(project, '.fabex', 'config.json'), JSON.stringify({ models: { codex: { networkAccessEnabled: true } } }));
-  await initializeState(project, env); const capture = []; const operation = await (async () => { await submitOperation(project, 'work', env, { spawnRunner: false }); return claimNextOperation(project, env); })();
+  await initializeState(project, env); const capture = []; const operation = await (async () => { await submitOperation(project, submissionEnvelope('work'), env, { spawnRunner: false }); return claimNextOperation(project, env); })();
   await runOperation(project, operation, { createCodex: sdkFactory(capture), signal: new AbortController().signal }, env);
   assert.equal(capture[0].threadOptions.networkAccessEnabled, true); assert.ok(['read-only', 'workspace-write'].includes(capture[0].threadOptions.sandboxMode)); assert.notEqual(capture[0].threadOptions.sandboxMode, 'danger-full-access');
   let current = await readState(project, env); await updateState(project, (state) => { state.route = 'discussion'; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);
-  await submitOperation(project, 'discuss', env, { spawnRunner: false }); const discussion = await claimNextOperation(project, env); await runOperation(project, discussion, { createCodex: sdkFactory(capture), signal: new AbortController().signal }, env);
+  await submitOperation(project, submissionEnvelope('discuss'), env, { spawnRunner: false }); const discussion = await claimNextOperation(project, env); await runOperation(project, discussion, { createCodex: sdkFactory(capture), signal: new AbortController().signal }, env);
   assert.equal(capture[1].threadOptions.networkAccessEnabled, false); assert.equal(capture[1].threadOptions.sandboxMode, 'read-only');
 });
 
@@ -214,7 +215,7 @@ test('item 12: regression suite names every reported failure item', async () => 
 
 test('item 13: blocking wait returns terminal state and reports timeout', async (t) => {
   const { project, env } = await fixture(t); await initializeState(project, env);
-  const pending = await submitOperation(project, 'queued', env, { spawnRunner: false });
+  const pending = await submitOperation(project, submissionEnvelope('queued'), env, { spawnRunner: false });
   const timed = await run(controller, ['wait', '--operation-id', pending.operationId, '--timeout', '1'], { cwd: project, env });
   assert.equal(timed.code, 3); assert.equal(JSON.parse(timed.stdout).status, 'queued');
   await import('../../scripts/lib/sdk-controller.mjs').then(({ cancelOperation }) => cancelOperation(project, pending.operationId, env));
@@ -238,9 +239,13 @@ test('item 15: developer instructions are route-neutral and every resumed prompt
 
 test('item 16: intermediate schema 6 state loads without losing thread or decisions', async (t) => {
   const { project, env } = await fixture(t); const initialized = await initializeState(project, env);
-  const intermediate = structuredClone(initialized.state); intermediate.partner.thread.threadId = 'preserved-v6'; intermediate.partner.thread.checkpoint.acceptedDecisions = ['keep'];
+  const intermediate = structuredClone(initialized.state); intermediate.schemaVersion = 6; intermediate.partner.thread.threadId = 'preserved-v6'; intermediate.partner.thread.checkpoint.acceptedDecisions = ['keep'];
+  intermediate.executorException = { executor: 'claude-main', scope: 'project file edits', reason: 'preserve', authorizedAt: '2026-09-04T00:00:00.000Z' };
+  intermediate.partner.thread.checkpoint.updatedAt = '2026-09-04T00:00:00.000Z'; intermediate.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions = '2026-09-04T00:00:00.000Z';
+  delete intermediate.partner.thread.checkpoint.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.lastRecordedTurn;
   await writeFile(initialized.paths.stateFile, JSON.stringify(intermediate));
-  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
+  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 7); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
+  assert.equal(loaded.state.executorException.reason, 'preserve'); assert.equal(loaded.state.partner.thread.checkpoint.updatedAt, '2026-09-04T00:00:00.000Z'); assert.equal(loaded.state.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions, '2026-09-04T00:00:00.000Z');
 });
 
 test('guard accepts sanctioned checkpoint heredocs only in exact shapes', () => {

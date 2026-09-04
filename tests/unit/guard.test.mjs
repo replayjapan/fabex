@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { classifyToolUse, classifyUnhealthyToolUse, parseControllerCommand, parseControlCommand, protectedGithubOperation } from '../../scripts/hook-route-guard.mjs';
 import { PLUGIN_ROOT } from '../../scripts/lib/paths.mjs';
+import { submissionEnvelope } from '../../scripts/lib/sdk-controller.mjs';
 import { initialState } from '../../scripts/lib/state.mjs';
 
 async function fixture(t) {
@@ -31,10 +32,10 @@ test('exact SDK controller entry points are gated and the internal runner is den
   const ctx = await fixture(t);
   const controller = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
   const id = '11111111-1111-4111-8111-111111111111';
-  const submit = `node ${controller} submit --message 'owner message with $ literal'`;
+  const submit = `node ${controller} submit --message '${submissionEnvelope('owner message with $ literal')}'`;
   assert.equal(parseControllerCommand(submit).kind, 'controller-submit');
   assert.equal((await classify(ctx, 'Bash', { command: submit })).decision, 'defer');
-  const heredoc = `node "${controller}" submit <<'FABEX_OWNER_A1B2C3D4'\nowner's $HOME and $(literal)\n\`code\` | symbols\nFABEX_OWNER_A1B2C3D4`;
+  const heredoc = `node "${controller}" submit <<'FABEX_OWNER_A1B2C3D4'\nOWNER MESSAGE (verbatim):\nowner's $HOME and $(literal)\n\`code\` | symbols\n\nCLAUDE REPLY STATUS: none\nFABEX_OWNER_A1B2C3D4`;
   assert.equal(parseControllerCommand(heredoc).kind, 'controller-submit');
   assert.equal((await classify(ctx, 'Bash', { command: heredoc })).decision, 'defer');
   for (const action of ['status', 'result', 'cancel']) {
@@ -63,7 +64,7 @@ test('discussion allows exact SDK controls but denies writes and unrelated effec
   const ctx = await fixture(t);
   ctx.state.route = 'discussion';
   const controller = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
-  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message discuss` })).decision, 'defer');
+  assert.equal((await classify(ctx, 'Bash', { command: `node ${controller} submit --message '${submissionEnvelope('discuss')}'` })).decision, 'defer');
   assert.equal((await classify(ctx, 'Write', { file_path: 'x' })).decision, 'deny');
   assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'obsolete' })).decision, 'deny');
 });

@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { renderSessionContext } from '../../scripts/hook-session.mjs';
-import { claimNextOperation, submitOperation } from '../../scripts/lib/sdk-controller.mjs';
+import { claimNextOperation, submissionEnvelope, submitOperation } from '../../scripts/lib/sdk-controller.mjs';
 import { initializeState, readState, updateState } from '../../scripts/lib/state.mjs';
 
 const root = resolve(import.meta.dirname, '..', '..');
@@ -99,7 +99,7 @@ test('structured checkpoint controls update bounded fields and status omits thei
 test('controller status, result, and queued cancellation use isolated state', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const submitted = await submitOperation(project, 'retained only while queued', env, { spawnRunner: false });
+  const submitted = await submitOperation(project, submissionEnvelope('retained only while queued'), env, { spawnRunner: false });
   const status = await run(controller, ['status', '--operation-id', submitted.operationId], { cwd: project, env });
   assert.equal(status.code, 0, status.stderr);
   assert.doesNotMatch(status.stdout, /retained only while queued/);
@@ -115,7 +115,7 @@ test('controller status, result, and queued cancellation use isolated state', as
 test('confirmed missing-session recovery clears only the exact failed canonical id', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const submitted = await submitOperation(project, 'resume', env, { spawnRunner: false });
+  const submitted = await submitOperation(project, submissionEnvelope('resume'), env, { spawnRunner: false });
   await claimNextOperation(project, env);
   const current = await readState(project, env);
   await updateState(project, (state) => {
@@ -157,7 +157,7 @@ test('controls resolve subdirectories to owning workstream and diagnose pinned S
   assert.equal(checkpoint.code, 0, checkpoint.stderr);
   assert.deepEqual((await readState(project, env)).state.partner.thread.checkpoint.acceptedDecisions, ['from child']);
   const diagnosed = JSON.parse((await controlRun(project, env, 'diagnose')).stdout);
-  assert.equal(diagnosed.plugin.version, '1.5.0');
+  assert.equal(diagnosed.plugin.version, '1.5.1');
   assert.equal(diagnosed.codex.transport, 'official TypeScript SDK');
   assert.equal(diagnosed.codex.installed, true);
   assert.equal(diagnosed.codex.dependency, '0.149.0');

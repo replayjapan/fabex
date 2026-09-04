@@ -1,7 +1,7 @@
 import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_MUTABLE_FIELDS } from './checkpoint.mjs';
 import { isValidMode, PARTICIPANTS } from './mode.mjs';
 
-export const STATE_SCHEMA_VERSION = 6;
+export const STATE_SCHEMA_VERSION = 7;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -41,16 +41,21 @@ function validFingerprint(value) {
 }
 
 function validateCheckpoint(checkpoint, projectRoot, errors) {
-  const keys = ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'updatedAt', 'fieldUpdatedAt'];
+  const keys = ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'repoFingerprintCapturedAt', 'updatedAt', 'fieldUpdatedAt'];
   if (!hasExactKeys(checkpoint, keys)) { errors.push('partner checkpoint shape is invalid'); return; }
   for (const key of ['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction']) {
     if (!boundedNullableString(checkpoint[key], 8192)) errors.push(`checkpoint ${key} is invalid`);
   }
   for (const [field, limit] of Object.entries(CHECKPOINT_ARRAY_LIMITS)) if (!boundedStrings(checkpoint[field], limit.count, limit.bytes)) errors.push(`checkpoint ${field} is invalid`);
   if (!validFingerprint(checkpoint.repoFingerprint)) errors.push('checkpoint repoFingerprint is invalid');
+  if (!nullableIsoString(checkpoint.repoFingerprintCapturedAt)) errors.push('checkpoint repoFingerprintCapturedAt is invalid');
   if (!nullableIsoString(checkpoint.updatedAt)) errors.push('checkpoint updatedAt is invalid');
   if (!hasExactKeys(checkpoint.fieldUpdatedAt, CHECKPOINT_MUTABLE_FIELDS) || CHECKPOINT_MUTABLE_FIELDS.some((field) => !nullableIsoString(checkpoint.fieldUpdatedAt?.[field]))) errors.push('checkpoint fieldUpdatedAt is invalid');
   try { buildRecoverySeed(checkpoint, projectRoot); } catch (error) { errors.push(error.message); }
+}
+
+function validRecordedTurn(value) {
+  return value === null || (hasExactKeys(value, ['at', 'version']) && value.at !== null && nullableIsoString(value.at) && boundedString(value.version, 64));
 }
 
 function validateOperation(operation, errors) {
@@ -86,7 +91,7 @@ export function validateState(state, identity) {
   if (!hasExactKeys(state?.partner, ['transport', 'status', 'thread', 'envelope']) || state?.partner?.transport !== 'codex-sdk' || !PARTNER_STATUSES.has(state?.partner?.status)) errors.push('partner fields are invalid');
   if (!hasExactKeys(state?.partner?.thread, ['threadId', 'checkpoint', 'metadata']) || !boundedNullableString(state?.partner?.thread?.threadId, 256)) errors.push('canonical partner thread shape is invalid');
   validateCheckpoint(state?.partner?.thread?.checkpoint, state?.project?.canonicalRoot ?? 'project', errors);
-  if (!hasExactKeys(state?.partner?.thread?.metadata, ['turnCount', 'lastUsedAt', 'repoFingerprint']) || !Number.isSafeInteger(state?.partner?.thread?.metadata?.turnCount) || state.partner.thread.metadata.turnCount < 0 || !boundedNullableString(state.partner.thread.metadata.lastUsedAt, 64) || !validFingerprint(state.partner.thread.metadata.repoFingerprint)) errors.push('partner thread metadata is invalid');
+  if (!hasExactKeys(state?.partner?.thread?.metadata, ['turnCount', 'lastUsedAt', 'repoFingerprint', 'repoFingerprintCapturedAt', 'lastRecordedTurn']) || !Number.isSafeInteger(state?.partner?.thread?.metadata?.turnCount) || state.partner.thread.metadata.turnCount < 0 || !boundedNullableString(state.partner.thread.metadata.lastUsedAt, 64) || !validFingerprint(state.partner.thread.metadata.repoFingerprint) || !nullableIsoString(state.partner.thread.metadata.repoFingerprintCapturedAt) || !validRecordedTurn(state.partner.thread.metadata.lastRecordedTurn)) errors.push('partner thread metadata is invalid');
   if (!hasExactKeys(state?.partner?.envelope, ['cwd', 'sandbox', 'instructionProfile']) || !boundedNullableString(state?.partner?.envelope?.cwd, 4096) || !boundedNullableString(state?.partner?.envelope?.sandbox, 64) || !boundedNullableString(state?.partner?.envelope?.instructionProfile, 128)) errors.push('partner envelope is invalid');
   const validRunnerPid = state?.controller?.runnerPid === null || (Number.isSafeInteger(state?.controller?.runnerPid) && state.controller.runnerPid > 0);
   const validActiveId = state?.controller?.activeOperationId === null || UUID_RE.test(state?.controller?.activeOperationId ?? '');

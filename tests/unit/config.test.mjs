@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadEffectiveConfig } from '../../scripts/lib/config.mjs';
 
@@ -23,7 +23,11 @@ test('shipped defaults load without configuration', async (t) => {
     collaboration: { jointByDefault: true },
     display: { replyModeBadge: 'always' },
     project: { repositoryRoot: null },
-    guard: { allowedCommands: [], readOnlyMcpTools: ['mcp__context7__*', 'mcp__ide__getDiagnostics'] }
+    guard: {
+      allowedCommands: [], allowedCommandPatterns: [],
+      externalWriteRoots: [join(homedir(), '.claude', 'projects', '*', 'memory'), '/private/tmp/claude-*/*/*/scratchpad', tmpdir()],
+      readOnlyMcpTools: ['mcp__context7__*', 'mcp__ide__getDiagnostics']
+    }
   });
   assert.equal(result.sources.shippedLoaded, true);
   assert.equal(result.sources.machine, join(data, 'config.json'));

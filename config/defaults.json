@@ -19,6 +19,8 @@
   },
   "guard": {
     "allowedCommands": [],
+    "allowedCommandPatterns": [],
+    "externalWriteRoots": [],
     "readOnlyMcpTools": ["mcp__context7__*", "mcp__ide__getDiagnostics"]
   }
 }

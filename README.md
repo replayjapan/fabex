@@ -1,12 +1,12 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.5.0 is being dogfooded. Do not treat it as marketplace-ready until the live continuity, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.5.1 is being dogfooded. Do not treat it as marketplace-ready until the live continuity, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every owner message in a joint or Codex-participant mode is queued onto one continuous Codex thread; Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Owner-visible Claude replies are shared verbatim with Codex on the next turn; private reasoning and tool logs are never relayed.
 
-## What 1.5.0 changes
+## What 1.5.1 changes
 
-Fabex uses the official TypeScript `@openai/codex-sdk`. Release 1.5.0 hardens long projects: bidirectional owner-visible context, atomic checkpoint maintenance and freshness warnings, structured executor exceptions, explicit repository roots, strict Bash/MCP/Git allowlists, opt-in local network access, blocking operation waits, installed-version diagnosis, and an authoritative per-turn route header.
+Fabex uses the official TypeScript `@openai/codex-sdk`. Release 1.5.1 adds exact argv-based command patterns, named verification scripts, consistent safe pipelines, bounded lock waiting, scoped external scratch output, explicit both-participant envelopes, factual activation diagnosis, readable status views, and timestamped live-versus-captured repository fingerprints.
 
 There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hook, structured-content recorder, and begin-authorized tool protocol were removed.
 
@@ -46,7 +46,11 @@ The joint workflow submits a short single-line owner message with:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/controller.mjs" submit --message '<owner message>'
 ```
 
-For multiline or shell-significant text, the skill uses a guard-validated quoted heredoc with a fresh delimiter, preserving the body without interpolation. The submitted body contains `OWNER MESSAGE (verbatim):` and, when available, `CLAUDE REPLY (owner-visible, verbatim):`; it excludes private reasoning and tool logs.
+For `participants=both`, submission is a JSON object with required `ownerMessage` and `claudeReplyStatus` (`provided` or `none`), plus required `claudeReply` when provided. The quoted-heredoc text form uses the same explicit fields. Ambiguous submissions are rejected. Claude Code does not expose a sufficiently reliable owner-visible-only prior-assistant-message contract, so Fabex cannot mechanically compare the supplied reply and reports verification as `unavailable`; it never reads transcripts to guess, or captures reasoning, tool logs, hidden instructions, or scratch content.
+
+```json
+{"ownerMessage":"owner words","claudeReplyStatus":"none"}
+```
 
 Submission returns a UUID immediately. While the operation runs, status reports only genuine SDK lifecycle observations:
 
@@ -59,6 +63,8 @@ Owner messages are limited to 192 KiB so an initial turn plus the maximum 48 KiB
 - `completed`, `failed`, or `cancelled` at a genuine terminal outcome.
 
 Reasoning events and command output are never exposed as progress. Claude may poll with `status`, or block without polling hacks using `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal `result`. A busy controller keeps later messages in durable FIFO order and processes them sequentially on the same thread; v1 has no mid-turn steering.
+
+Read-only state commands wait up to about three seconds for a live state lock using bounded exponential backoff. They never steal or delete it. A timeout reports `lock-contention` with only PID, purpose, and lock age. `controller wait` treats transient lock ownership as normal and continues until the operation or caller timeout ends.
 
 Cancellation is explicit:
 
@@ -148,12 +154,21 @@ Configuration merges field by field from shipped defaults, machine `FABEX_HOME` 
   "project": { "repositoryRoot": "app" },
   "guard": {
     "allowedCommands": [],
+    "allowedCommandPatterns": [
+      {"executable":"pnpm","args":["test:e2e"]},
+      {"executable":"node","args":["scripts/review-screenshots.mjs"]}
+    ],
+    "externalWriteRoots": ["/absolute/team-artifacts"],
     "readOnlyMcpTools": ["mcp__context7__*", "mcp__ide__getDiagnostics"]
   }
 }
 ```
 
-`project.repositoryRoot` is accepted only in the project layer and must be a relative path inside the workstream; Fabex never guesses between nested repositories. `models.codex.networkAccessEnabled` defaults off and affects only `workspace-write` turns; read-only turns remain offline. Fabex never selects `danger-full-access`. Guard command and MCP allowlists may be extended per project. `models.operational` must be passed explicitly when creating `fabex-operational`.
+`project.repositoryRoot` is accepted only in the project layer and must be a relative path inside the workstream; Fabex never guesses between nested repositories. `models.codex.networkAccessEnabled` defaults off and affects only `workspace-write` turns; read-only turns remain offline. Fabex never selects `danger-full-access`.
+
+`guard.allowedCommandPatterns` matches parsed argv exactly after leading environment assignments. Each argument is literal or the documented one-token wildcard `"*"`; no regex or substring matching is accepted. Relative Node script paths resolve against `repositoryRoot` and cannot escape the workstream. `allowedCommands` remains compatible, but each bare executable grants every invocation and triggers a config/diagnose warning; migrate broad entries such as `"node"` to exact script patterns. Built-in package-manager verification accepts `test`, safe `test:<name>`, `lint`, `typecheck`, `build`, `check`, and corresponding `run` forms, but rejects update, write, fix, and force flags.
+
+`guard.externalWriteRoots` adds absolute or `~`-prefixed scratch/artifact roots. Defaults are derived at runtime for the OS temporary directory, Claude project memory, and Claude session scratchpads. Bash output is allowed only when one absolute target is outside the workstream, inside a permitted root, contains no substitution, and uses a quoted heredoc or simple `echo`/`printf`/`cat` redirect. Append mode is scoped by the same rule and is never enabled generally.
 
 Task status is non-sticky: submission and successful completion are `active`; an ordinary failed turn becomes `partner-unavailable`; ambiguous or missing-thread recovery becomes `recovery-required`; and recovery abandonment or confirmed replacement returns to `active` when work remains, otherwise `null`.
 
@@ -165,11 +180,11 @@ The SDK and Codex CLI persist the canonical thread under Codex's own storage and
 
 ## Status, recovery, and guards
 
-`/status` reports mode, participants, state health, controller PID/active operation, canonical thread ID, metadata, recovery-seed byte count, current repository fingerprint, and bounded lifecycle records. It omits checkpoint text, queued messages, final responses, transcripts, environment values, and credentials.
+`/status` reports mode, participants, state health, controller PID/active operation, canonical thread ID, metadata, recovery-seed byte count, separately timestamped captured and live repository fingerprints, and bounded lifecycle records. Default output includes active/queued operations plus the last three terminal records; `status --all` shows all retained records and `status --brief` omits controller and operation history. Fingerprint differences warn without mutating state. It omits checkpoint text, queued messages, final responses, transcripts, environment values, and credentials.
 
 `/recover` can inspect an operation without exposing its retained queued text, abandon a failed/cancelled record, explicitly replace only a confirmed-missing thread, clear only a confirmed-dead lock, and commit/discard only a validated unambiguous transaction. State files must never be hand-edited.
 
-The route guard parses exact invoked script paths rather than matching command substrings. It gates controller and checkpoint controls, keeps Claude-only denial semantics, and allowlists the three project-mutation channels: file tools, Bash, and MCP. Safe read/verification pipelines are accepted when every segment is allowlisted; other host orchestration tools defer because any project mutation they initiate is checked again under the responsible executor. The entire Git delivery lane remains reserved for the operational agent. Structured executor exceptions are independent of checkpoint decision prose.
+The route guard parses exact invoked script paths and argv rather than matching command substrings. It gates controller and checkpoint controls, keeps Claude-only denial semantics, and allowlists the three project-mutation channels: file tools, Bash, and MCP. Quotes are parsed conservatively and every pipeline, `&&`, or `;` segment is checked independently; safe status and verification pipelines work while redirection into the project, mutating `xargs`, `tee`, substitution, and hidden Git delivery remain denied. Other host orchestration tools defer because any project mutation they initiate is checked again under the responsible executor. The entire Git delivery lane remains reserved for the operational agent.
 
 ## Beta dogfood and release criteria
 
@@ -184,7 +199,7 @@ If Desktop thread flooding, orphaned sessions/processes, or material RAM growth 
 
 ## Release activation status
 
-Version 1.5.0 is implemented in this repository. Unit and mock-integration verification can complete without live model calls, but activation remains pending install/reload and the Beta dogfood criteria. Fabex is not yet marketplace-ready.
+Version 1.5.1 is implemented in this repository. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. It says activation is unknown when runtime evidence is insufficient and never substitutes static release prose for evidence. Fabex remains Beta and is not yet marketplace-ready.
 
 ## Platform support
 
