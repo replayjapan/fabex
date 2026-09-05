@@ -90,6 +90,7 @@ export function checkpointWarnings(checkpoint, metadata = {}, { repositoryRootCo
   const implementationAt = checkpoint.fieldUpdatedAt?.implementationStatus;
   if (testAt && implementationAt && testAt < implementationAt) warnings.push('testStatus predates implementationStatus');
   if (checkpoint.updatedAt && metadata.lastUsedAt && checkpoint.updatedAt < metadata.lastUsedAt) warnings.push('checkpoint older than the last thread turn');
+  if (metadata.lastCompaction?.at && (!checkpoint.updatedAt || checkpoint.updatedAt < metadata.lastCompaction.at)) warnings.push('checkpoint predates the last Claude compaction');
   const fingerprint = checkpoint.repoFingerprint;
   if (!repositoryRootConfigured && (!fingerprint || fingerprint.head === null)) warnings.push('repositoryRoot is not configured; fingerprint unavailable');
   else if (!fingerprint || fingerprint.head === null) warnings.push('repoFingerprint unavailable');

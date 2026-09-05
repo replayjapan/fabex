@@ -17,7 +17,7 @@ function option(args, name) {
 }
 
 const terminal = (status) => ['completed', 'failed', 'cancelled'].includes(status);
-const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, lifecycle: result.lifecycle });
+const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, phase: result.request?.phase, parentOperationId: result.request?.parentOperationId, lifecycle: result.lifecycle });
 const USAGE = 'Usage: controller.mjs submit < envelope.json | status|result|cancel --operation-id <uuid> | wait --operation-id <uuid> --timeout <1..590>';
 
 export async function waitForOperation(root, operationId, timeoutSeconds, env = process.env, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds))) {

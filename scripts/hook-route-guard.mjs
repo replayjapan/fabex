@@ -5,6 +5,7 @@ import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { readState } from './lib/state.mjs';
 import { normalizeSubmissionEnvelope } from './lib/sdk-controller.mjs';
+import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
@@ -149,8 +150,8 @@ export function parseControlCommand(command) {
   if (args[0] === 'executor-exception' && args[1] === 'authorize' && args.length === 8 && args[2] === '--executor' && args[4] === '--scope' && args[6] === '--reason' && args[3] && args[5] && args[7]) return { kind: 'executor-exception-authorize' };
   if (args[0] === 'executor-exception' && args[1] === 'reconcile' && args.length === 4 && args[2] === '--outcome' && args[3]) return { kind: 'executor-exception-reconcile' };
   if (args[0] === 'mode' && ['normal', 'discussion', 'ask-once'].includes(args[1])) {
-    if (args.length === 2) return { kind: `mode-${args[1]}`, participants: 'both' };
-    if (args.length === 4 && args[2] === '--participants' && ['both', 'claude', 'codex'].includes(args[3])) return { kind: `mode-${args[1]}`, participants: args[3] };
+    if (args.length === 4 && args[2] === '--grant' && UUID_RE.test(args[3])) return { kind: `mode-${args[1]}`, route: args[1], participants: 'both', grantId: args[3] };
+    if (args.length === 6 && args[2] === '--participants' && ['both', 'claude', 'codex'].includes(args[3]) && args[4] === '--grant' && UUID_RE.test(args[5])) return { kind: `mode-${args[1]}`, route: args[1], participants: args[3], grantId: args[5] };
   }
   if (args[0] === 'recover' && args[1] === 'clear-dead-lock' && args.length === 2) return { kind: 'clear-dead-lock' };
   if (args[0] === 'recover' && args[1] === 'resolve-transaction' && args.length === 3 && ['--commit', '--discard'].includes(args[2])) return { kind: 'recover-resolve-transaction' };
@@ -199,6 +200,11 @@ function isPluginSkill(toolName, input) {
   if (typeof invocation !== 'string') return false;
   const name = invocation.replace(/^\//, '');
   return name.startsWith('fabex:') || BARE_SKILLS.has(name);
+}
+
+function modeSkillTarget(toolName, input) {
+  if (!SKILL_TOOLS.has(toolName)) return null;
+  return modeTargetForSkill(toolName === 'Skill' ? input.skill : input.command);
 }
 
 function executorNames(executor) {
@@ -264,7 +270,13 @@ function allowedBashCommand(command, config, root) {
   if (executable === 'env') return args.length === 0;
   if (executable === 'find') return !args.some((arg) => ['-delete', '-exec', '-execdir', '-ok', '-okdir'].includes(arg));
   if (BASE_READ_COMMANDS.has(executable)) return true;
-  if (executable === 'node') return args.length === 1 && args[0] === '--version' || args[0] === '--test';
+  if (executable === 'node') {
+    if (args.length === 1 && args[0] === '--version') return true;
+    if (args[0] !== '--test') return false;
+    if (args.length === 1) return true;
+    const repositoryBase = resolve(root, config?.project?.repositoryRoot ?? '.');
+    return args.slice(1).every((target) => target && !target.startsWith('-') && !target.includes(':') && insideRoot(resolve(repositoryBase, target), root));
+  }
   if (['pnpm', 'npm', 'yarn'].includes(executable)) {
     const mutationFlags = new Set(['--update', '-u', '--update-snapshot', '--write', '--fix', '--force']);
     if (args.some((arg) => mutationFlags.has(arg) || [...mutationFlags].some((flag) => arg.startsWith(`${flag}=`)))) return false;
@@ -433,6 +445,7 @@ const defer = () => ({ decision: 'defer' });
 
 export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput)) return deny('malformed tool request');
+  if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only');
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
   if (toolName === 'Bash') {
     const control = parseControlCommand(toolInput.command) ?? parseControllerCommand(toolInput.command);
@@ -443,9 +456,11 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
 
 export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {}, config = null }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
+  if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only; invoke the slash command directly to mint a single-use grant');
   const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
   const controller = toolName === 'Bash' ? parseControllerCommand(toolInput.command, { participants: state.participants }) : null;
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
+  if (control?.kind?.startsWith('mode-') && !modeGrantMatches(state.modeGrant, { id: control.grantId, sessionId: executor.sessionId ?? null, route: control.route, participants: control.participants })) return deny('mode changes require a matching unexpired grant minted by an owner-typed Fabex slash command');
   if (toolName === 'Bash' && structuralController?.kind === 'controller-submit' && !controller) return deny('both-participant submit requires an explicit valid Claude reply status');
   if (toolName === 'Bash' && (controller?.kind === 'controller-submit' || ['checkpoint-replace', 'checkpoint-snapshot'].includes(control?.kind))) {
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
@@ -517,7 +532,7 @@ export async function main() {
         toolInput: input.tool_input,
         state: stateResult.state,
         paths: stateResult.paths,
-        executor: { agentId: input.agent_id, agentType: input.agent_type },
+        executor: { agentId: input.agent_id, agentType: input.agent_type, sessionId: input.session_id },
         config: effective.config
       })
       : classifyUnhealthyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, health: stateResult.health });

@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { checkpointWarnings } from '../../scripts/lib/checkpoint.mjs';
 import { loadEffectiveConfig } from '../../scripts/lib/config.mjs';
 import { classifyToolUse, parseControllerCommand, parseControlCommand, protectedGithubOperation } from '../../scripts/hook-route-guard.mjs';
-import { developerInstructions, resolveRepositoryDirectory, runOperation, submissionEnvelope, submitOperation, claimNextOperation, turnPrompt } from '../../scripts/lib/sdk-controller.mjs';
+import { developerInstructions, reconciliationEnvelope, resolveRepositoryDirectory, runOperation, submissionEnvelope, submitOperation, claimNextOperation, turnPrompt } from '../../scripts/lib/sdk-controller.mjs';
 import { initialState, initializeState, readState, updateState } from '../../scripts/lib/state.mjs';
 
 const pluginRoot = resolve(import.meta.dirname, '..', '..');
@@ -59,7 +59,7 @@ test('item 1: owner-visible context sharing is bidirectional', async () => {
   assert.doesNotMatch(skill, /Never relay full transcripts/);
   assert.match(developerInstructions(), /CLAUDE REPLY/);
   const message = 'OWNER MESSAGE (verbatim):\nquestion\n\nCLAUDE REPLY (owner-visible, verbatim):\nanswer';
-  assert.match(turnPrompt({ request: { route: 'normal', sandbox: 'workspace-write', participants: 'both', message } }), /CLAUDE REPLY \(owner-visible, verbatim\):\nanswer/);
+  assert.match(turnPrompt({ request: { phase: 'single', route: 'normal', sandbox: 'workspace-write', participants: 'both', message } }), /CLAUDE REPLY \(owner-visible, verbatim\):\nanswer/);
 });
 
 test('item 2: checkpoint capacity, atomic replace, compact, and full-cap errors are sanctioned', async (t) => {
@@ -196,9 +196,11 @@ test('item 10: network is opt-in only for workspace-write and sandbox never beco
   await initializeState(project, env); const capture = []; const operation = await (async () => { await submitOperation(project, submissionEnvelope('work'), env, { spawnRunner: false }); return claimNextOperation(project, env); })();
   await runOperation(project, operation, { createCodex: sdkFactory(capture), signal: new AbortController().signal }, env);
   assert.equal(capture[0].threadOptions.networkAccessEnabled, true); assert.ok(['read-only', 'workspace-write'].includes(capture[0].threadOptions.sandboxMode)); assert.notEqual(capture[0].threadOptions.sandboxMode, 'danger-full-access');
+  await submitOperation(project, reconciliationEnvelope(operation.id, 'work', 'Fable review'), env, { spawnRunner: false });
+  const reconciliation = await claimNextOperation(project, env); await runOperation(project, reconciliation, { createCodex: sdkFactory(capture), signal: new AbortController().signal }, env);
   let current = await readState(project, env); await updateState(project, (state) => { state.route = 'discussion'; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);
   await submitOperation(project, submissionEnvelope('discuss'), env, { spawnRunner: false }); const discussion = await claimNextOperation(project, env); await runOperation(project, discussion, { createCodex: sdkFactory(capture), signal: new AbortController().signal }, env);
-  assert.equal(capture[1].threadOptions.networkAccessEnabled, false); assert.equal(capture[1].threadOptions.sandboxMode, 'read-only');
+  assert.equal(capture[2].threadOptions.networkAccessEnabled, false); assert.equal(capture[2].threadOptions.sandboxMode, 'read-only');
 });
 
 test('item 11: diagnose reports installed registry mismatch and remedy', async (t) => {
@@ -234,7 +236,7 @@ test('item 14: guard script recognition is path-based rather than substring-base
 test('item 15: developer instructions are route-neutral and every resumed prompt starts with current authority', () => {
   const instructions = developerInstructions(); assert.doesNotMatch(instructions, /read-only|route=/);
   const operation = { request: { route: 'normal', sandbox: 'workspace-write', participants: 'both', message: 'continue' } };
-  assert.match(turnPrompt(operation), /^FABEX TURN: route=normal; sandbox=workspace-write; participants=both/);
+  assert.match(turnPrompt(operation), /^FABEX TURN: phase=single; route=normal; sandbox=workspace-write; participants=both/);
 });
 
 test('item 16: intermediate schema 6 state loads without losing thread or decisions', async (t) => {
@@ -244,7 +246,7 @@ test('item 16: intermediate schema 6 state loads without losing thread or decisi
   intermediate.partner.thread.checkpoint.updatedAt = '2026-09-04T00:00:00.000Z'; intermediate.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions = '2026-09-04T00:00:00.000Z';
   delete intermediate.partner.thread.checkpoint.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.lastRecordedTurn;
   await writeFile(initialized.paths.stateFile, JSON.stringify(intermediate));
-  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 7); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
+  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 8); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
   assert.equal(loaded.state.executorException.reason, 'preserve'); assert.equal(loaded.state.partner.thread.checkpoint.updatedAt, '2026-09-04T00:00:00.000Z'); assert.equal(loaded.state.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions, '2026-09-04T00:00:00.000Z');
 });
 

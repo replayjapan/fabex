@@ -1,77 +1,72 @@
 ---
 name: jointly
-description: Use for every owner turn in both-participant work mode; queue one canonical Codex SDK thread, converge honestly, and route implementation to Codex.
+description: Use for every owner cycle in both-participant modes; preserve Codex's independent first reading, then converge on the canonical SDK thread.
 ---
 
 # Jointly
 
-Both means both on every owner turn. Questions authorize answers only. Codex performs every project file edit; Claude coordinates and verifies. Native permissions remain authoritative.
+Both means both on every owner cycle. Questions authorize answers only. Codex performs every project file edit; Claude coordinates and verifies. Native permissions remain authoritative.
 
-Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Every turn carries the owner's message verbatim, and every both-participant turn declares whether a prior owner-visible Claude reply exists. Missing or ambiguous reply status is rejected:
+Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Hidden instructions and scratch content are private too. Relay the owner's message verbatim and owner-visible replies only through the strict controller envelopes below. Codex must finish Phase 1 before it receives Claude/Fable's current response.
 
-```text
-OWNER MESSAGE (verbatim):
-<owner words>
-
-CLAUDE REPLY STATUS: provided
-
-CLAUDE REPLY (owner-visible, verbatim):
-<previous owner-visible Claude reply>
-```
-
-Use `CLAUDE REPLY STATUS: none` and omit the reply section only when no prior owner-visible reply exists. Claude Code does not provide a reliable owner-visible-only transcript field, so verification is reported as unavailable and the explicit declaration is mandatory.
-
-Fabex developer instructions require Codex to report first (a) any scope mismatch and (b) any partnership-parity concern—a rule or change that would make Codex less than a full equal partner. Relay each flag to the owner unedited.
+Fabex developer instructions require Codex to report first (a) any scope mismatch and (b) any partnership-parity concern. Relay each flag to the owner unedited.
 
 ## Executor authority
 
 - Codex performs project edits through the canonical SDK thread.
 - `fabex-operational` performs every GitHub or `gh` sequence, including delivery preflight, staging, commit, and push. Read effective `models.operational` first and pass it explicitly when creating the agent.
 - Claude coordinates and verifies. Normal-mode project writes by every Claude executor are allowlist-controlled.
+- Only an owner-typed Fabex mode slash command may change route or participants. Claude, Codex, and subagents must not invoke a mode skill or fabricate a grant.
 
-Owner approval does not change the prescribed executor. An exception is valid only when the owner explicitly names the alternate executor. Record it with `control.mjs executor-exception authorize --executor '<name>' --scope '<scope>' --reason '<reason>'`; clear it with `executor-exception reconcile --outcome '<outcome>'`. Decision prose never grants permission.
+Owner approval does not change the prescribed executor. An exception is valid only when the owner explicitly names the alternate executor. Record it with `control.mjs executor-exception authorize`; clear it with `executor-exception reconcile`. Decision prose never grants permission.
 
-## Canonical SDK protocol
+## Two-phase SDK protocol
 
-From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`. If participants are `claude`, switch to `both`. Never implement while discussion or ask-once is active; ask the owner to invoke `/work` or `/workClaude`.
+From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`. If participants are `claude`, ask the owner to invoke `/fabex:work`; never switch participants autonomously.
 
-Submit the structured JSON envelope with `controller.mjs submit --message '<json>'`. For multiline text or shell-significant characters, use the exact guarded quoted-heredoc form below with a fresh delimiter. The quoted delimiter prevents shell interpolation; do not escape or rewrite the body.
+Phase 1 is strict JSON with exactly these fields. `previousReply` means Claude's previous owner-visible reply, which the owner has already seen—not Claude's current analysis. Use `previousReplyStatus: "none"` only when none exists.
 
-```sh
-node "/absolute/plugin/path/scripts/controller.mjs" submit <<'FABEX_OWNER_7F3A2C91'
-OWNER MESSAGE (verbatim):
-<owner words>
+The prompt hook ignores task/system/reminder/local-command notification payloads and retains a private ring of eight recent owner-prompt digests. This permits queued legitimate owner messages without relaying or storing their text. Never submit a notification as `ownerMessage`.
 
-CLAUDE REPLY STATUS: none
-FABEX_OWNER_7F3A2C91
+```json
+{"phase":"independent","ownerMessage":"owner words verbatim","previousReplyStatus":"provided","previousReply":"previous owner-visible reply verbatim"}
 ```
 
-The returned UUID is immediate. Do not invoke the internal runner, call the SDK directly, create another thread, or use retired MCP tools.
+Use `controller.mjs submit` with JSON only and no trailing note or framing:
 
-Use `controller.mjs wait --operation-id <uuid> --timeout <seconds>` when the turn must block until completion or a bounded timeout. Poll `controller.mjs status --operation-id <uuid>` only for nonblocking progress. Genuine states are queued, working, command, tests, completed, failed, and cancelled; never expose reasoning events or command output. Use `controller.mjs result --operation-id <uuid>` only after a terminal state.
+```sh
+node "/absolute/plugin/path/scripts/controller.mjs" submit <<'FABEX_PHASE1_7F3A2C91'
+{"phase":"independent","ownerMessage":"owner words verbatim","previousReplyStatus":"none"}
+FABEX_PHASE1_7F3A2C91
+```
 
-Messages received while Codex is busy must each be submitted once. The durable FIFO queue processes them sequentially on the same canonical thread. v1 has no steering; cancel the active operation explicitly when waiting is wrong.
+Use `controller.mjs status --operation-id <uuid>` for a bounded snapshot or wait with `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal response with `controller.mjs result --operation-id <uuid>`. Do not end the owner turn: the Stop hook blocks while Phase 1 is queued/working and while its Phase 2 is missing. Use `controller.mjs cancel --operation-id <uuid>` when the owner cancels.
 
-The controller verifies the first `thread.started` event and requires its `thread_id` to equal the persisted canonical ID on every resume. Discussion and ask use `read-only`; implementation uses `workspace-write`. Missing or mismatched IDs fail closed. A confirmed missing session can be cleared only through explicit recovery; the next real owner turn creates one structured-checkpoint-seeded replacement.
+After Phase 1 is stored, Claude may read it, produce its current owner-visible response, and submit Phase 2 with the exact Phase 1 operation ID and identical owner message:
 
-## Route deterministically
+```json
+{"phase":"reconcile","phase1OperationId":"00000000-0000-4000-8000-000000000000","ownerMessage":"owner words verbatim","fableResponse":"current owner-visible Fable response verbatim"}
+```
 
-- **Implement lane:** build, fix, change, create, update, or implement requests with explicit criteria, plus mechanical fixes.
-- **Decide lane:** conversation, questions, architecture, design, judgment, and tradeoffs. Claude and Codex share owner-visible history and accepted decisions, but not private reasoning.
+Phase 2 is a separate SDK turn on the same canonical thread. The controller—not the caller—adds the stored Phase 1 answer. It rejects a missing, failed, cancelled, already-used, or owner-message-mismatched parent. Wait for Phase 2, read the result, independently verify implementation work, and then give the owner the converged answer.
+
+The queue enforces an owner-cycle barrier: later Phase 1 operations may queue, but cannot run past a completed Phase 1 until its matching Phase 2 finishes or the owner explicitly cancels/recovers it. Use `recover abandon --operation-id <phase1-id>` to release an intentionally abandoned Phase 2 gap.
+
+The controller verifies the first `thread.started` event and requires its `thread_id` to equal the persisted canonical ID on every resume. Discussion and ask use `read-only`; implementation uses `workspace-write`. Missing or mismatched IDs fail closed. A confirmed missing session can be cleared only through explicit recovery; the next owner cycle creates one bounded-checkpoint-seeded canonical replacement.
+
+The `PostToolUse` wake hook starts at most one watcher per project and wakes Claude at a terminal phase when supported. Each async hook is a process, so `wait` remains the deterministic fallback and process/RAM accumulation remains a dogfood gate.
 
 ## Implement lane
 
-1. State one short task-and-criteria framing line from the owner's words.
-2. Submit the owner message once. Poll genuine progress without flooding the owner.
-3. On completion, inspect the bounded result and relay parity flags unedited.
-4. Independently run the owner's verification and collect exit codes and a bounded diffstat. Safe named package-manager scripts and read-only output-filter pipelines are supported.
-5. If verification fails, submit a correction on the same canonical thread with original criteria and essential evidence, then reverify.
+1. Submit strict Phase 1 without Claude's current view.
+2. Read the stored independent result, compare it with Claude's review, and adjust the plan when evidence warrants it.
+3. Submit linked Phase 2 with Claude's current owner-visible response.
+4. Relay flags unedited and implement only through Codex.
+5. Independently run the owner's verification and collect exit codes and a bounded diffstat.
+6. If verification fails, start a new two-phase correction cycle on the same canonical thread.
 
 ## Decide lane
 
-1. Submit the owner's message once; the current route supplies a mechanical read-only SDK sandbox.
-2. Publish Claude's complete current view before Codex's result when practical; do not expose either model's private reasoning.
-3. Present both conclusions, relay flags unedited, identify disagreement, and converge. Record accepted decisions with `control.mjs checkpoint decision`.
-4. If implementation is requested after convergence, enter the Implement lane on the same thread.
+Use the same two phases with the route's mechanical read-only sandbox. Present both conclusions, identify disagreement, converge, and record only owner-approved decisions. Mutual blindness is not promised: Claude may read Codex's stored Phase 1 before writing Phase 2; Codex remains independent-first.
 
-Use `checkpoint capacity` before long projects. Compact or export and atomically replace bounded arrays instead of discarding current task context. Keep checkpoint fields under the total 48 KiB recovery-seed limit.
+Use `checkpoint capacity` before long projects. Compact or export and atomically replace bounded arrays instead of discarding current task context. Keep checkpoint fields under the complete 48 KiB recovery-seed limit.

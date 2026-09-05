@@ -35,7 +35,7 @@ test('exact SDK controller entry points are gated and the internal runner is den
   const submit = `node ${controller} submit --message '${submissionEnvelope('owner message with $ literal')}'`;
   assert.equal(parseControllerCommand(submit).kind, 'controller-submit');
   assert.equal((await classify(ctx, 'Bash', { command: submit })).decision, 'defer');
-  const heredoc = `node "${controller}" submit <<'FABEX_OWNER_A1B2C3D4'\nOWNER MESSAGE (verbatim):\nowner's $HOME and $(literal)\n\`code\` | symbols\n\nCLAUDE REPLY STATUS: none\nFABEX_OWNER_A1B2C3D4`;
+  const heredoc = `node "${controller}" submit <<'FABEX_OWNER_A1B2C3D4'\n${submissionEnvelope("owner's $HOME and $(literal) `code` | symbols")}\nFABEX_OWNER_A1B2C3D4`;
   assert.equal(parseControllerCommand(heredoc).kind, 'controller-submit');
   assert.equal((await classify(ctx, 'Bash', { command: heredoc })).decision, 'defer');
   for (const action of ['status', 'result', 'cancel']) {
@@ -82,7 +82,7 @@ test('control parser permits current checkpoint, mode, diagnostic, and recovery 
     `node ${control} status`, `node ${control} config`, `node ${control} diagnose`,
     `node ${control} checkpoint decision 'accepted direction'`,
     `node ${control} checkpoint test-status passing`,
-    `node ${control} mode discussion --participants both`,
+    `node ${control} mode discussion --participants both --grant ${id}`,
     `node ${control} recover inspect --operation-id ${id}`,
     `node ${control} recover replace-missing-thread --operation-id ${id}`,
     `node ${control} recover abandon --operation-id ${id}`

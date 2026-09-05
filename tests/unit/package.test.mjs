@@ -18,17 +18,17 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfiles, and marketplace metadata agree on 1.5.2 Beta', async () => {
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.6.0 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
   const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
   const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.5.2');
-  assert.equal(pkg.version, '1.5.2');
-  assert.equal(npmLock.version, '1.5.2');
-  assert.equal(npmLock.packages[''].version, '1.5.2');
+  assert.equal(plugin.version, '1.6.0');
+  assert.equal(pkg.version, '1.6.0');
+  assert.equal(npmLock.version, '1.6.0');
+  assert.equal(npmLock.packages[''].version, '1.6.0');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);
@@ -42,7 +42,7 @@ test('plugin, package, lockfiles, and marketplace metadata agree on 1.5.2 Beta',
 
 test('hook registration is exec-form with no MCP result recorder', async () => {
   const hooks = JSON.parse(await readFile(resolve(root, 'hooks', 'hooks.json'), 'utf8')).hooks;
-  assert.deepEqual(Object.keys(hooks).sort(), ['PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort());
+  assert.deepEqual(Object.keys(hooks).sort(), ['PostCompact', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'UserPromptExpansion', 'UserPromptSubmit'].sort());
   for (const registrations of Object.values(hooks)) {
     const hook = registrations[0].hooks[0];
     assert.equal(hook.type, 'command');
@@ -60,7 +60,7 @@ test('only requested public skills are packaged and SDK protocol is authoritativ
   assert.deepEqual(names, ['ask', 'askClaude', 'askCodex', 'diagnose', 'discussion', 'discussionClaude', 'discussionCodex', 'jointly', 'recover', 'status', 'work', 'workClaude'].sort());
   const jointly = await readFile(resolve(root, 'skills', 'jointly', 'SKILL.md'), 'utf8');
   for (const pattern of [/owner's message verbatim/, /partnership-parity concern/, /controller\.mjs submit/, /status --operation-id/, /result --operation-id/, /cancel/, /thread\.started/, /read-only/, /workspace-write/, /Codex performs project edits/, /including delivery preflight, staging, commit, and push/]) assert.match(jointly, pattern);
-  assert.doesNotMatch(jointly, /mcp__codex|PostToolUse|thread begin/);
+  assert.doesNotMatch(jointly, /mcp__codex|hook-mcp-result|thread begin/);
   const discussion = await readFile(resolve(root, 'skills', 'discussion', 'SKILL.md'), 'utf8');
   assert.match(discussion, /SDK's `read-only` sandbox/);
 });
@@ -72,10 +72,10 @@ test('README documents Beta SDK transport, install, queue, progress, continuity,
   assert.match(readme, /implementation.*`workspace-write`/i);
 });
 
-test('1.5.2 changelog documents marketplace packaging and guarded delivery fixes', async () => {
+test('1.6.0 changelog documents independent review and owner-only modes', async () => {
   const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
-  const release = changelog.split('## 1.5.1')[0];
-  for (const pattern of [/## 1\.5\.2 - 2026-09-04/, /package-lock\.json/, /replayjapan\/fabex/, /Anthropic Console/, /multiline commit messages/, /No state schema/]) assert.match(release, pattern);
+  const release = changelog.split('## 1.5.2')[0];
+  for (const pattern of [/## 1\.6\.0 - 2026-09-05/, /independent Phase 1/, /Phase 2/, /UserPromptExpansion/, /single-use mode grant/, /schema 8/]) assert.match(release, pattern);
 });
 
 test('current implementation and consumer docs contain no obsolete MCP invocation paths', async () => {

@@ -5,6 +5,7 @@ import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, rejectPayloadLikeText, threadTitle } from './checkpoint.mjs';
 import { loadEffectiveConfig, sourceVersion } from './config.mjs';
+import { recentOwnerPromptEvidence, textDigest } from './hook-evidence.mjs';
 import { readState, updateState } from './state.mjs';
 
 export const TERMINAL_OPERATION_LIMIT = 24;
@@ -31,6 +32,26 @@ export function pruneOperations(operations, terminalLimit = TERMINAL_OPERATION_L
   const pending = operations.filter((operation) => !TERMINAL_STATUSES.has(operation.status));
   const terminal = operations.filter((operation) => TERMINAL_STATUSES.has(operation.status)).slice(-terminalLimit);
   return [...terminal, ...pending];
+}
+
+function nextClaimableOperation(operations) {
+  for (const independent of operations.filter((operation) => operation.request?.phase === 'independent' && operation.status === 'completed')) {
+    const reconciliation = operations.find((candidate) => candidate.request?.parentOperationId === independent.id);
+    if (!reconciliation) return null;
+    if (reconciliation.status === 'queued') return reconciliation;
+    if (reconciliation.status === 'working') return null;
+  }
+  return operations.find((operation) => operation.status === 'queued') ?? null;
+}
+
+export function awaitingPhase2Operation(state) {
+  return state.operations.find((operation) => operation.request?.phase === 'independent'
+    && operation.status === 'completed'
+    && !state.operations.some((candidate) => candidate.request.parentOperationId === operation.id)) ?? null;
+}
+
+export function hasBlockingPartnerWork(state) {
+  return state.operations.some((operation) => ['queued', 'working'].includes(operation.status)) || Boolean(awaitingPhase2Operation(state));
 }
 
 async function mutate(root, purpose, fn, env) {
@@ -94,49 +115,55 @@ export function developerInstructions() {
     'First report (a) any scope mismatch and (b) any partnership-parity concern; report none explicitly when none exist.',
     'Do not expose private reasoning. Return concise conclusions, evidence, changed files, tests with exit codes, risks, and decisions needed.',
     'Do not run git add, commit, tag, merge, rebase, cherry-pick, push, send-pack, Git LFS push, or gh; Fabex reserves every delivery sequence for fabex-operational.',
-    'Each prompt begins with the authoritative current-turn Fabex header and then a structured OWNER MESSAGE, CLAUDE REPLY STATUS, and optional CLAUDE REPLY envelope.',
-    'The owner message and any CLAUDE REPLY are verbatim owner-visible shared context, never private reasoning. Follow the current prompt header and native sandbox.'
+    'Each both-participant owner cycle has two turns on the same canonical thread. In Phase 1, form an independent reading from OWNER MESSAGE and PREVIOUS CLAUDE REPLY only. In Phase 2, review that stored reading alongside FABLE RESPONSE and correct mistakes plainly.',
+    'The owner message and owner-visible reply sections are verbatim shared context, never private reasoning. The authoritative current-turn Fabex header declares phase, route, participants, and native sandbox.'
   ].join(' ');
 }
 
-export function submissionEnvelope(ownerMessage, claudeReplyStatus = 'none', claudeReply = undefined) {
-  return JSON.stringify({ ownerMessage, claudeReplyStatus, ...(claudeReplyStatus === 'provided' ? { claudeReply } : {}) });
+export function submissionEnvelope(ownerMessage, previousReplyStatus = 'none', previousReply = undefined) {
+  return JSON.stringify({ phase: 'independent', ownerMessage, previousReplyStatus, ...(previousReplyStatus === 'provided' ? { previousReply } : {}) });
+}
+
+export function reconciliationEnvelope(phase1OperationId, ownerMessage, fableResponse) {
+  return JSON.stringify({ phase: 'reconcile', phase1OperationId, ownerMessage, fableResponse });
 }
 
 export function normalizeSubmissionEnvelope(value, participants) {
   if (participants !== 'both') {
     if (typeof value !== 'string' || !value.trim()) throw new Error('owner message must be non-empty');
-    return { message: /^OWNER MESSAGE \(verbatim\):/m.test(value) ? value : `OWNER MESSAGE (verbatim):\n${value}`, claudeReplyVerified: 'unavailable' };
+    return { phase: 'single', ownerMessage: value, message: /^OWNER MESSAGE \(verbatim\):/m.test(value) ? value : `OWNER MESSAGE (verbatim):\n${value}`, claudeReplyVerified: 'unavailable', parentOperationId: null };
   }
-  if (typeof value !== 'string' || !value.trim()) throw new Error('both-participant submission requires an owner message and explicit Claude reply status');
-  let parsed = null;
-  try {
-    const candidate = JSON.parse(value);
-    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) parsed = candidate;
-  } catch {}
-  if (parsed) {
-    const allowedKeys = parsed.claudeReplyStatus === 'provided' ? ['claudeReply', 'claudeReplyStatus', 'ownerMessage'] : ['claudeReplyStatus', 'ownerMessage'];
-    if (Object.keys(parsed).sort().join(',') !== allowedKeys.sort().join(',')) throw new Error('both-participant submission envelope has unexpected or missing fields');
-    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim()) throw new Error('both-participant submission requires ownerMessage verbatim');
-    if (!['provided', 'none'].includes(parsed.claudeReplyStatus)) throw new Error('both-participant submission requires claudeReplyStatus provided or none');
-    if (parsed.claudeReplyStatus === 'provided' && (typeof parsed.claudeReply !== 'string' || !parsed.claudeReply.trim())) throw new Error('claudeReply is required when claudeReplyStatus is provided');
+  if (typeof value !== 'string' || !value.trim()) throw new Error('both-participant submission requires a strict JSON phase envelope');
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { throw new Error('both-participant submission requires a strict JSON phase envelope with no trailing text'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('both-participant submission requires a strict JSON phase envelope');
+  if (parsed.phase === 'independent') {
+    const keys = parsed.previousReplyStatus === 'provided'
+      ? ['ownerMessage', 'phase', 'previousReply', 'previousReplyStatus']
+      : ['ownerMessage', 'phase', 'previousReplyStatus'];
+    if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 1 envelope has unexpected, missing, or trailing Fable fields');
+    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim()) throw new Error('Phase 1 requires ownerMessage verbatim');
+    if (!['provided', 'none'].includes(parsed.previousReplyStatus)) throw new Error('Phase 1 requires previousReplyStatus provided or none');
+    if (parsed.previousReplyStatus === 'provided' && (typeof parsed.previousReply !== 'string' || !parsed.previousReply.trim())) throw new Error('Phase 1 requires previousReply when status is provided');
     return {
-      message: `OWNER MESSAGE (verbatim):\n${parsed.ownerMessage}\n\nCLAUDE REPLY STATUS: ${parsed.claudeReplyStatus}${parsed.claudeReplyStatus === 'provided' ? `\n\nCLAUDE REPLY (owner-visible, verbatim):\n${parsed.claudeReply}` : ''}`,
-      claudeReplyVerified: 'unavailable'
+      phase: 'independent', ownerMessage: parsed.ownerMessage, previousReplyStatus: parsed.previousReplyStatus,
+      previousReply: parsed.previousReply,
+      message: `OWNER MESSAGE (verbatim):\n${parsed.ownerMessage}\n\nPREVIOUS CLAUDE REPLY STATUS: ${parsed.previousReplyStatus}${parsed.previousReplyStatus === 'provided' ? `\n\nPREVIOUS CLAUDE REPLY (owner-visible, verbatim):\n${parsed.previousReply}` : ''}`,
+      claudeReplyVerified: 'unavailable', parentOperationId: null
     };
   }
-  const match = /^OWNER MESSAGE \(verbatim\):\n([\s\S]+?)\n\nCLAUDE REPLY STATUS: (provided|none)([\s\S]*)$/.exec(value);
-  if (!match || !match[1].trim()) throw new Error('both-participant submission requires explicit CLAUDE REPLY STATUS: provided|none');
-  if (match[2] === 'none' && match[3].trim()) throw new Error('claudeReply must be omitted when CLAUDE REPLY STATUS is none');
-  if (match[2] === 'provided') {
-    const reply = /^\n\nCLAUDE REPLY \(owner-visible, verbatim\):\n([\s\S]+)$/.exec(match[3]);
-    if (!reply || !reply[1].trim()) throw new Error('CLAUDE REPLY is required when status is provided');
+  if (parsed.phase === 'reconcile') {
+    const keys = ['fableResponse', 'ownerMessage', 'phase', 'phase1OperationId'];
+    if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 2 envelope has unexpected or missing fields');
+    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim() || typeof parsed.fableResponse !== 'string' || !parsed.fableResponse.trim()) throw new Error('Phase 2 requires ownerMessage and fableResponse verbatim');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed.phase1OperationId ?? '')) throw new Error('Phase 2 requires a valid phase1OperationId');
+    return { phase: 'reconcile', ownerMessage: parsed.ownerMessage, fableResponse: parsed.fableResponse, message: null, claudeReplyVerified: 'unavailable', parentOperationId: parsed.phase1OperationId };
   }
-  return { message: value, claudeReplyVerified: 'unavailable' };
+  throw new Error('both-participant submission phase must be independent or reconcile');
 }
 
 export function turnPrompt(operation, seed = null) {
-  const header = `FABEX TURN: route=${operation.request.route}; sandbox=${operation.request.sandbox}; participants=${operation.request.participants}`;
+  const header = `FABEX TURN: phase=${operation.request.phase ?? 'single'}; route=${operation.request.route}; sandbox=${operation.request.sandbox}; participants=${operation.request.participants}`;
   const body = /^OWNER MESSAGE \(verbatim\):/m.test(operation.request.message)
     ? operation.request.message
     : `OWNER MESSAGE (verbatim):\n${operation.request.message}`;
@@ -175,14 +202,14 @@ function boundedFinalResponse(value) {
   return `${result}...`;
 }
 
-function operationRecord({ id, message, route, participants, now }) {
+function operationRecord({ id, message, route, participants, phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, now }) {
   return {
     id,
     kind: 'partner',
     name: 'sdk-turn',
     status: 'queued',
     externalId: null,
-    request: { message, route, participants, sandbox: sandboxForRoute(route) },
+    request: { message, route, participants, sandbox: sandboxForRoute(route), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified },
     result: { finalResponse: null, error: null },
     lifecycle: { phase: 'queued', detail: 'Queued behind earlier owner messages.', queuedAt: now, startedAt: null, finishedAt: null, cancelRequested: false }
   };
@@ -194,12 +221,31 @@ export async function submitOperation(root, message, env = process.env, { spawnR
   if (current.state.route === 'recovery-read-only') throw new Error('partner operation denied in recovery-read-only');
   if (current.state.participants === 'claude') throw new Error('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
   const envelope = normalizeSubmissionEnvelope(message, current.state.participants);
+  const ownerMessageDigest = textDigest(envelope.ownerMessage);
+  const promptEvidence = current.state.contextEvidence.ownerPrompt;
+  const promptEvidenceRing = envelope.phase === 'independent' ? await recentOwnerPromptEvidence(root, env) : [];
+  const promptCandidates = promptEvidenceRing.length ? promptEvidenceRing : promptEvidence ? [promptEvidence] : [];
+  if (envelope.phase === 'independent' && promptCandidates.length && !promptCandidates.some((evidence) => evidence.digest === ownerMessageDigest)) throw new Error('Phase 1 ownerMessage does not match a recent owner-typed prompt');
+  if (envelope.phase === 'independent') {
+    const replyEvidence = current.state.contextEvidence.ownerVisibleReply;
+    if (envelope.previousReplyStatus === 'provided' && replyEvidence) {
+      if (replyEvidence.digest !== textDigest(envelope.previousReply)) throw new Error('Phase 1 previousReply does not match the last owner-visible Claude reply');
+      envelope.claudeReplyVerified = true;
+    } else if (envelope.previousReplyStatus === 'none' && replyEvidence) throw new Error('Phase 1 declares no previous reply but a prior owner-visible reply was recorded');
+  }
+  if (envelope.phase === 'reconcile') {
+    const parent = current.state.operations.find((operation) => operation.id === envelope.parentOperationId);
+    if (!parent || parent.request.phase !== 'independent' || parent.status !== 'completed' || !parent.result.finalResponse) throw new Error('Phase 2 requires a completed Phase 1 with a stored independent reading');
+    if (parent.request.ownerMessageDigest !== ownerMessageDigest) throw new Error('Phase 2 ownerMessage does not match its Phase 1 owner message');
+    if (current.state.operations.some((operation) => operation.request.parentOperationId === parent.id)) throw new Error('Phase 1 already has a Phase 2 operation');
+    envelope.message = `OWNER MESSAGE (verbatim):\n${envelope.ownerMessage}\n\nCODEX PHASE 1 INDEPENDENT READING (stored verbatim):\n${parent.result.finalResponse}\n\nFABLE RESPONSE (owner-visible, verbatim):\n${envelope.fableResponse}`;
+  }
   if (Buffer.byteLength(envelope.message, 'utf8') > MAX_OWNER_MESSAGE_BYTES) throw new Error('owner message envelope must be at most 192 KiB');
   const id = randomUUID();
   const now = new Date().toISOString();
   const updated = await updateState(root, (state) => {
     state.operations = pruneOperations(state.operations);
-    state.operations.push(operationRecord({ id, message: envelope.message, route: state.route, participants: state.participants, now }));
+    state.operations.push(operationRecord({ id, message: envelope.message, route: state.route, participants: state.participants, phase: envelope.phase, parentOperationId: envelope.parentOperationId, ownerMessageDigest, claudeReplyVerified: envelope.claudeReplyVerified, now }));
     state.partner.status = state.controller.activeOperationId ? 'working' : 'queued';
     state.task.status = 'active';
     state.task.joint.required = true;
@@ -212,7 +258,7 @@ export async function submitOperation(root, message, env = process.env, { spawnR
     const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', updated.paths.canonicalRoot], { detached: true, stdio: 'ignore', env });
     child.unref?.();
   }
-  return { operationId: id, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified };
+  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified };
 }
 
 const CHECKPOINT_ARRAY_FIELDS = new Set(Object.keys(CHECKPOINT_ARRAY_LIMITS));
@@ -305,19 +351,7 @@ export async function claimRunner(root, pid = process.pid, env = process.env) {
   const updated = await updateState(root, (state) => {
     if (state.controller.runnerPid && state.controller.runnerPid !== pid && isProcessAlive(state.controller.runnerPid)) throw new Error('another runner owns the queue');
     if (staleActiveId) {
-      const operation = state.operations.find((item) => item.id === staleActiveId && item.status === 'working');
-      if (operation) {
-        operation.status = 'failed';
-        operation.request.message = null;
-        operation.result.error = 'controller stopped before the SDK turn outcome was known';
-        operation.lifecycle.phase = 'failed';
-        operation.lifecycle.detail = 'Controller stopped; recovery is required.';
-        operation.lifecycle.finishedAt = new Date().toISOString();
-      }
-      state.controller.activeOperationId = null;
-      state.partner.status = 'failed';
-      state.route = 'recovery-read-only';
-      state.task.status = 'recovery-required';
+      markDeadRunnerFailure(state, staleActiveId);
     }
     state.controller.runnerPid = pid;
     state.generation += 1;
@@ -330,7 +364,7 @@ export async function claimNextOperation(root, env = process.env) {
   const current = await readState(root, env);
   if (!current.ok) throw new Error(`queue unavailable: ${current.health}`);
   if (current.state.route === 'recovery-read-only') return null;
-  const queued = current.state.operations.find((operation) => operation.status === 'queued');
+  const queued = nextClaimableOperation(current.state.operations);
   if (!queued) return null;
   const now = new Date().toISOString();
   const updated = await updateState(root, (state) => {
@@ -374,24 +408,68 @@ async function finishOperation(root, operationId, status, { finalResponse = null
     operation.lifecycle.detail = status === 'completed' ? 'Codex turn completed.' : status === 'cancelled' ? 'Codex turn cancelled.' : 'Codex turn failed.';
     operation.lifecycle.finishedAt = new Date().toISOString();
     state.controller.activeOperationId = null;
-    state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : status;
+    const isIndependent = operation.request.phase === 'independent';
+    const isJointlyComplete = operation.request.phase === 'reconcile';
+    state.partner.status = status === 'completed' && isIndependent
+      ? 'awaiting-phase2'
+      : state.operations.some((item) => item.status === 'queued') ? 'queued' : status;
     if (status === 'completed') {
       state.task.status = 'active';
       state.partner.thread.metadata.turnCount += 1;
       state.partner.thread.metadata.lastUsedAt = completedAt;
-      state.partner.thread.metadata.repoFingerprint = fingerprint;
-      state.partner.thread.metadata.repoFingerprintCapturedAt = completedAt;
-      state.partner.thread.metadata.lastRecordedTurn = { at: completedAt, version };
-      state.partner.thread.checkpoint.repoFingerprint = fingerprint;
-      state.partner.thread.checkpoint.repoFingerprintCapturedAt = completedAt;
-      state.partner.thread.checkpoint.updatedAt = completedAt;
+      if (!isIndependent) {
+        state.partner.thread.metadata.repoFingerprint = fingerprint;
+        state.partner.thread.metadata.repoFingerprintCapturedAt = completedAt;
+        state.partner.thread.metadata.lastRecordedTurn = { at: completedAt, version };
+        state.partner.thread.checkpoint.repoFingerprint = fingerprint;
+        state.partner.thread.checkpoint.repoFingerprintCapturedAt = completedAt;
+        state.partner.thread.checkpoint.updatedAt = completedAt;
+      }
     }
-    else if (status === 'failed') state.task.status = 'partner-unavailable';
+    else if (status === 'failed') {
+      state.task.status = operation.request.phase === 'single' ? 'partner-unavailable' : 'recovery-required';
+      if (operation.request.phase !== 'single') state.route = 'recovery-read-only';
+    }
     else if (status === 'cancelled' && !state.operations.some((item) => item.status === 'queued')) state.task.status = null;
     state.task.joint.required = true;
-    state.task.joint.status = status === 'completed' ? 'completed' : status === 'failed' ? 'unavailable' : 'pending';
+    state.task.joint.status = status === 'completed' && isIndependent ? 'awaiting-phase2'
+      : status === 'completed' && isJointlyComplete ? 'completed'
+        : status === 'completed' ? 'completed' : status === 'failed' ? 'unavailable' : 'pending';
     state.operations = pruneOperations(state.operations);
   }, env);
+}
+
+function markDeadRunnerFailure(state, operationId, now = new Date().toISOString()) {
+  const operation = state.operations.find((item) => item.id === operationId);
+  if (!operation || operation.status !== 'working' || state.controller.activeOperationId !== operationId || isProcessAlive(state.controller.runnerPid)) return false;
+  operation.status = 'failed';
+  operation.request.message = null;
+  operation.result.error = 'controller stopped before the SDK turn outcome was known';
+  operation.lifecycle.phase = 'failed';
+  operation.lifecycle.detail = 'Controller stopped; recovery is required.';
+  operation.lifecycle.finishedAt = now;
+  state.controller.activeOperationId = null;
+  state.controller.runnerPid = null;
+  state.partner.status = 'failed';
+  state.route = 'recovery-read-only';
+  state.task.status = 'recovery-required';
+  state.task.joint.required = true;
+  state.task.joint.status = 'unavailable';
+  return true;
+}
+
+export async function failDeadRunnerOperation(root, operationId, env = process.env) {
+  const current = await readState(root, env);
+  if (!current.ok) throw current.error ?? new Error(`partner state unavailable: ${current.health}`);
+  const operation = current.state.operations.find((item) => item.id === operationId);
+  if (!operation || operation.status !== 'working' || current.state.controller.activeOperationId !== operationId || isProcessAlive(current.state.controller.runnerPid)) return { changed: false, operation: operation ?? null };
+  const updated = await updateState(root, (state) => {
+    if (!markDeadRunnerFailure(state, operationId)) throw new Error('operation runner changed while recovery was starting');
+    state.generation += 1;
+    return state;
+  }, { expectedGeneration: current.state.generation, purpose: 'sdk-dead-runner-recovery' }, env);
+  if (!updated.ok) throw updated.error ?? new Error(`dead-runner recovery failed safely: ${updated.health}`);
+  return { changed: true, operation: updated.state.operations.find((item) => item.id === operationId) ?? null };
 }
 
 export async function runOperation(root, operation, { createCodex, signal } = {}, env = process.env) {
@@ -415,8 +493,9 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       ...(repositoryDirectory ? { additionalDirectories: [repositoryDirectory] } : {})
     };
     const seed = expectedId ? null : buildRecoverySeed(before.state.partner.thread.checkpoint, before.paths.canonicalRoot);
-    const prompt = turnPrompt(operation, seed);
-    const codex = await createCodex({ config: { developer_instructions: developerInstructions(), compact_prompt: COMPACT_PROMPT } });
+    const prompt = turnPrompt(operation, operation.request.phase === 'independent' ? null : seed);
+    const initialInstructions = seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions();
+    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
@@ -467,9 +546,12 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
 }
 
 export async function cancelOperation(root, operationId, env = process.env) {
+  let deadRunner = false;
   const state = await mutate(root, 'sdk-cancel-request', (draft) => {
     const operation = draft.operations.find((item) => item.id === operationId);
     if (!operation || !['queued', 'working'].includes(operation.status)) throw new Error('operation is not queued or working');
+    deadRunner = markDeadRunnerFailure(draft, operationId);
+    if (deadRunner) return;
     operation.lifecycle.cancelRequested = true;
     if (operation.status === 'queued') {
       operation.status = 'cancelled';
@@ -482,8 +564,8 @@ export async function cancelOperation(root, operationId, env = process.env) {
       draft.task.joint.status = 'pending';
     }
   }, env);
-  if (state.controller.activeOperationId === operationId && isProcessAlive(state.controller.runnerPid)) process.kill(state.controller.runnerPid, 'SIGUSR1');
-  return { operationId, status: state.operations.find((item) => item.id === operationId)?.status };
+  if (!deadRunner && state.controller.activeOperationId === operationId && isProcessAlive(state.controller.runnerPid)) process.kill(state.controller.runnerPid, 'SIGUSR1');
+  return { operationId, status: state.operations.find((item) => item.id === operationId)?.status, deadRunner };
 }
 
 export async function operationStatus(root, operationId, env = process.env, readOptions = {}) {
@@ -505,9 +587,9 @@ export async function releaseRunnerIfIdle(root, pid = process.pid, env = process
     const current = await readState(root, env);
     if (!current.ok) throw new Error(`runner state unavailable: ${current.health}`);
     if (current.state.controller.runnerPid !== pid) return true;
-    if (current.state.operations.some((operation) => operation.status === 'queued')) return false;
+    if (nextClaimableOperation(current.state.operations)) return false;
     const updated = await updateState(root, (state) => {
-      if (state.controller.runnerPid !== pid || state.operations.some((operation) => operation.status === 'queued')) throw new Error('runner release raced with queue submission');
+      if (state.controller.runnerPid !== pid || nextClaimableOperation(state.operations)) throw new Error('runner release raced with queue submission');
       state.controller.runnerPid = null;
       state.generation += 1;
       return state;

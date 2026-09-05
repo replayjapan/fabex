@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { renderSessionContext } from '../../scripts/hook-session.mjs';
 import { claimNextOperation, submissionEnvelope, submitOperation } from '../../scripts/lib/sdk-controller.mjs';
 import { initializeState, readState, updateState } from '../../scripts/lib/state.mjs';
+import { issueModeGrant } from '../../scripts/lib/hook-evidence.mjs';
 
 const root = resolve(import.meta.dirname, '..', '..');
 const control = join(root, 'scripts', 'control.mjs');
@@ -37,7 +38,13 @@ async function run(script, args, { cwd, env, input } = {}) {
 }
 
 const controlRun = (project, env, ...args) => run(control, args, { cwd: project, env });
-const hookRun = (project, env, payload) => run(sessionHook, [], { cwd: project, env, input: JSON.stringify({ cwd: project, ...payload }) });
+const hookRun = (project, env, payload) => run(sessionHook, [], { cwd: project, env, input: JSON.stringify({ cwd: project, session_id: 'test-session', ...payload }) });
+
+async function changeMode(project, env, route, participants) {
+  await initializeState(project, env);
+  const grant = await issueModeGrant(project, { sessionId: 'test-session', route, participants }, env);
+  return controlRun(project, env, 'mode', route, '--participants', participants, '--grant', grant.id);
+}
 
 test('mode controls reach all eight modes and reject normal-codex', async (t) => {
   const { project, env } = await fixture(t);
@@ -47,17 +54,17 @@ test('mode controls reach all eight modes and reject normal-codex', async (t) =>
     ['ask-once', 'both', 'ask'], ['ask-once', 'claude', 'askClaude'], ['ask-once', 'codex', 'askCodex']
   ];
   for (const [route, participants, label] of matrix) {
-    const changed = await controlRun(project, env, 'mode', route, '--participants', participants);
+    const changed = await changeMode(project, env, route, participants);
     assert.equal(changed.code, 0, changed.stderr);
     assert.match(changed.stdout, new RegExp(label));
   }
-  assert.equal((await controlRun(project, env, 'mode', 'normal', '--participants', 'codex')).code, 1);
+  assert.equal((await controlRun(project, env, 'mode', 'normal', '--participants', 'codex', '--grant', '11111111-1111-4111-8111-111111111111')).code, 1);
 });
 
 test('ask-once reverts on the next prompt without recording raw Claude-only Q&A', async (t) => {
   const { project, env } = await fixture(t);
-  await controlRun(project, env, 'mode', 'discussion', '--participants', 'claude');
-  await controlRun(project, env, 'mode', 'ask-once', '--participants', 'claude');
+  await changeMode(project, env, 'discussion', 'claude');
+  await changeMode(project, env, 'ask-once', 'claude');
   const submit = await hookRun(project, env, { hook_event_name: 'UserPromptSubmit', prompt: 'private Claude-only question' });
   assert.equal(submit.code, 0, submit.stderr);
   const state = (await readState(project, env)).state;
@@ -157,7 +164,7 @@ test('controls resolve subdirectories to owning workstream and diagnose pinned S
   assert.equal(checkpoint.code, 0, checkpoint.stderr);
   assert.deepEqual((await readState(project, env)).state.partner.thread.checkpoint.acceptedDecisions, ['from child']);
   const diagnosed = JSON.parse((await controlRun(project, env, 'diagnose')).stdout);
-  assert.equal(diagnosed.plugin.version, '1.5.2');
+  assert.equal(diagnosed.plugin.version, '1.6.0');
   assert.equal(diagnosed.codex.transport, 'official TypeScript SDK');
   assert.equal(diagnosed.codex.installed, true);
   assert.equal(diagnosed.codex.dependency, '0.149.0');

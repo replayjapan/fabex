@@ -8,7 +8,8 @@ import { CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, checkpointWarnings, MA
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
 import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
-import { compactCheckpointArray, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
+import { compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
+import { modeGrantMatches } from './lib/hook-evidence.mjs';
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 
@@ -32,21 +33,24 @@ async function mutate(root, purpose, fn) {
   return updated.state;
 }
 
-async function mode(root, target, participants = 'both') {
+async function mode(root, target, participants, grantId) {
   if (!['normal', 'discussion', 'ask-once'].includes(target)) throw new ValidationError('mode must be normal, discussion, or ask-once');
   if (!PARTICIPANTS.has(participants) || !isValidMode(target, participants)) throw new ValidationError(`unsupported mode combination: ${target}/${participants}`);
-  const current = await currentState(root);
-  if (current.state.route === 'recovery-read-only') throw new ValidationError('mode changes are unavailable in recovery-read-only; use recover');
-  const from = { route: current.state.route, participants: current.state.participants };
   const to = { route: target, participants };
-  if (from.route !== to.route || from.participants !== to.participants) {
-    await mutate(root, `mode-${target}-${participants}`, (state) => {
+  let from = null;
+  await mutate(root, `mode-${target}-${participants}`, (state) => {
+    if (state.route === 'recovery-read-only') throw new ValidationError('mode changes are unavailable in recovery-read-only; use recover');
+    if (state.operations.some((operation) => ['queued', 'working'].includes(operation.status)) || state.operations.some((operation) => operation.request?.phase === 'independent' && operation.status === 'completed' && !state.operations.some((candidate) => candidate.request?.parentOperationId === operation.id))) throw new ValidationError('finish, cancel, or recover the active partner cycle before changing mode');
+    if (!modeGrantMatches(state.modeGrant, { id: grantId, route: target, participants })) throw new ValidationError('mode grant was consumed, expired, or changed');
+    from = { route: state.route, participants: state.participants };
+    state.modeGrant = null;
+    if (from.route !== to.route || from.participants !== to.participants) {
       if (target === 'ask-once' && state.route !== 'ask-once') state.returnTo = { route: state.route, participants: state.participants };
       if (target !== 'ask-once') state.returnTo = null;
       state.route = target;
       state.participants = participants;
-    });
-  }
+    }
+  });
   process.stdout.write(`${formatModeTransition(from, to)}\nNative permissions and sandbox: unchanged. Codex SDK sandbox is selected per queued turn.\n`);
 }
 
@@ -65,7 +69,7 @@ async function status(root, view = 'default') {
   if (!isDeepStrictEqual(capturedValue, liveFingerprintValue)) warnings.push('captured fingerprint differs from live');
   const terminal = result.state.operations.filter((operation) => ['completed', 'failed', 'cancelled'].includes(operation.status)).slice(-3);
   const selected = view === 'all' ? result.state.operations : result.state.operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status) || terminal.includes(operation));
-  const operations = selected.map(({ id, status: operationStatus, externalId, lifecycle }) => ({ id, status: operationStatus, externalId, lifecycle }));
+  const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle }));
   const output = {
     health: result.health,
     ...(result.lock ? { lock: result.lock } : {}),
@@ -76,6 +80,12 @@ async function status(root, view = 'default') {
     generation: result.state.generation,
     project: result.state.project,
     task: result.state.task,
+    collaboration: {
+      modeGrantActive: Boolean(result.state.modeGrant && Date.parse(result.state.modeGrant.expiresAt) >= Date.now()),
+      ownerPromptCapturedAt: result.state.contextEvidence.ownerPrompt?.capturedAt ?? null,
+      ownerVisibleReplyCapturedAt: result.state.contextEvidence.ownerVisibleReply?.capturedAt ?? null,
+      operationalDelivery: result.state.operationalDelivery
+    },
     partner: {
       transport: result.state.partner.transport,
       status: result.state.partner.status,
@@ -203,8 +213,8 @@ async function recover(root, args) {
   }
   if (!(args.length === 3 && args[1] === '--operation-id')) throw new ValidationError('recover action requires exactly --operation-id <uuid>');
   const id = assertUuid(args[2], 'operation id');
-  const current = await currentState(root);
-  const operation = current.state.operations.find((item) => item.id === id);
+  let current = await currentState(root);
+  let operation = current.state.operations.find((item) => item.id === id);
   if (!operation) throw new ValidationError('operation not found');
   if (action === 'inspect') {
     process.stdout.write(`${JSON.stringify({ route: current.state.route, operation: { ...operation, request: { ...operation.request, message: operation.request.message ? '[queued owner message retained]' : null } } }, null, 2)}\n`);
@@ -224,7 +234,15 @@ async function recover(root, args) {
     return;
   }
   if (action === 'abandon') {
-    if (!['failed', 'cancelled'].includes(operation.status)) throw new ValidationError('only failed or cancelled operations can be abandoned');
+    if (operation.status === 'working') {
+      const recovered = await failDeadRunnerOperation(root, id, process.env);
+      if (!recovered.changed) throw new ValidationError('working operation still has a live runner; cancel it before abandonment');
+      current = await currentState(root);
+      operation = current.state.operations.find((item) => item.id === id);
+    }
+    const awaitingPhase2 = operation.status === 'completed' && operation.request.phase === 'independent'
+      && !current.state.operations.some((item) => item.request.parentOperationId === operation.id);
+    if (!['failed', 'cancelled'].includes(operation.status) && !awaitingPhase2) throw new ValidationError('only failed, cancelled, or awaiting-Phase-2 operations can be abandoned');
     await mutate(root, 'partner-abandon', (state) => {
       state.operations = state.operations.filter((item) => item.id !== id);
       if (state.route === 'recovery-read-only') {
@@ -248,7 +266,7 @@ async function diagnose(root) {
   let hooksValid = false;
   try {
     const hooks = JSON.parse(await readFile(resolve(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))?.hooks;
-    hooksValid = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'].every((name) => Array.isArray(hooks?.[name]) && hooks[name].length > 0);
+    hooksValid = ['SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PostCompact'].every((name) => Array.isArray(hooks?.[name]) && hooks[name].length > 0);
   } catch {}
   let sdkInstalled = false;
   try { await access(resolve(PLUGIN_ROOT, 'node_modules', '@openai', 'codex-sdk', 'package.json')); sdkInstalled = true; } catch {}
@@ -305,8 +323,8 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
   const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
   if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }
-  if (command === 'mode' && args.length === 1) return mode(root, args[0]);
-  if (command === 'mode' && args.length === 3 && args[1] === '--participants') return mode(root, args[0], args[2]);
+  if (command === 'mode' && args.length === 3 && args[1] === '--grant') return mode(root, args[0], 'both', assertUuid(args[2], 'mode grant'));
+  if (command === 'mode' && args.length === 5 && args[1] === '--participants' && args[3] === '--grant') return mode(root, args[0], args[2], assertUuid(args[4], 'mode grant'));
   if (command === 'status' && (args.length === 0 || args.length === 1 && ['--all', '--brief'].includes(args[0]))) return status(root, args[0] === '--all' ? 'all' : args[0] === '--brief' ? 'brief' : 'default');
   if (command === 'diagnose' && args.length === 0) return diagnose(root);
   if (command === 'config' && args.length === 0) return config(root);

@@ -13,6 +13,8 @@ Start with `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status`. For a record
 
 For a lock whose owner PID is confirmed dead, use `recover clear-dead-lock`. Never clear a live or unverifiable lock.
 
+`cancel` and `recover abandon` inspect the recorded runner PID for a working operation. If that runner is dead, they first mark the operation failed and enter recovery-read-only; `recover abandon` may then clear the known-dead operation normally. A live or unverifiable runner is never killed, guessed away, or abandoned.
+
 For a validated orphaned transaction, choose explicitly between `recover resolve-transaction --commit` and `recover resolve-transaction --discard`. Commit is allowed only for exactly the next generation, or generation zero when state is missing. Discard is allowed only when the journal's relationship to current state is unambiguous. Invalid or ambiguous journals remain untouched. Never edit state files by hand or infer external effects.
 
 Direct or off-books SDK recovery is not implicit. A confirmed missing persisted thread may be cleared only through the exact recovery command; the next real owner message creates a structured-checkpoint-seeded replacement. Ambiguous failures remain recovery-read-only. Never infer external effects.

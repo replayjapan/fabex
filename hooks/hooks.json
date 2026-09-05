@@ -23,6 +23,17 @@
         ]
       }
     ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-mode-grant.mjs"]
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -34,6 +45,20 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-wake.mjs"],
+            "asyncRewake": true,
+            "timeout": 590
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -41,6 +66,52 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-stop.mjs"]
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-stop.mjs"]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "^fabex:fabex-operational$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-lifecycle.mjs"]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^fabex:fabex-operational$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-lifecycle.mjs"]
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-lifecycle.mjs"]
           }
         ]
       }

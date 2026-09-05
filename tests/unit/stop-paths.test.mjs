@@ -13,7 +13,7 @@ function stateResult(operations = []) {
   return { ok: true, state, health: 'healthy' };
 }
 
-const running = { id: '11111111-1111-4111-8111-111111111111', kind: 'partner', name: 'sdk-turn', status: 'working', externalId: null };
+const running = { id: '11111111-1111-4111-8111-111111111111', kind: 'partner', name: 'sdk-turn', status: 'working', externalId: null, request: { phase: 'single', parentOperationId: null } };
 
 test('Stop blocks queued or working partner operations', () => {
   assert.deepEqual(stopDecision({}, { ok: false, health: 'corrupt' }), {});
@@ -21,6 +21,7 @@ test('Stop blocks queued or working partner operations', () => {
   assert.deepEqual(stopDecision({}, stateResult([{ ...running, status: 'completed' }])), {});
   assert.equal(stopDecision({}, stateResult([running])).decision, 'block');
   assert.equal(stopDecision({}, stateResult([{ ...running, status: 'queued' }])).decision, 'block');
+  assert.equal(stopDecision({}, stateResult([{ ...running, status: 'completed', request: { phase: 'independent', parentOperationId: null } }])).decision, 'block');
   assert.deepEqual(stopDecision({ stop_hook_active: true }, stateResult([running])), {});
 });
 

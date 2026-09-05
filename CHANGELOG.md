@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.6.0 - 2026-09-05
+
+### Why we made this change
+
+Long-project dogfooding exposed two steering failures. Codex received Fable's current framing in the same prompt as the owner message, so it could not form a genuinely independent first reading. Separately, Claude or another AI executor could invoke the same Fabex mode command used by an owner-typed slash command. Stable Claude Code hook events also offered a safer way to verify owner-visible context and observe phase completion without adopting the preview function-hook API.
+
+### What it gave us
+
+- An independent Phase 1 containing only the authoritative turn header, the owner's message, and the previous owner-visible Fable reply, followed by a separately linked Phase 2 for convergence.
+- A stored, immutable Phase 1 result and owner-message digest, with an owner-cycle FIFO barrier that prevents later work from passing an unfinished Phase 2.
+- Owner-only route and participant changes through a short-lived, session-bound, single-use mode grant issued by `UserPromptExpansion` and consumed atomically by the mode command.
+- Digest-only verification of owner prompts and owner-visible replies, plus bounded operational-agent, compaction, and wake-watcher metadata.
+
+### Tradeoffs we accepted
+
+- Both-participant owner cycles now use two SDK turns, increasing latency and Codex usage in exchange for independent-first review and explicit convergence.
+- Mutual blindness is not promised: Fable may read Codex's stored Phase 1 before writing its current response. The owner's goal is for Codex to catch Fable's mistakes, so only Codex's first reading is isolated.
+- `asyncRewake` is optional and remains backed by blocking `wait`. Claude Code starts a process for each asynchronous hook invocation, so Fabex deduplicates one watcher per project and retains process and RAM behavior as live Beta gates.
+- Hook payload behavior and activation must be verified after plugin update, forced reload, and session restart. Repository tests do not prove live host activation.
+
+### Changes
+
+- Replaced the one-turn both-participant envelope with strict JSON `independent` and `reconcile` phases. Unexpected fields, trailing Fable notes or framing, mismatched owner messages, invalid parents, and reused Phase 1 results fail closed.
+- Prefixed both new and resumed prompts with an authoritative phase-aware `FABEX TURN` header. A fresh-thread recovery checkpoint is supplied through route-neutral developer configuration so it cannot trail the Phase 1 envelope.
+- Added a durable Phase 2 barrier, whole-cycle Stop blocking, explicit abandonment recovery, and phase-aware cancellation while preserving the exact canonical Codex thread.
+- Added stable `UserPromptSubmit` and `Stop` evidence hooks that retain SHA-256 digests, sizes, timestamps, and session IDs only. Raw owner messages, replies, transcripts, thinking, tool logs, and compaction summaries are not copied into evidence state.
+- Added `UserPromptExpansion` grants for owner-only mode changes. Grants are bound to session, project, route, and participants, expire after one minute, and are consumed once; main Claude, subagents, and direct Codex commands cannot change modes without one.
+- Added a deduplicated `PostToolUse` `asyncRewake` watcher while retaining `controller wait` as the deterministic fallback.
+- Added exact operational-agent lifecycle records from `SubagentStart`/`SubagentStop` and timestamp-only compaction records from `PostCompact`.
+- Added a live migration gate: hooks and reads report `migration-deferred` and leave the previous schema untouched while a live runner owns an active operation.
+- Filtered task, system, reminder, and local-command notification prompts from owner evidence. Added a private eight-entry digest-only sidecar so legitimate interleaved prompts remain verifiable without changing schema 8 or retaining prompt text.
+- Restricted built-in `node --test` verification to automatic discovery or explicit paths inside the configured repository/workstream. External paths and extra Node flags remain denied unless exactly configured.
+- Made cancellation detect a dead runner behind a `working` operation and enter recovery-read-only with an unknown outcome. `recover abandon` can perform and then reconcile the same sanctioned transition without a new submit.
+- Added schema 8 with lossless schema-7 migration for phase linkage, context evidence, mode grants, operational lifecycle, compaction metadata, and watcher ownership.
+- Added named regressions for strict phase separation, cycle ordering, digest privacy, single-use grants, Stop/recovery behavior, hook metadata, watcher deduplication, schema migration, stable-event registration, and direct mode-command denial.
+
 ## 1.5.2 - 2026-09-04
 
 Fabex 1.5.2 is a focused pre-submission packaging and delivery-guard release. It keeps the 1.5.1 state schema, canonical thread, FIFO controller, Codex-only project writing, operational-only Git delivery, and Beta dogfood gates unchanged.

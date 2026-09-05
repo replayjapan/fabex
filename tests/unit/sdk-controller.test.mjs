@@ -12,6 +12,7 @@ import {
   lifecycleUpdate,
   runOperation,
   releaseRunnerIfIdle,
+  reconciliationEnvelope,
   submissionEnvelope,
   submitOperation,
   updateCheckpoint,
@@ -60,27 +61,49 @@ async function queued(project, env, message) {
   return operation;
 }
 
+async function completedCycle(project, env, ownerMessage, createCodex) {
+  const phase1 = await queued(project, env, ownerMessage);
+  await runOperation(project, phase1, { createCodex, signal: new AbortController().signal }, env);
+  const phase2Submission = await submitOperation(project, reconciliationEnvelope(phase1.id, ownerMessage, `Fable review of ${ownerMessage}`), env, { spawnRunner: false });
+  const phase2 = await claimNextOperation(project, env);
+  assert.equal(phase2.id, phase2Submission.operationId);
+  await runOperation(project, phase2, { createCodex, signal: new AbortController().signal }, env);
+  return { phase1, phase2 };
+}
+
 test('first turn persists thread.started and subsequent queued turns resume the exact id in FIFO order', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
   await submitOperation(project, submissionEnvelope('first owner message'), env, { spawnRunner: false });
   await submitOperation(project, submissionEnvelope('second owner message'), env, { spawnRunner: false });
   const capture = [];
-  const factory = sdkFactory([completed('canonical-thread', 'first result'), completed('canonical-thread', 'second result')], capture);
+  const factory = sdkFactory([
+    completed('canonical-thread', 'first independent'), completed('canonical-thread', 'first convergence'),
+    completed('canonical-thread', 'second independent'), completed('canonical-thread', 'second convergence')
+  ], capture);
   const first = await claimNextOperation(project, env);
   await runOperation(project, first, { createCodex: factory, signal: new AbortController().signal }, env);
+  assert.equal(await claimNextOperation(project, env), null);
+  await submitOperation(project, reconciliationEnvelope(first.id, 'first owner message', 'first Fable response'), env, { spawnRunner: false });
   const second = await claimNextOperation(project, env);
   await runOperation(project, second, { createCodex: factory, signal: new AbortController().signal }, env);
+  const nextOwner = await claimNextOperation(project, env);
+  await runOperation(project, nextOwner, { createCodex: factory, signal: new AbortController().signal }, env);
+  await submitOperation(project, reconciliationEnvelope(nextOwner.id, 'second owner message', 'second Fable response'), env, { spawnRunner: false });
+  const final = await claimNextOperation(project, env);
+  await runOperation(project, final, { createCodex: factory, signal: new AbortController().signal }, env);
   const state = (await readState(project, env)).state;
   assert.equal(state.partner.thread.threadId, 'canonical-thread');
-  assert.equal(state.partner.thread.metadata.turnCount, 2);
-  assert.deepEqual(state.operations.map((operation) => operation.status), ['completed', 'completed']);
+  assert.equal(state.partner.thread.metadata.turnCount, 4);
+  assert.deepEqual(state.operations.map((operation) => operation.status), ['completed', 'completed', 'completed', 'completed']);
   assert.equal(capture[0].kind, 'start');
-  assert.match(capture[0].prompt, /Fabex continuity checkpoint/);
+  assert.doesNotMatch(capture[0].prompt, /Fabex continuity checkpoint|first Fable response/);
+  assert.match(capture[0].codexOptions.config.developer_instructions, /Fabex continuity checkpoint/);
   assert.equal(capture[1].kind, 'resume');
   assert.equal(capture[1].id, 'canonical-thread');
-  assert.match(capture[1].prompt, /^FABEX TURN: route=normal; sandbox=workspace-write; participants=both/);
-  assert.match(capture[1].prompt, /OWNER MESSAGE \(verbatim\):\nsecond owner message/);
+  assert.match(capture[1].prompt, /^FABEX TURN: phase=reconcile; route=normal; sandbox=workspace-write; participants=both/);
+  assert.match(capture[1].prompt, /CODEX PHASE 1 INDEPENDENT READING/);
+  assert.match(capture[2].prompt, /OWNER MESSAGE \(verbatim\):\nsecond owner message/);
   assert.equal(capture[0].threadOptions.sandboxMode, 'workspace-write');
   assert.equal(capture[0].threadOptions.approvalPolicy, 'on-request');
   assert.equal(capture[0].codexOptions.apiKey, undefined);
@@ -92,8 +115,7 @@ test('first turn persists thread.started and subsequent queued turns resume the 
 test('discussion turn resumes the same id with a mechanical read-only sandbox', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const initial = await queued(project, env, 'implement');
-  await runOperation(project, initial, { createCodex: sdkFactory([completed('same-thread')]), signal: new AbortController().signal }, env);
+  await completedCycle(project, env, 'implement', sdkFactory([completed('same-thread', 'independent'), completed('same-thread', 'converged')]));
   const current = await readState(project, env);
   await updateState(project, (state) => { state.route = 'discussion'; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);
   const discussion = await queued(project, env, 'discuss');
@@ -107,8 +129,7 @@ test('discussion turn resumes the same id with a mechanical read-only sandbox', 
 test('cancellation records cancelled and keeps canonical continuity', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const first = await queued(project, env, 'first');
-  await runOperation(project, first, { createCodex: sdkFactory([completed('thread-cancel')]), signal: new AbortController().signal }, env);
+  await completedCycle(project, env, 'first', sdkFactory([completed('thread-cancel', 'independent'), completed('thread-cancel', 'converged')]));
   const second = await queued(project, env, 'cancel me');
   const controller = new AbortController();
   controller.abort();
@@ -145,12 +166,19 @@ test('runner integration drains the FIFO sequentially and releases process owner
   await submitOperation(project, submissionEnvelope('one'), env, { spawnRunner: false });
   await submitOperation(project, submissionEnvelope('two'), env, { spawnRunner: false });
   const capture = [];
-  await runQueue(project, env, sdkFactory([completed('runner-thread'), completed('runner-thread')], capture));
-  const state = (await readState(project, env)).state;
-  assert.deepEqual(state.operations.map((operation) => operation.status), ['completed', 'completed']);
+  await runQueue(project, env, sdkFactory([completed('runner-thread', 'one independent')], capture));
+  let state = (await readState(project, env)).state;
+  assert.deepEqual(state.operations.map((operation) => operation.status), ['completed', 'queued']);
+  await submitOperation(project, reconciliationEnvelope(state.operations[0].id, 'one', 'one Fable'), env, { spawnRunner: false });
+  await runQueue(project, env, sdkFactory([completed('runner-thread', 'one converged'), completed('runner-thread', 'two independent')], capture));
+  state = (await readState(project, env)).state;
+  await submitOperation(project, reconciliationEnvelope(state.operations.find((operation) => operation.request.phase === 'independent' && operation.id !== state.operations[0].id).id, 'two', 'two Fable'), env, { spawnRunner: false });
+  await runQueue(project, env, sdkFactory([completed('runner-thread', 'two converged')], capture));
+  state = (await readState(project, env)).state;
+  assert.deepEqual(state.operations.map((operation) => operation.status), ['completed', 'completed', 'completed', 'completed']);
   assert.equal(state.controller.runnerPid, null);
   assert.equal(state.controller.activeOperationId, null);
-  assert.deepEqual(capture.map((item) => item.kind), ['start', 'resume']);
+  assert.deepEqual(capture.map((item) => item.kind), ['start', 'resume', 'resume', 'resume']);
 });
 
 test('a replacement runner fails closed when the previous process died mid-turn', async (t) => {
@@ -171,8 +199,7 @@ test('a replacement runner fails closed when the previous process died mid-turn'
 test('mismatched thread.started fails closed without adopting the returned id', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const first = await queued(project, env, 'first');
-  await runOperation(project, first, { createCodex: sdkFactory([completed('recorded')]), signal: new AbortController().signal }, env);
+  await completedCycle(project, env, 'first', sdkFactory([completed('recorded', 'independent'), completed('recorded', 'converged')]));
   const next = await queued(project, env, 'next');
   await assert.rejects(runOperation(project, next, { createCodex: sdkFactory([completed('wrong')]), signal: new AbortController().signal }, env), /thread mismatch/i);
   const state = (await readState(project, env)).state;
@@ -184,8 +211,7 @@ test('mismatched thread.started fails closed without adopting the returned id', 
 test('exact missing-session text is detected and puts resume failure into recovery', async (t) => {
   const { project, env } = await fixture(t);
   await initializeState(project, env);
-  const first = await queued(project, env, 'first');
-  await runOperation(project, first, { createCodex: sdkFactory([completed('missing-later')]), signal: new AbortController().signal }, env);
+  await completedCycle(project, env, 'first', sdkFactory([completed('missing-later', 'independent'), completed('missing-later', 'converged')]));
   const next = await queued(project, env, 'next');
   const error = new Error('Session not found for thread_id: missing-later');
   assert.equal(isMissingSessionError(error), true);

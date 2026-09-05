@@ -11,6 +11,11 @@ process.umask(0o077);
 const MAX_STATE_BYTES = 1024 * 1024;
 export const DEFAULT_READ_LOCK_WAIT_MS = 3000;
 
+function processAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
+}
+
 export class StateStoreError extends Error {
   constructor(code, message, cause, metadata = null) {
     super(message, { cause });
@@ -30,6 +35,9 @@ export function initialState(identity) {
     returnTo: null,
     task: { id: null, status: null, label: null, joint: { required: false, status: null, decisionId: null } },
     executorException: null,
+    modeGrant: null,
+    contextEvidence: { ownerPrompt: null, ownerVisibleReply: null },
+    operationalDelivery: null,
     partner: {
       transport: 'codex-sdk',
       status: 'not-started',
@@ -41,12 +49,13 @@ export function initialState(identity) {
           lastUsedAt: null,
           repoFingerprint: { branch: null, head: null, dirty: null },
           repoFingerprintCapturedAt: null,
-          lastRecordedTurn: null
+          lastRecordedTurn: null,
+          lastCompaction: null
         }
       },
       envelope: { cwd: null, sandbox: null, instructionProfile: null }
     },
-    controller: { runnerPid: null, activeOperationId: null },
+    controller: { runnerPid: null, activeOperationId: null, wakeWatcher: null },
     operations: []
   };
 }
@@ -116,7 +125,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -142,12 +151,13 @@ async function loadValidated(paths) {
           lastUsedAt: legacyMetadata.lastUsedAt ?? null,
           repoFingerprint: legacyMetadata.repoFingerprint ?? { branch: null, head: null, dirty: null },
           repoFingerprintCapturedAt: null,
-          lastRecordedTurn: null
+          lastRecordedTurn: null,
+          lastCompaction: null
         }
       };
       state.partner.thread.checkpoint.repoFingerprint = state.partner.thread.metadata.repoFingerprint;
       state.partner.envelope = { cwd: null, sandbox: null, instructionProfile: null };
-      state.controller = { runnerPid: null, activeOperationId: null };
+      state.controller = { runnerPid: null, activeOperationId: null, wakeWatcher: null };
       state.operations = [];
     }
     const checkpoint = state.partner?.thread?.checkpoint;
@@ -160,6 +170,7 @@ async function loadValidated(paths) {
     if (metadata) {
       metadata.repoFingerprintCapturedAt ??= metadata.repoFingerprint?.head ? (metadata.lastUsedAt ?? checkpoint?.updatedAt ?? null) : null;
       metadata.lastRecordedTurn ??= null;
+      metadata.lastCompaction ??= null;
     }
     if (sourceVersion <= 5) {
       let activeException = null;
@@ -170,6 +181,21 @@ async function loadValidated(paths) {
       }
       state.executorException = activeException;
     }
+    state.modeGrant ??= null;
+    state.contextEvidence ??= { ownerPrompt: null, ownerVisibleReply: null };
+    state.operationalDelivery ??= null;
+    state.controller ??= { runnerPid: null, activeOperationId: null, wakeWatcher: null };
+    state.controller.wakeWatcher ??= null;
+    state.operations = (state.operations ?? []).map((operation) => ({
+      ...operation,
+      request: {
+        ...operation.request,
+        phase: operation.request?.phase ?? 'single',
+        parentOperationId: operation.request?.parentOperationId ?? null,
+        ownerMessageDigest: operation.request?.ownerMessageDigest ?? null,
+        claudeReplyVerified: operation.request?.claudeReplyVerified ?? 'unavailable'
+      }
+    }));
     state.schemaVersion = STATE_SCHEMA_VERSION;
   }
   try { validateState(state, paths); } catch (error) {
@@ -209,11 +235,15 @@ async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v7');
+    await acquireLock(paths, 'schema-migration-to-v8');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);
     if (!loaded.migrated) return loaded.state;
+    if (loaded.state.controller.activeOperationId && processAlive(loaded.state.controller.runnerPid)) {
+      const metadata = { pid: loaded.state.controller.runnerPid, operationId: loaded.state.controller.activeOperationId };
+      throw new StateStoreError('migration-deferred', 'schema migration deferred while a live controller runner owns an active operation', undefined, metadata);
+    }
     const migrated = { ...loaded.state, generation: loaded.state.generation + 1 };
     validateState(migrated, paths);
     temp = `${paths.stateFile}.tmp.${process.pid}.${randomUUID()}`;
@@ -243,10 +273,7 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
       const loaded = await loadValidated(paths);
       const state = loaded.migrated ? await persistMigration(paths) : loaded.state;
       const hasRunning = state.operations.some((operation) => operation.status === 'working') || state.partner.status === 'working';
-      const runnerAlive = (() => {
-        if (!Number.isSafeInteger(state.controller.runnerPid) || state.controller.runnerPid <= 0) return false;
-        try { process.kill(state.controller.runnerPid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
-      })();
+      const runnerAlive = processAlive(state.controller.runnerPid);
       if (!recoverUnresolved || !hasRunning || runnerAlive) return { ok: true, state, health: 'healthy', paths };
       return updateState(root, (draft) => {
         draft.route = 'recovery-read-only';
@@ -255,7 +282,7 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
           ? { ...operation, status: 'failed', request: { ...operation.request, message: null }, result: { ...operation.result, error: 'controller stopped before the SDK turn outcome was known' }, lifecycle: { ...operation.lifecycle, phase: 'failed', detail: 'Controller stopped; recovery is required.', finishedAt: new Date().toISOString() } }
           : operation);
         draft.partner.status = 'failed';
-        draft.controller = { runnerPid: null, activeOperationId: null };
+        draft.controller = { runnerPid: null, activeOperationId: null, wakeWatcher: null };
         draft.generation += 1;
         return draft;
       }, { expectedGeneration: state.generation, purpose: 'session-recovery' }, env);
