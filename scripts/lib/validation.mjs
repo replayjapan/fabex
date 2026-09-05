@@ -1,7 +1,7 @@
 import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_MUTABLE_FIELDS } from './checkpoint.mjs';
 import { isValidMode, PARTICIPANTS } from './mode.mjs';
 
-export const STATE_SCHEMA_VERSION = 8;
+export const STATE_SCHEMA_VERSION = 9;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -67,11 +67,20 @@ function validDigestEvidence(value) {
 }
 
 function validModeGrant(value) {
-  return value === null || (hasExactKeys(value, ['id', 'sessionId', 'route', 'participants', 'createdAt', 'expiresAt'])
+  return value === null || (hasExactKeys(value, ['id', 'sessionId', 'route', 'participants', 'createdAt', 'expiresAt', 'ownerMessage', 'operationId', 'pausedAt'])
     && UUID_RE.test(value.id ?? '') && boundedString(value.sessionId, 256)
     && ['normal', 'discussion', 'ask-once'].includes(value.route) && PARTICIPANTS.has(value.participants)
     && isValidMode(value.route, value.participants) && nullableIsoString(value.createdAt) && value.createdAt !== null
-    && nullableIsoString(value.expiresAt) && value.expiresAt !== null);
+    && nullableIsoString(value.expiresAt) && value.expiresAt !== null
+    && boundedNullableString(value.ownerMessage, 192 * 1024)
+    && (value.operationId === null || UUID_RE.test(value.operationId ?? ''))
+    && nullableIsoString(value.pausedAt));
+}
+
+function validOwnerSelectedMode(value) {
+  return value === null || (hasExactKeys(value, ['route', 'participants', 'selectedAt'])
+    && ['normal', 'discussion', 'ask-once'].includes(value.route) && PARTICIPANTS.has(value.participants)
+    && isValidMode(value.route, value.participants) && nullableIsoString(value.selectedAt) && value.selectedAt !== null);
 }
 
 function validDelivery(value) {
@@ -96,7 +105,7 @@ function validWakeWatcher(value) {
 function validateOperation(operation, errors) {
   if (!hasExactKeys(operation, ['id', 'kind', 'name', 'status', 'externalId', 'request', 'result', 'lifecycle'])) { errors.push('operation record is invalid'); return; }
   if (!UUID_RE.test(operation.id ?? '') || operation.kind !== 'partner' || operation.name !== 'sdk-turn' || !OPERATION_STATUSES.has(operation.status) || !nullableString(operation.externalId)) errors.push('operation identity is invalid');
-  if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox', 'phase', 'parentOperationId', 'ownerMessageDigest', 'claudeReplyVerified'])) errors.push('operation request shape is invalid');
+  if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox', 'phase', 'parentOperationId', 'ownerMessageDigest', 'claudeReplyVerified', 'ownerMessage', 'previousReplyStatus', 'previousReply', 'interrupted'])) errors.push('operation request shape is invalid');
   else {
     if (!boundedNullableString(operation.request.message, 192 * 1024)) errors.push('operation message is invalid');
     if (!ROUTES.has(operation.request.route) || operation.request.route === 'recovery-read-only') errors.push('operation route is invalid');
@@ -108,6 +117,12 @@ function validateOperation(operation, errors) {
     if ((operation.request.phase === 'reconcile') !== (operation.request.parentOperationId !== null)) errors.push('operation parent/phase linkage is invalid');
     if (operation.request.ownerMessageDigest !== null && !DIGEST_RE.test(operation.request.ownerMessageDigest)) errors.push('operation owner message digest is invalid');
     if (![true, false, 'unavailable'].includes(operation.request.claudeReplyVerified)) errors.push('operation Claude reply verification is invalid');
+    if (!boundedNullableString(operation.request.ownerMessage, 192 * 1024)) errors.push('operation retained owner message is invalid');
+    if (![null, 'provided', 'none', 'unavailable'].includes(operation.request.previousReplyStatus)) errors.push('operation previous reply status is invalid');
+    if (!boundedNullableString(operation.request.previousReply, 192 * 1024)) errors.push('operation previous reply is invalid');
+    if (typeof operation.request.interrupted !== 'boolean') errors.push('operation interrupted flag is invalid');
+    if (operation.request.phase !== 'independent' && (operation.request.ownerMessage !== null || operation.request.previousReplyStatus !== null || operation.request.previousReply !== null || operation.request.interrupted)) errors.push('only independent operations retain phase context');
+    if (operation.request.phase === 'independent' && operation.request.previousReplyStatus === 'provided' && operation.request.previousReply === null) errors.push('provided previous reply is missing');
   }
   if (!hasExactKeys(operation.result, ['finalResponse', 'error']) || !boundedNullableString(operation.result.finalResponse, 32 * 1024) || !boundedNullableString(operation.result.error, 8192)) errors.push('operation result is invalid');
   if (!hasExactKeys(operation.lifecycle, ['phase', 'detail', 'queuedAt', 'startedAt', 'finishedAt', 'cancelRequested'])) errors.push('operation lifecycle shape is invalid');
@@ -116,7 +131,7 @@ function validateOperation(operation, errors) {
 
 export function validateState(state, identity) {
   const errors = [];
-  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'contextEvidence', 'operationalDelivery'])) errors.push('state has unexpected or missing top-level fields');
+  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery'])) errors.push('state has unexpected or missing top-level fields');
   if (state?.schemaVersion !== STATE_SCHEMA_VERSION) errors.push('state schemaVersion is incompatible');
   if (!Number.isSafeInteger(state?.generation) || state.generation < 0) errors.push('generation must be a non-negative integer');
   if (!hasExactKeys(state?.project, ['id', 'canonicalRoot'])) errors.push('project shape is invalid');
@@ -124,11 +139,12 @@ export function validateState(state, identity) {
   if (identity && state?.project?.canonicalRoot !== identity.canonicalRoot) errors.push('canonical root does not match state ownership');
   if (!ROUTES.has(state?.route) || !PARTICIPANTS.has(state?.participants) || (ROUTES.has(state?.route) && PARTICIPANTS.has(state?.participants) && !isValidMode(state.route, state.participants))) errors.push('route or participants are invalid');
   if (state?.returnTo !== null && (!hasExactKeys(state.returnTo, ['route', 'participants']) || !['normal', 'discussion'].includes(state.returnTo.route) || !PARTICIPANTS.has(state.returnTo.participants) || !isValidMode(state.returnTo.route, state.returnTo.participants))) errors.push('returnTo is invalid');
-  if (state?.route !== 'ask-once' && state?.returnTo !== null) errors.push('returnTo is only valid in ask-once mode');
+  if (!['ask-once', 'recovery-read-only'].includes(state?.route) && state?.returnTo !== null) errors.push('returnTo is only valid in ask-once or recovery mode');
   if (!hasExactKeys(state?.task, ['id', 'status', 'label', 'joint']) || !nullableString(state?.task?.id) || !TASK_STATUSES.has(state?.task?.status) || !nullableString(state?.task?.label)) errors.push('task fields are invalid');
   if (!hasExactKeys(state?.task?.joint, ['required', 'status', 'decisionId']) || typeof state?.task?.joint?.required !== 'boolean' || !JOINT_STATUSES.has(state?.task?.joint?.status) || !nullableString(state?.task?.joint?.decisionId)) errors.push('joint task fields are invalid');
   if (state?.executorException !== null && (!hasExactKeys(state.executorException, ['executor', 'scope', 'reason', 'authorizedAt']) || !boundedString(state.executorException.executor, 128) || !boundedString(state.executorException.scope, 256) || !boundedString(state.executorException.reason, 4096) || !nullableIsoString(state.executorException.authorizedAt))) errors.push('executorException is invalid');
   if (!validModeGrant(state?.modeGrant)) errors.push('modeGrant is invalid');
+  if (!validOwnerSelectedMode(state?.ownerSelectedMode)) errors.push('ownerSelectedMode is invalid');
   if (!hasExactKeys(state?.contextEvidence, ['ownerPrompt', 'ownerVisibleReply']) || !validDigestEvidence(state?.contextEvidence?.ownerPrompt) || !validDigestEvidence(state?.contextEvidence?.ownerVisibleReply)) errors.push('contextEvidence is invalid');
   if (!validDelivery(state?.operationalDelivery)) errors.push('operationalDelivery is invalid');
   if (!hasExactKeys(state?.partner, ['transport', 'status', 'thread', 'envelope']) || state?.partner?.transport !== 'codex-sdk' || !PARTNER_STATUSES.has(state?.partner?.status)) errors.push('partner fields are invalid');

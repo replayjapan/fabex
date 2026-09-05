@@ -18,17 +18,17 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfiles, and marketplace metadata agree on 1.6.0 Beta', async () => {
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.6.1 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
   const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
   const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.6.0');
-  assert.equal(pkg.version, '1.6.0');
-  assert.equal(npmLock.version, '1.6.0');
-  assert.equal(npmLock.packages[''].version, '1.6.0');
+  assert.equal(plugin.version, '1.6.1');
+  assert.equal(pkg.version, '1.6.1');
+  assert.equal(npmLock.version, '1.6.1');
+  assert.equal(npmLock.packages[''].version, '1.6.1');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);
@@ -72,10 +72,10 @@ test('README documents Beta SDK transport, install, queue, progress, continuity,
   assert.match(readme, /implementation.*`workspace-write`/i);
 });
 
-test('1.6.0 changelog documents independent review and owner-only modes', async () => {
+test('1.6.1 changelog documents only the focused mode-message, recovery-route, and pending-cycle fixes', async () => {
   const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
-  const release = changelog.split('## 1.5.2')[0];
-  for (const pattern of [/## 1\.6\.0 - 2026-09-05/, /independent Phase 1/, /Phase 2/, /UserPromptExpansion/, /single-use mode grant/, /schema 8/]) assert.match(release, pattern);
+  const release = changelog.split('## 1.6.0')[0];
+  for (const pattern of [/## 1\.6\.1 - 2026-09-05/, /byte-for-byte/, /owner-selected-mode/, /schema 9/, /lock contention/, /interrupted/]) assert.match(release, pattern);
 });
 
 test('current implementation and consumer docs contain no obsolete MCP invocation paths', async () => {

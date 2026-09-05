@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.1 - 2026-09-05
+
+Fabex 1.6.1 is a focused patch for three regressions found while dogfooding the 1.6.0 two-phase workflow. It preserves independent-first sequencing, owner-only mode grants, canonical thread continuity, Codex-only project writing, and the existing fail-closed guards.
+
+- Restored mode-command message forwarding without interpolating owner text into Fable's expanded skill prompt. `UserPromptExpansion` now captures same-line or multiline arguments byte-for-byte in the private grant; the atomic mode command changes mode first, then creates the route-appropriate partner operation. No-argument commands remain mode-only, and grants or text are retained on failure.
+- Added schema 9 owner-selected-mode durability. Recovery no longer defaults to work: abandon, missing-thread, lock, transaction, resume, and orphan paths preserve the proven owner-selected route, while unknown history fails closed to discussion and requires a new owner command. Runner claim and operation claim now retry transient state-lock contention with bounded backoff.
+- Made owner-authorized mode transitions supersede an unreconciled Phase 1. The stored independent result is retained and marked interrupted, Stop no longer blocks on it, queued work is cancelled, active work is stopped before the transition applies, and grant expiry pauses while that stop completes. Switching to discussion therefore cannot release later workspace-write work from the interrupted cycle.
+
 ## 1.6.0 - 2026-09-05
 
 ### Why we made this change

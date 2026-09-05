@@ -8,8 +8,7 @@ import { CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, checkpointWarnings, MA
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
 import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
-import { compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
-import { modeGrantMatches } from './lib/hook-evidence.mjs';
+import { applyOwnerModeTransition, compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 
@@ -36,22 +35,34 @@ async function mutate(root, purpose, fn) {
 async function mode(root, target, participants, grantId) {
   if (!['normal', 'discussion', 'ask-once'].includes(target)) throw new ValidationError('mode must be normal, discussion, or ask-once');
   if (!PARTICIPANTS.has(participants) || !isValidMode(target, participants)) throw new ValidationError(`unsupported mode combination: ${target}/${participants}`);
-  const to = { route: target, participants };
-  let from = null;
-  await mutate(root, `mode-${target}-${participants}`, (state) => {
-    if (state.route === 'recovery-read-only') throw new ValidationError('mode changes are unavailable in recovery-read-only; use recover');
-    if (state.operations.some((operation) => ['queued', 'working'].includes(operation.status)) || state.operations.some((operation) => operation.request?.phase === 'independent' && operation.status === 'completed' && !state.operations.some((candidate) => candidate.request?.parentOperationId === operation.id))) throw new ValidationError('finish, cancel, or recover the active partner cycle before changing mode');
-    if (!modeGrantMatches(state.modeGrant, { id: grantId, route: target, participants })) throw new ValidationError('mode grant was consumed, expired, or changed');
-    from = { route: state.route, participants: state.participants };
-    state.modeGrant = null;
-    if (from.route !== to.route || from.participants !== to.participants) {
-      if (target === 'ask-once' && state.route !== 'ask-once') state.returnTo = { route: state.route, participants: state.participants };
-      if (target !== 'ask-once') state.returnTo = null;
-      state.route = target;
-      state.participants = participants;
-    }
-  });
-  process.stdout.write(`${formatModeTransition(from, to)}\nNative permissions and sandbox: unchanged. Codex SDK sandbox is selected per queued turn.\n`);
+  const outcome = await applyOwnerModeTransition(root, { grantId, route: target, participants }, process.env);
+  const transition = outcome.status === 'pending'
+    ? `Fabex mode transition pending: ${outcome.from ? formatMode(outcome.from.route, outcome.from.participants) : 'unknown'} -> ${formatMode(target, participants)}.`
+    : outcome.from
+      ? formatModeTransition(outcome.from, outcome.to)
+      : `Fabex mode selected: ${formatMode(target, participants)}. Prior owner-selected mode was unavailable; owner authorization restored it.`;
+  process.stdout.write(`${transition}\nNative permissions and sandbox: unchanged. Codex SDK sandbox is selected per queued turn.\n`);
+  if (outcome.status === 'pending') {
+    const next = participants === 'claude'
+      ? ' Wait for it, then rerun this exact mode command to finish the transition and reveal the retained owner message.'
+      : ` The transition applies automatically after it stops.${outcome.operationId ? ` Reserved next operation ${outcome.operationId}.` : ''}`;
+    process.stdout.write(`Mode transition pending while Codex operation ${outcome.activeOperationId} stops; grant expiry and trailing text are retained.${next}\n`);
+  }
+  if (outcome.status === 'applied' && outcome.operationId) process.stdout.write(`${participants === 'both' ? 'Phase 1' : 'Codex'} operation: ${outcome.operationId}\n`);
+  if (outcome.status === 'applied' && outcome.ownerMessage) process.stdout.write(`OWNER MESSAGE (verbatim):\n${outcome.ownerMessage}\n`);
+}
+
+function restoreOwnerSelectedMode(state) {
+  const selected = state.ownerSelectedMode;
+  if (selected) {
+    state.route = selected.route;
+    state.participants = selected.participants;
+    return { route: selected.route, participants: selected.participants, proven: true };
+  }
+  state.route = 'discussion';
+  state.participants = 'both';
+  state.returnTo = null;
+  return { route: 'discussion', participants: 'both', proven: false };
 }
 
 async function status(root, view = 'default') {
@@ -81,7 +92,9 @@ async function status(root, view = 'default') {
     project: result.state.project,
     task: result.state.task,
     collaboration: {
-      modeGrantActive: Boolean(result.state.modeGrant && Date.parse(result.state.modeGrant.expiresAt) >= Date.now()),
+      modeGrantActive: Boolean(result.state.modeGrant && (result.state.modeGrant.pausedAt || Date.parse(result.state.modeGrant.expiresAt) >= Date.now())),
+      modeTransitionPending: Boolean(result.state.modeGrant?.pausedAt),
+      ownerSelectedMode: result.state.ownerSelectedMode,
       ownerPromptCapturedAt: result.state.contextEvidence.ownerPrompt?.capturedAt ?? null,
       ownerVisibleReplyCapturedAt: result.state.contextEvidence.ownerVisibleReply?.capturedAt ?? null,
       operationalDelivery: result.state.operationalDelivery
@@ -203,12 +216,16 @@ async function recover(root, args) {
   const action = args[0];
   if (action === 'clear-dead-lock' && args.length === 1) {
     const result = await clearDeadLock(root, process.env);
-    process.stdout.write(`Cleared lock owned by confirmed dead PID ${result.pid}. Recheck status before continuing.\n`);
+    const state = await currentState(root);
+    const selected = state.state.ownerSelectedMode;
+    process.stdout.write(`Cleared lock owned by confirmed dead PID ${result.pid}. Preserved route: ${selected ? formatMode(selected.route, selected.participants) : 'unknown (fail-closed; type an owner mode command)'}. Recheck status before continuing.\n`);
     return;
   }
   if (action === 'resolve-transaction' && args.length === 2 && ['--commit', '--discard'].includes(args[1])) {
     const result = await resolveTransaction(root, args[1].slice(2), process.env);
-    process.stdout.write(`Transaction ${result.action} completed at generation ${result.generation}. Recheck status before continuing.\n`);
+    const state = await currentState(root);
+    const selected = state.state.ownerSelectedMode;
+    process.stdout.write(`Transaction ${result.action} completed at generation ${result.generation}. Preserved route: ${selected ? formatMode(selected.route, selected.participants) : 'unknown (fail-closed; type an owner mode command)'}. Recheck status before continuing.\n`);
     return;
   }
   if (!(args.length === 3 && args[1] === '--operation-id')) throw new ValidationError('recover action requires exactly --operation-id <uuid>');
@@ -217,20 +234,19 @@ async function recover(root, args) {
   let operation = current.state.operations.find((item) => item.id === id);
   if (!operation) throw new ValidationError('operation not found');
   if (action === 'inspect') {
-    process.stdout.write(`${JSON.stringify({ route: current.state.route, operation: { ...operation, request: { ...operation.request, message: operation.request.message ? '[queued owner message retained]' : null } } }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ route: current.state.route, operation: { ...operation, request: { ...operation.request, message: operation.request.message ? '[queued owner message retained]' : null, ownerMessage: operation.request.ownerMessage ? '[owner message retained for Phase 2]' : null, previousReply: operation.request.previousReply ? '[previous owner-visible reply retained for Phase 1]' : null } } }, null, 2)}\n`);
     return;
   }
   if (action === 'replace-missing-thread') {
     if (operation.status !== 'failed' || !/^Session not found for thread_id: [A-Za-z0-9._:-]+$/m.test(operation.result.error ?? '')) throw new ValidationError('thread replacement requires the exact SDK missing-session failure text');
+    let restored = null;
     await mutate(root, 'replace-confirmed-missing-thread', (state) => {
       state.partner.thread.threadId = null;
       state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : 'not-started';
-      state.route = 'normal';
-      state.participants = 'both';
-      state.returnTo = null;
+      restored = restoreOwnerSelectedMode(state);
       state.task.status = state.operations.some((item) => item.status === 'queued') ? 'active' : null;
     });
-    process.stdout.write('Confirmed-missing SDK thread cleared. The next owner turn will create one checkpoint-seeded canonical replacement.\n');
+    process.stdout.write(`Confirmed-missing SDK thread cleared. Preserved route: ${formatMode(restored.route, restored.participants)}${restored.proven ? '' : ' (fail-closed; type an owner mode command)'}. The next owner turn will create one checkpoint-seeded canonical replacement.\n`);
     return;
   }
   if (action === 'abandon') {
@@ -243,17 +259,19 @@ async function recover(root, args) {
     const awaitingPhase2 = operation.status === 'completed' && operation.request.phase === 'independent'
       && !current.state.operations.some((item) => item.request.parentOperationId === operation.id);
     if (!['failed', 'cancelled'].includes(operation.status) && !awaitingPhase2) throw new ValidationError('only failed, cancelled, or awaiting-Phase-2 operations can be abandoned');
+    let restored = null;
     await mutate(root, 'partner-abandon', (state) => {
       state.operations = state.operations.filter((item) => item.id !== id);
-      if (state.route === 'recovery-read-only') {
-        state.route = 'normal';
-        state.participants = 'both';
-        state.returnTo = null;
-      }
+      if (state.route === 'recovery-read-only') restored = restoreOwnerSelectedMode(state);
+      else restored = { route: state.route, participants: state.participants, proven: Boolean(state.ownerSelectedMode) };
       state.task.status = state.operations.some((item) => item.status === 'queued') ? 'active' : null;
       state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : state.partner.thread.threadId ? 'completed' : 'not-started';
     });
-    process.stdout.write(`Abandoned operation ${id}; external effects were not inferred or rolled back.\n`);
+    const pending = (await currentState(root)).state.modeGrant;
+    let applied = null;
+    if (pending?.pausedAt) applied = await applyOwnerModeTransition(root, { grantId: pending.id, route: pending.route, participants: pending.participants }, process.env);
+    const finalMode = applied?.to ?? restored;
+    process.stdout.write(`Abandoned operation ${id}; external effects were not inferred or rolled back. Preserved route: ${formatMode(finalMode.route, finalMode.participants)}${applied || restored.proven ? '' : ' (fail-closed; type an owner mode command)'}.\n`);
     return;
   }
   throw new ValidationError('recover action must be inspect, abandon, replace-missing-thread, clear-dead-lock, or resolve-transaction');

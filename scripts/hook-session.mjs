@@ -50,6 +50,7 @@ export async function main() {
         const destination = state.returnTo ?? { route: 'normal', participants: 'both' };
         state.route = destination.route;
         state.participants = destination.participants;
+        state.ownerSelectedMode = { route: destination.route, participants: destination.participants, selectedAt: new Date().toISOString() };
         state.returnTo = null;
         state.generation += 1;
         return state;

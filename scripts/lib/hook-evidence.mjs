@@ -93,29 +93,28 @@ async function mutate(root, purpose, change, env) {
   throw new Error('state changed repeatedly while recording hook evidence');
 }
 
-export async function issueModeGrant(root, { sessionId, route, participants, now = Date.now() }, env = process.env) {
+export async function issueModeGrant(root, { sessionId, route, participants, ownerMessage = null, now = Date.now() }, env = process.env) {
   if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('mode authorization requires the Claude session id');
+  if (ownerMessage !== null && typeof ownerMessage !== 'string') throw new Error('mode command text must be a string');
+  if (ownerMessage !== null && Buffer.byteLength(ownerMessage, 'utf8') > 192 * 1024) throw new Error('mode command text exceeds 192 KiB');
+  const retainedMessage = ownerMessage && ownerMessage.trim() ? ownerMessage : null;
   const grant = {
     id: randomUUID(), sessionId: sessionId.slice(0, 256), route, participants,
-    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + MODE_GRANT_TTL_MS).toISOString()
+    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + MODE_GRANT_TTL_MS).toISOString(),
+    ownerMessage: retainedMessage,
+    operationId: retainedMessage && participants !== 'claude' ? randomUUID() : null,
+    pausedAt: null
   };
-  await mutate(root, 'owner-mode-grant', (state) => { state.modeGrant = grant; }, env);
+  await mutate(root, 'owner-mode-grant', (state) => {
+    if (state.modeGrant?.pausedAt) throw new Error('an owner mode transition is already pending');
+    state.modeGrant = grant;
+  }, env);
   return grant;
 }
 
 export function modeGrantMatches(grant, { id = null, sessionId = null, route, participants, now = Date.now() }) {
   return Boolean(grant && grant.id === id && grant.route === route && grant.participants === participants
-    && (sessionId === null || grant.sessionId === sessionId) && Date.parse(grant.expiresAt) >= now);
-}
-
-export async function consumeModeGrant(root, { id, route, participants, now = Date.now() }, env = process.env) {
-  let consumed = false;
-  await mutate(root, 'owner-mode-grant-consume', (state) => {
-    if (!modeGrantMatches(state.modeGrant, { id, route, participants, now })) throw new Error('mode change requires a matching unexpired owner-issued grant');
-    state.modeGrant = null;
-    consumed = true;
-  }, env);
-  return consumed;
+    && (sessionId === null || grant.sessionId === sessionId) && (grant.pausedAt !== null || Date.parse(grant.expiresAt) >= now));
 }
 
 export async function recordOwnerPromptEvidence(root, input, env = process.env, { updateCanonicalState = true } = {}) {

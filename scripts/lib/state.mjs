@@ -26,6 +26,7 @@ export class StateStoreError extends Error {
 }
 
 export function initialState(identity) {
+  const createdAt = new Date().toISOString();
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
     generation: 0,
@@ -36,6 +37,7 @@ export function initialState(identity) {
     task: { id: null, status: null, label: null, joint: { required: false, status: null, decisionId: null } },
     executorException: null,
     modeGrant: null,
+    ownerSelectedMode: { route: 'normal', participants: 'both', selectedAt: createdAt },
     contextEvidence: { ownerPrompt: null, ownerVisibleReply: null },
     operationalDelivery: null,
     partner: {
@@ -63,6 +65,7 @@ export function initialState(identity) {
 function recoveryState(identity) {
   const state = initialState(identity);
   state.route = 'recovery-read-only';
+  state.ownerSelectedMode = null;
   state.task.status = 'recovery-required';
   return state;
 }
@@ -125,7 +128,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -182,6 +185,19 @@ async function loadValidated(paths) {
       state.executorException = activeException;
     }
     state.modeGrant ??= null;
+    if (state.modeGrant) {
+      state.modeGrant.ownerMessage ??= null;
+      state.modeGrant.operationId ??= null;
+      state.modeGrant.pausedAt ??= null;
+    }
+    state.ownerSelectedMode ??= ['normal', 'discussion', 'ask-once'].includes(state.route)
+      ? { route: state.route, participants: state.participants, selectedAt: metadata?.lastUsedAt ?? checkpoint?.updatedAt ?? new Date().toISOString() }
+      : null;
+    if (state.ownerSelectedMode === null) {
+      state.route = 'discussion';
+      state.participants = 'both';
+      state.returnTo = null;
+    }
     state.contextEvidence ??= { ownerPrompt: null, ownerVisibleReply: null };
     state.operationalDelivery ??= null;
     state.controller ??= { runnerPid: null, activeOperationId: null, wakeWatcher: null };
@@ -193,7 +209,11 @@ async function loadValidated(paths) {
         phase: operation.request?.phase ?? 'single',
         parentOperationId: operation.request?.parentOperationId ?? null,
         ownerMessageDigest: operation.request?.ownerMessageDigest ?? null,
-        claudeReplyVerified: operation.request?.claudeReplyVerified ?? 'unavailable'
+        claudeReplyVerified: operation.request?.claudeReplyVerified ?? 'unavailable',
+        ownerMessage: operation.request?.ownerMessage ?? null,
+        previousReplyStatus: operation.request?.previousReplyStatus ?? null,
+        previousReply: operation.request?.previousReply ?? null,
+        interrupted: operation.request?.interrupted ?? false
       }
     }));
     state.schemaVersion = STATE_SCHEMA_VERSION;
@@ -231,11 +251,31 @@ async function waitForReadableLock(paths, waitMs, pause) {
   }
 }
 
+async function acquireLockWithWait(paths, purpose, waitMs, pause) {
+  const deadline = Date.now() + waitMs;
+  let delay = 50;
+  while (true) {
+    try {
+      await acquireLock(paths, purpose);
+      return;
+    } catch (error) {
+      if (error?.code !== 'lock-contention') throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        const metadata = await safeLockMetadata(paths);
+        throw new StateStoreError('lock-contention', `state lock remained held after ${waitMs}ms; lock=${JSON.stringify(metadata)}`, error, metadata);
+      }
+      await pause(Math.min(delay, remaining));
+      delay = Math.min(delay * 2, 400);
+    }
+  }
+}
+
 async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v8');
+    await acquireLock(paths, 'schema-migration-to-v9');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);
@@ -277,6 +317,7 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
       if (!recoverUnresolved || !hasRunning || runnerAlive) return { ok: true, state, health: 'healthy', paths };
       return updateState(root, (draft) => {
         draft.route = 'recovery-read-only';
+        draft.participants = 'both';
         draft.task.status = 'recovery-required';
         draft.operations = draft.operations.map((operation) => operation.status === 'working'
           ? { ...operation, status: 'failed', request: { ...operation.request, message: null }, result: { ...operation.result, error: 'controller stopped before the SDK turn outcome was known' }, lifecycle: { ...operation.lifecycle, phase: 'failed', detail: 'Controller stopped; recovery is required.', finishedAt: new Date().toISOString() } }
@@ -321,12 +362,12 @@ export async function readState(root, env = process.env, { checkLock = true, loc
   }
 }
 
-export async function updateState(root, mutator, { expectedGeneration, purpose = 'update' } = {}, env = process.env) {
+export async function updateState(root, mutator, { expectedGeneration, purpose = 'update', lockWaitMs = 0, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds)) } = {}, env = process.env) {
   const paths = await projectPaths(root, env);
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, purpose);
+    await acquireLockWithWait(paths, purpose, Math.max(0, lockWaitMs), pause);
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     if (!(await exists(paths.stateFile))) throw new StateStoreError('missing-during-update', 'state disappeared during update');

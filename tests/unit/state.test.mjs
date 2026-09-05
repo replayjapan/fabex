@@ -14,13 +14,14 @@ async function fixture(t) {
   return { project, env: { ...process.env, FABEX_HOME: join(directory, 'data') } };
 }
 
-test('initial state is schema v8 with SDK controller and structured checkpoint', () => {
+test('initial state is schema v9 with SDK controller and owner-selected mode', () => {
   const state = initialState({ projectId: '0000000000000000', canonicalRoot: '/synthetic/project' });
-  assert.equal(state.schemaVersion, 8);
+  assert.equal(state.schemaVersion, 9);
   assert.equal(state.partner.transport, 'codex-sdk');
   assert.deepEqual(Object.keys(state.partner.thread.checkpoint), ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'repoFingerprintCapturedAt', 'updatedAt', 'fieldUpdatedAt']);
   assert.deepEqual(state.controller, { runnerPid: null, activeOperationId: null, wakeWatcher: null });
-  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'controller', 'project', 'returnTo', 'route', 'schemaVersion', 'task', 'executorException', 'modeGrant', 'contextEvidence', 'operationalDelivery'].sort());
+  assert.deepEqual(Object.keys(state).sort(), ['generation', 'operations', 'participants', 'partner', 'controller', 'project', 'returnTo', 'route', 'schemaVersion', 'task', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery'].sort());
+  assert.equal(state.ownerSelectedMode.route, 'normal');
 });
 
 test('1.3.0 schema v4 migrates atomically and preserves the exact canonical thread id', async (t) => {
@@ -39,7 +40,7 @@ test('1.3.0 schema v4 migrates atomically and preserves the exact canonical thre
   await writeFile(initialized.paths.stateFile, `${JSON.stringify(v4)}\n`);
   const loaded = await readState(project, env);
   assert.equal(loaded.ok, true);
-  assert.equal(loaded.state.schemaVersion, 8);
+  assert.equal(loaded.state.schemaVersion, 9);
   assert.equal(loaded.state.partner.transport, 'codex-sdk');
   assert.equal(loaded.state.partner.thread.threadId, 'canonical-from-1.3');
   assert.equal(loaded.state.partner.thread.checkpoint.objective, 'ship SDK');
@@ -88,7 +89,7 @@ test('older companion schema migration retires incompatible companion thread ids
   v3.operations = [];
   await writeFile(initialized.paths.stateFile, `${JSON.stringify(v3)}\n`);
   const loaded = await readState(project, env);
-  assert.equal(loaded.state.schemaVersion, 8);
+  assert.equal(loaded.state.schemaVersion, 9);
   assert.equal(loaded.state.partner.thread.threadId, null);
   assert.equal(loaded.state.partner.thread.checkpoint.objective, 'goal');
 });

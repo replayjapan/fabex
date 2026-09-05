@@ -13,14 +13,16 @@ async function readInput() {
 export async function modeGrantDecision(input, root, env = process.env) {
   const target = modeTargetForSkill(input?.command_name);
   if (!target) return {};
-  if (input.expansion_type !== 'slash_command' || input.command_source !== 'plugin' || String(input.command_args ?? '').trim()) {
-    return { decision: 'block', reason: 'Fabex mode changes require an exact owner-typed plugin slash command with no arguments.' };
+  if (input.expansion_type !== 'slash_command' || input.command_source !== 'plugin') {
+    return { decision: 'block', reason: 'Fabex mode changes require an owner-typed plugin slash command.' };
   }
-  const grant = await issueModeGrant(root, { sessionId: input.session_id, ...target }, env);
+  const ownerMessage = typeof input.command_args === 'string' ? input.command_args : '';
+  const grant = await issueModeGrant(root, { sessionId: input.session_id, ownerMessage, ...target }, env);
+  const captured = grant.ownerMessage === null ? 'No trailing owner message was supplied.' : `Trailing owner message captured privately (${Buffer.byteLength(grant.ownerMessage, 'utf8')} bytes).`;
   return {
     hookSpecificOutput: {
       hookEventName: 'UserPromptExpansion',
-      additionalContext: `Owner-issued Fabex mode grant ${grant.id}. Run the exact mode command for route=${grant.route} participants=${grant.participants} with --grant ${grant.id}; the grant expires in 60 seconds and is consumed once.`
+      additionalContext: `Owner-issued Fabex mode grant ${grant.id}. Run the exact mode command for route=${grant.route} participants=${grant.participants} with --grant ${grant.id}; the grant expires in 60 seconds and is consumed only after a successful transition. ${captured}${grant.operationId ? ` Reserved partner operation ${grant.operationId}.` : ''}`
     }
   };
 }

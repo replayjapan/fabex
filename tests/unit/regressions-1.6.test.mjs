@@ -158,15 +158,16 @@ test('1.6 item 7: async wake parsing is exact and watcher ownership is deduplica
   assert.equal((await readState(project, env)).state.controller.wakeWatcher, null);
 });
 
-test('1.6 item 8: schema 7 migrates losslessly to schema 8', async (t) => {
+test('1.6 item 8: schema 7 migrates losslessly through schema 9', async (t) => {
   const { project, env } = await fixture(t); const initialized = await initializeState(project, env);
   const legacy = structuredClone(initialized.state); legacy.schemaVersion = 7;
   delete legacy.modeGrant; delete legacy.contextEvidence; delete legacy.operationalDelivery; delete legacy.controller.wakeWatcher;
+  delete legacy.ownerSelectedMode;
   delete legacy.partner.thread.metadata.lastCompaction;
   legacy.partner.thread.threadId = 'preserved-schema-7'; legacy.partner.thread.checkpoint.acceptedDecisions = ['preserved decision'];
   await writeFile(initialized.paths.stateFile, JSON.stringify(legacy));
   const loaded = await readState(project, env);
-  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 8);
+  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 9);
   assert.equal(loaded.state.partner.thread.threadId, 'preserved-schema-7');
   assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['preserved decision']);
 });
@@ -193,10 +194,13 @@ test('1.6 live fix 1: schema migration defers while a live runner owns an active
   const live = (await readState(project, env)).state;
   live.schemaVersion = 7;
   delete live.modeGrant; delete live.contextEvidence; delete live.operationalDelivery; delete live.controller.wakeWatcher;
+  delete live.ownerSelectedMode;
   delete live.partner.thread.metadata.lastCompaction;
   for (const operation of live.operations) {
     delete operation.request.phase; delete operation.request.parentOperationId;
     delete operation.request.ownerMessageDigest; delete operation.request.claudeReplyVerified;
+    delete operation.request.ownerMessage; delete operation.request.previousReplyStatus;
+    delete operation.request.previousReply; delete operation.request.interrupted;
   }
   await writeFile(initialized.paths.stateFile, JSON.stringify(live));
   const deferred = await readState(project, env);
@@ -205,7 +209,7 @@ test('1.6 live fix 1: schema migration defers while a live runner owns an active
   live.controller.runnerPid = 2147483646;
   await writeFile(initialized.paths.stateFile, JSON.stringify(live));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 8);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 9);
   assert.equal(migrated.state.operations[0].id, submitted.operationId);
 });
 

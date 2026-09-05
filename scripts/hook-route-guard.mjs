@@ -14,7 +14,7 @@ const SKILL_TOOLS = new Set(['Skill', 'SlashCommand']);
 const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'discussionClaude', 'discussionCodex', 'work', 'workClaude', 'status', 'diagnose', 'recover']);
 const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
 const CONTROLLER_PATH = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
-const SAFE_UNHEALTHY = new Set(['help', 'checkpoint-help', 'status', 'config', 'diagnose', 'controller-help', 'controller-status', 'controller-result', 'controller-cancel', 'controller-wait', 'clear-dead-lock', 'recover-inspect', 'recover-abandon', 'recover-replace-missing-thread', 'recover-resolve-transaction']);
+const SAFE_UNHEALTHY = new Set(['help', 'checkpoint-help', 'status', 'config', 'diagnose', 'controller-help', 'controller-status', 'controller-result', 'controller-cancel', 'controller-wait', 'clear-dead-lock', 'recover-inspect', 'recover-abandon', 'recover-replace-missing-thread', 'recover-resolve-transaction', 'mode-normal', 'mode-discussion', 'mode-ask-once']);
 const OPERATIONAL_AGENT = 'fabex-operational';
 // Plugin-defined agents are reported by the hook harness with their plugin-scoped type.
 // Reject the bare agent name so an identity outside that contract cannot gain push authority.
@@ -464,6 +464,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   if (toolName === 'Bash' && structuralController?.kind === 'controller-submit' && !controller) return deny('both-participant submit requires an explicit valid Claude reply status');
   if (toolName === 'Bash' && (controller?.kind === 'controller-submit' || ['checkpoint-replace', 'checkpoint-snapshot'].includes(control?.kind))) {
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
+    if (controller?.kind === 'controller-submit' && !state.ownerSelectedMode) return deny('prior owner-selected mode is unknown; type a Fabex mode command');
     if (state.route === 'recovery-read-only') return deny('recovery-read-only denies this command');
     return defer();
   }

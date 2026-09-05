@@ -1,6 +1,6 @@
 {
   "name": "fabex",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Beta — Built for Fable: Claude and Codex collaborate as equal partners through one continuous, resumable Codex SDK thread.",
   "author": {
     "name": "rePlay, LLC"

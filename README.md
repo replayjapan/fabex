@@ -1,12 +1,12 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.6.0 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.6.1 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 
-## What 1.6.0 changes
+## What 1.6.1 changes
 
-Fabex uses the official TypeScript `@openai/codex-sdk`. Release 1.6.0 makes Codex independent-first: strict Phase 1 contains no current Fable opinion, and linked Phase 2 performs convergence only after that answer is stored. It also makes route and participant changes owner-only through a one-minute, single-use slash-command grant. Stable Claude Code hooks record digest-only context evidence, operational-agent lifecycle, and compaction time, while one deduplicated `asyncRewake` watcher provides optional phase-completion wakeups.
+Fabex uses the official TypeScript `@openai/codex-sdk`. Release 1.6.1 fixes three regressions in the independent-first workflow: text after a mode command is preserved and processed, recovery restores the owner-selected route instead of defaulting to work, and a valid owner mode command can safely interrupt a missing Phase 2. Existing 1.6.0 sequencing, grants, thread continuity, hooks, and security boundaries remain unchanged.
 
 There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hook, structured-content recorder, and begin-authorized tool protocol were removed.
 
@@ -25,7 +25,9 @@ There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hoo
 
 Questions authorize answers only. Codex performs project edits. Claude coordinates and verifies. Normal-mode project writes by Claude main sessions and subagents—including file tools, Bash, and mutating MCP tools—are allowlist-controlled unless a structured owner-named executor exception is active. Only the verified plugin-scoped `fabex:fabex-operational` agent may perform Git add, commit, tag, merge, rebase, cherry-pick, push, send-pack, Git LFS push, or `gh` sequences.
 
-Mode commands are owner-only. Typing a Fabex mode slash command fires `UserPromptExpansion`, which issues a grant bound to that session, project, route, and participant set. The expanded skill consumes it once through the mode command. AI-issued mode skills, missing grants, mismatches, replays, and expired grants fail closed. The deterministic ask-once return remains an internal transition and does not require a grant.
+Mode commands are owner-only. Typing a Fabex mode slash command fires `UserPromptExpansion`, which issues a grant bound to that session, project, route, and participant set. Optional same-line or multiline text is captured byte-for-byte in private grant state; it is not interpolated into Fable's expanded prompt. The atomic mode command validates the grant, applies the route, consumes the grant, and only then exposes or submits the owner text. Both-participant text becomes a fresh independent Phase 1; Codex-only text becomes one read-only relay turn; Claude-only text is printed to Fable only after the transition. No text means no empty operation. AI-issued mode skills, missing grants, mismatches, and replays fail closed.
+
+An owner mode command supersedes a completed Phase 1 that is still awaiting reconciliation: Fabex retains and marks that reading interrupted, so Stop no longer blocks on it. If a Codex operation is active, the transition and its text remain durable, grant expiry pauses, and the transition applies only after that operation stops. Old queued work is cancelled. A switch to discussion cannot later release workspace-write work from the interrupted cycle.
 
 ## Mechanically enforced and platform-limited behavior
 
@@ -72,11 +74,11 @@ Each phase returns a UUID immediately. While it runs, status reports only genuin
 - `tests` when a command is recognizable verification;
 - `completed`, `failed`, or `cancelled` at a genuine terminal outcome.
 
-Reasoning events and command output are never exposed as progress. Claude may block with `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal `result`. Stop remains blocked through queued/working Phase 1, the Phase 2 gap, and queued/working Phase 2. `recover abandon --operation-id <phase1-id>` is the explicit escape from an intentionally abandoned gap.
+Reasoning events and command output are never exposed as progress. Claude may block with `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal `result`. Completed independent results retain the exact owner message for Phase 2 and return it from `controller result`; it is erased when Phase 2 completes or the cycle is abandoned. Stop remains blocked through queued/working Phase 1, an uninterrupted Phase 2 gap, and queued/working Phase 2. An owner mode transition marks a gap interrupted; `recover abandon --operation-id <phase1-id>` remains the explicit manual escape.
 
 A `PostToolUse` `asyncRewake` hook can wake Claude when a submitted phase becomes terminal. Fabex permits only one live watcher per project; `wait` remains the reliable fallback because Claude Code creates a process for every asynchronous hook invocation and does not deduplicate them.
 
-Read-only state commands wait up to about three seconds for a live state lock using bounded exponential backoff. They never steal or delete it. A timeout reports `lock-contention` with only PID, purpose, and lock age. `controller wait` treats transient lock ownership as normal and continues until the operation or caller timeout ends.
+Read-only state commands and runner/operation claims wait up to about three seconds for a live state lock using bounded exponential backoff. They never steal or delete it. A timeout reports `lock-contention` with only PID, purpose, and lock age. `controller wait` treats transient lock ownership as normal and continues until the operation or caller timeout ends.
 
 Cancellation is explicit:
 
@@ -97,6 +99,8 @@ Across controller or Claude restarts, Fabex reconstructs the SDK thread with `re
 A newer hook or status process never migrates persisted state while the already-loaded controller still owns a working operation and its PID is alive. Reads report `migration-deferred`, leave the old document untouched, and permit migration only after that runner exits. This prevents a live source update from invalidating the finishing runner's in-memory schema.
 
 SDK developer instructions are deliberately route-neutral because a resumed Codex thread can retain its first developer message. Every first or resumed prompt begins with `FABEX TURN: phase=<phase>; route=<route>; sandbox=<sandbox>; participants=<participants>`. Phase 1 contains only the owner message and previous owner-visible reply. On a new replacement thread, the bounded prior checkpoint is supplied through initial developer configuration so it does not create a trailing Phase 1 prompt section. Mode changes never change the canonical ID.
+
+The owner-selected mode is persisted separately from temporary recovery-read-only state. Abandon, confirmed missing-thread replacement, lock/transaction recovery, restart, and orphan recovery restore that proven selection and never touch the mode grant. If older or corrupt state cannot prove it, Fabex fails closed to discussion/both and rejects partner work until an owner mode command establishes a selection. Recovery output names the preserved route.
 
 If the SDK returns the verified text `Session not found for thread_id: <id>`, Fabex enters recovery-read-only. Only the explicit `recover replace-missing-thread --operation-id <uuid>` path clears that confirmed-missing ID; the next owner turn creates one structured-checkpoint-seeded replacement. Other failures do not silently replace the thread.
 
@@ -213,7 +217,7 @@ Task status is non-sticky: submission and successful completion are `active`; an
 
 ## Privacy and retention
 
-Per-workstream state is stored under the plugin data directory with restrictive permissions. A queued phase prompt is retained only until its operation becomes terminal, then erased. Fabex retains the structured checkpoint and at most 24 terminal operation records with bounded final response/error fields. Context hooks retain SHA-256 digests, byte counts, timestamps, and session identifiers—not message copies. The owner-prompt sidecar retains at most eight such digest records and no prompt text. Fabex does not store a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
+Per-workstream state is stored under the plugin data directory with restrictive permissions. A mode command temporarily retains its trailing owner text until the transition succeeds; a completed independent turn retains that owner message until Phase 2 completes or the cycle is abandoned. Other terminal prompts are erased. Fabex retains the structured checkpoint and at most 24 terminal operation records with bounded final response/error fields. Context hooks retain SHA-256 digests, byte counts, timestamps, and session identifiers—not message copies. The owner-prompt sidecar retains at most eight such digest records and no prompt text. Fabex does not store a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
 
 The SDK and Codex CLI persist the canonical thread under Codex's own storage and may retain data under their policies. Claude Code and host applications may retain their own data independently.
 
@@ -225,7 +229,7 @@ The SDK and Codex CLI persist the canonical thread under Codex's own storage and
 
 The route guard parses exact invoked script paths and argv rather than matching command substrings. It rejects malformed two-phase envelopes before queueing, denies AI calls to mode-changing skills, validates owner mode grants on Bash calls, gates controller/checkpoint controls, and allowlists the three project-mutation channels: file tools, Bash, and MCP. The mode command independently consumes the grant, covering direct Codex sandbox attempts that Claude hooks cannot observe. The entire Git delivery lane remains reserved for the operational agent.
 
-Fabex 1.6.0 uses documented stable hook events: `UserPromptExpansion`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, and `PostCompact`. Operational subagent hooks record start/finish metadata and a result digest. PostCompact stores only its trigger and timestamp, warning when the checkpoint predates compaction. Fabex does not depend on preview function hooks. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks.md).
+Fabex 1.6.1 uses documented stable hook events: `UserPromptExpansion`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, and `PostCompact`. Operational subagent hooks record start/finish metadata and a result digest. PostCompact stores only its trigger and timestamp, warning when the checkpoint predates compaction. Fabex does not depend on preview function hooks. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks.md).
 
 ## Beta dogfood and release criteria
 
@@ -242,7 +246,7 @@ If Desktop thread flooding, orphaned sessions/processes, or material RAM growth 
 
 ## Release activation status
 
-Version 1.6.0 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. The new hook payloads and two-phase live behavior require an update, forced plugin reload, and session restart before activation testing. Fabex remains Beta and is not yet marketplace-ready.
+Version 1.6.1 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. The new mode transaction and schema 9 recovery behavior require an update, forced plugin reload, and session restart before activation testing. Fabex remains Beta and is not yet marketplace-ready.
 
 ## Platform support
 
