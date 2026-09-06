@@ -34,6 +34,23 @@ export function renderSessionContext(route, participants, config, labels = speak
   return `Fabex mode: ${label}. ${badge} Cause no project effects; use /fabex:recover.`;
 }
 
+export function captureClaudeModel(state, input) {
+  const sessionId = typeof input.session_id === 'string' && input.session_id.length > 0 && input.session_id.length <= 256 ? input.session_id : null;
+  const switching = input.hook_event_name === 'PostModelSwitch';
+  const model = switching ? input.to_model : input.model;
+  const valid = typeof model === 'string' && /^[A-Za-z0-9._:/-]{1,128}$/.test(model);
+  const at = new Date().toISOString();
+  if (sessionId && valid) state.claudeModel = { id: model, sessionId, at };
+  else if (switching || !sessionId || state.claudeModel?.sessionId !== sessionId) state.claudeModel = null;
+  if (!switching) state.sessionStartDiagnostic = sessionId ? {
+    sessionId,
+    source: ['startup', 'resume', 'clear', 'compact', 'fork'].includes(input.source) ? input.source : 'unknown',
+    modelStatus: valid ? 'provided' : model === undefined ? 'absent' : 'invalid',
+    at
+  } : null;
+  return state;
+}
+
 export async function main() {
   let hookEventName = 'SessionStart';
   try {
@@ -42,13 +59,12 @@ export async function main() {
     const root = await rootFromHookInput(input, process.env);
     const effective = await loadEffectiveConfig(root, process.env);
     let result = await initializeState(root, process.env, { recoverUnresolved: hookEventName === 'SessionStart' });
-    if (result.ok && hookEventName === 'SessionStart') {
+    if (result.ok && ['SessionStart', 'PostModelSwitch'].includes(hookEventName)) {
       const recorded = await updateState(root, (state) => {
-        state.claudeModel = typeof input.model === 'string' && /^[A-Za-z0-9._:/-]{1,128}$/.test(input.model) && typeof input.session_id === 'string' && input.session_id.length > 0 && input.session_id.length <= 256
-          ? { id: input.model, sessionId: input.session_id, at: new Date().toISOString() } : null;
+        captureClaudeModel(state, { ...input, hook_event_name: hookEventName });
         state.generation += 1;
         return state;
-      }, { expectedGeneration: result.state.generation, purpose: 'session-model-metadata', lockWaitMs: 3000 }, process.env);
+      }, { purpose: 'session-model-metadata', lockWaitMs: 3000 }, process.env);
       result = recorded.ok ? recorded : await readState(root, process.env);
     }
     if (hookEventName === 'UserPromptSubmit' && (result.ok || result.health === 'migration-deferred')) {

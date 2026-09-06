@@ -3,7 +3,7 @@ import { isValidMode, PARTICIPANTS } from './mode.mjs';
 import { attachmentShape } from './attachments.mjs';
 import { validReview } from './review.mjs';
 
-export const STATE_SCHEMA_VERSION = 13;
+export const STATE_SCHEMA_VERSION = 14;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -145,7 +145,8 @@ function validateOperation(operation, errors) {
 
 export function validateState(state, identity) {
   const errors = [];
-  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery', 'claudeModel', 'recordedReply'])) errors.push('state has unexpected or missing top-level fields');
+  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery', 'claudeModel', 'recordedReply', 'sessionStartDiagnostic'])) errors.push('state has unexpected or missing top-level fields');
+  if (state?.sessionStartDiagnostic !== null && (!hasExactKeys(state?.sessionStartDiagnostic, ['sessionId', 'source', 'modelStatus', 'at']) || !boundedString(state.sessionStartDiagnostic.sessionId, 256) || !['startup', 'resume', 'clear', 'compact', 'fork', 'unknown'].includes(state.sessionStartDiagnostic.source) || !['provided', 'absent', 'invalid'].includes(state.sessionStartDiagnostic.modelStatus) || !nullableIsoString(state.sessionStartDiagnostic.at) || state.sessionStartDiagnostic.at === null)) errors.push('SessionStart diagnostic is invalid');
   if (state.recordedReply !== null && (!hasExactKeys(state.recordedReply, ['status', 'text', 'sessionId', 'at']) || !['available', 'unavailable'].includes(state.recordedReply.status) || !boundedString(state.recordedReply.sessionId, 256) || !nullableIsoString(state.recordedReply.at) || state.recordedReply.at === null || (state.recordedReply.status === 'available' ? !boundedString(state.recordedReply.text, 32 * 1024) : state.recordedReply.text !== null))) errors.push('recordedReply is invalid');
   if (state?.claudeModel !== null && (!hasExactKeys(state?.claudeModel, ['id', 'sessionId', 'at']) || !boundedString(state.claudeModel.id, 128) || !boundedString(state.claudeModel.sessionId, 256) || !nullableIsoString(state.claudeModel.at) || state.claudeModel.at === null)) errors.push('Claude model metadata is invalid');
   if (state?.schemaVersion !== STATE_SCHEMA_VERSION) errors.push('state schemaVersion is incompatible');

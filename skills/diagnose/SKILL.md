@@ -7,7 +7,7 @@ description: Diagnose Fabex activation, state health, platform facts, hooks, and
 
 For phone uploads, verify the current hook-recorded session matches the upload's session directory and that `CLAUDE_CONFIG_DIR` is honored. Do not scan or inspect uploaded photos with Fable. After reload, ask for one non-sensitive phone photo, forward its host-provided reference through Phase 1, and check indexed attachment delivery. Root validation tests are not proof that the host reference was forwarded automatically.
 
-For 1.8.0, verify schema 13 activation and the Stop relay check with a full-answer/truncated-answer probe in isolated state. Image and structured-review support need live post-reload checks; unit tests are not live activation proof. Permission profiles remain deferred: `--sandbox` does not combine with profile deny rules. The host ignored the ARGUMENTS rewrite in live dogfood; report that platform limitation, not a verified fix.
+For 1.8.1, verify schema 14 activation and the Stop relay check with a full-answer/truncated-answer probe in isolated state. Image and structured-review support need live post-reload checks; unit tests are not live activation proof. Permission profiles remain deferred: `--sandbox` does not combine with profile deny rules. The host ignored the ARGUMENTS rewrite in live dogfood; report that platform limitation, not a verified fix.
 
 Report `codex.model` source and verification status. A configuration default is not proof of the served model; unknown stays unknown. The `fabex` source applies only to new threads and does not certify Desktop invisibility. The argument rewrite needs a live typed-mode probe after reload; unit tests establish only the returned hook output.
 
@@ -17,3 +17,5 @@ Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs diagnose` from the project r
 ## 1.8.0 reliability workflow
 
 Use `controller.mjs relay --operation-id <uuid>` to obtain only the exact relayBlock, and paste it unmodified. Ordinary both-participant image-only requests use `ownerMessage: ""` with attachments; mode uploads use repeated `--attach` arguments before grant consumption. Prefer `previousReplyStatus: "recorded"`; unavailable evidence must be reported, not invented or truncated. Healthy discussion/ask allow only validated external scratch/memory writes, never project writes. Image restrictions remain in unhealthy states. Follow `docs/acceptance-1.8.0.md`; automated tests do not establish live phone or resource behavior.
+
+Inspect `diagnose.claude.lastSessionStart` for the bounded source and model-field status, and `diagnose.claude.explanation` for the honest fallback. Same-session model-less starts retain prior evidence; PostModelSwitch recaptures `to_model` on supported hosts. A session model is not proof of the model serving every response.

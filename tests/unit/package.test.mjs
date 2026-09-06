@@ -18,17 +18,17 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfiles, and marketplace metadata agree on 1.8.0 Beta', async () => {
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.8.1 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
   const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
   const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.8.0');
-  assert.equal(pkg.version, '1.8.0');
-  assert.equal(npmLock.version, '1.8.0');
-  assert.equal(npmLock.packages[''].version, '1.8.0');
+  assert.equal(plugin.version, '1.8.1');
+  assert.equal(pkg.version, '1.8.1');
+  assert.equal(npmLock.version, '1.8.1');
+  assert.equal(npmLock.packages[''].version, '1.8.1');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);
@@ -42,7 +42,7 @@ test('plugin, package, lockfiles, and marketplace metadata agree on 1.8.0 Beta',
 
 test('hook registration is exec-form with no MCP result recorder', async () => {
   const hooks = JSON.parse(await readFile(resolve(root, 'hooks', 'hooks.json'), 'utf8')).hooks;
-  assert.deepEqual(Object.keys(hooks).sort(), ['PostCompact', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'UserPromptExpansion', 'UserPromptSubmit'].sort());
+  assert.deepEqual(Object.keys(hooks).sort(), ['PostCompact', 'PostModelSwitch', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'UserPromptExpansion', 'UserPromptSubmit'].sort());
   for (const registrations of Object.values(hooks)) {
     const hook = registrations[0].hooks[0];
     assert.equal(hook.type, 'command');

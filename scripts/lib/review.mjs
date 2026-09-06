@@ -39,8 +39,14 @@ export function relayBlock(operation) {
   if (typeof answer !== 'string') return null;
   const label = operation.result.relay?.label ?? 'Codex:';
   const phase = operation.request.phase === 'independent' ? 'Phase 1 — independent' : operation.request.phase === 'reconcile' ? 'Phase 2 — reconciliation/corrections' : 'Answer';
-  const fields = operation.result.structured ? Object.fromEntries(Object.entries(operation.result.structured).filter(([key]) => key !== 'answer')) : null;
-  return `${label} ${phase}\n\n${answer.split('\n').map((line) => `> ${line}`).join('\n')}${fields ? `\n\nStructured review fields:\n\n\`\`\`json\n${JSON.stringify(fields, null, 2)}\n\`\`\`` : ''}${operation.result.warning ? `\n\nFabex warning: ${operation.result.warning}` : ''}`;
+  const fields = operation.result.structured;
+  const flags = [];
+  for (const [key, title] of [['scopeMismatch', 'Scope mismatch'], ['parityConcern', 'Parity concern'], ['disagreements', 'Disagreement'], ['uncertainties', 'Uncertainty']]) {
+    for (const value of [fields?.[key]].flat()) {
+      if (typeof value === 'string' && value.trim()) flags.push(`- ${title}: ${value.replace(/\s+/gu, ' ').trim()}`);
+    }
+  }
+  return `${label} ${phase}\n\n${answer.split('\n').map((line) => `> ${line}`).join('\n')}${flags.length ? `\n\nCodex flags:\n\n${flags.join('\n')}` : ''}${operation.result.warning ? `\n\nFabex warning: ${operation.result.warning}` : ''}`;
 }
 
 export function normalizeRelay(text) {

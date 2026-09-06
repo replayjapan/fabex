@@ -1,6 +1,16 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.8.0 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+### 1.8.1: readable relay and explainable speaker labels
+
+Owner-visible relay keeps the complete Codex answer verbatim under its speaker and phase label, followed only by non-empty scope mismatch, parity concern, disagreement and uncertainty flags in labeled prose. Routine JSON metadata is no longer displayed. Evidence, assumptions, recommendations, changed files and tests remain available internally through `controller result`. `controller relay` prints the ready-to-paste block; Stop still checks the complete answer and label, not supplemental fields.
+
+Run each mode command standalone from the workstream directory: no `cd` prefix, `&&` chain, trailing command or pipe. A composed mode command is still denied, now with command-shape guidance rather than an image-inspection accusation. Actual image reads remain restricted.
+
+The model-label diagnosis found that a model-less SessionStart erased earlier evidence. The [hooks reference](https://code.claude.com/docs/en/hooks#sessionstart-input) documents `model` as optional. Fabex now retains valid same-session evidence, clears it for a different or unidentified session, and captures `to_model` from [PostModelSwitch](https://code.claude.com/docs/en/hooks#postmodelswitch), supported in Claude Code 2.1.251 and later. That event also covers model restoration on resume. It records session configuration, not proof of the model serving every response; subagent models are not used to name the main session.
+
+Schema 14 adds one bounded SessionStart diagnostic (session ID, enumerated source, model-field status and timestamp), with lossless schema-13 migration and the existing live-runner migration gate. `control.mjs diagnose` exposes `claude.model`, `claude.lastSessionStart` and an explanation. If no valid model has been captured, the label stays honestly `Claude:`. Previously erased metadata cannot be reconstructed; the next model-bearing hook must restore it. No transcripts, image bytes, private reasoning or tool results are collected for this diagnostic. Live checks are tracked in [1.8.1 acceptance](docs/acceptance-1.8.1.md).
+
+> **Beta:** Fabex 1.8.1 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 
@@ -86,7 +96,7 @@ Answers have the existing 32 KiB storage bound. Structured objects have a 48 KiB
 
 ### Complete verbatim relay
 
-`controller.mjs result --operation-id <uuid>` returns `relayBlock`: the Codex label and phase, every stored answer line quoted, then the structured fields and any warning. Paste each phase's block unchanged before Fable's separate view or a joint summary. Never call an excerpt a full quote. Phase 2 corrections must remain separately visible; a Phase 1 quote alone is not necessarily Codex's final position. Only owner-facing text is relayed, never private reasoning or tool logs.
+`controller.mjs result --operation-id <uuid>` returns `relayBlock`: the Codex label and phase, every stored answer line quoted, then only non-empty scope, parity, disagreement and uncertainty flags in labeled prose and any warning. Paste each phase's block unchanged before Fable's separate view or a joint summary. Never call an excerpt a full quote. Phase 2 corrections must remain separately visible; a Phase 1 quote alone is not necessarily Codex's final position. Only owner-facing text is relayed, never private reasoning or tool logs.
 
 Stop checks pending completed phases for the current session against `last_assistant_message`, normalizing whitespace and blockquote prefixes. Missing full answers or speaker labels block stopping; an accepted Stop acknowledges them so later turns need not repeat old answers. This checks textual presence, not whether the UI actually displayed it, its ordering, or spoken playback. Pending unrelayed answers are protected from history pruning; the hard state budget still fails closed if too much undelivered content accumulates.
 

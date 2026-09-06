@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.8.1 - 2026-09-06
+
+### Why we made this change
+
+Routine JSON relay blocks cluttered owner replies without being requested. Live mode-command image tests also exposed misleading guard wording and loss of Claude model metadata on model-less restarts.
+
+### What it gave us
+
+Readable complete-answer relay with concise non-empty flags, standalone-command guidance, and session-bound model retention with an explainable unknown-model fallback.
+
+### Tradeoffs
+
+Internal structured results and full-answer Stop verification remain unchanged. Model evidence describes the session, not every served response; previously erased evidence requires a new model-bearing hook. PostModelSwitch needs Claude Code 2.1.251 or later. The bounded diagnostic requires schema 14 with lossless migration and the existing live-runner gate. Interruption, queued-image restart, resource stability and live label restoration remain separate acceptance checks.
+
+### Changes
+
+- Removed routine JSON from relay output; show only non-empty scope, parity, disagreement and uncertainty flags in prose. Updated relay instructions without shortening the owner-facing answer.
+- Clarified composed mode-command rejection and added standalone-command notes. No allowlist or image-review authority was broadened.
+- Retained same-session Claude model evidence on model-less SessionStart, captured documented PostModelSwitch targets, and exposed bounded SessionStart diagnostics. Unknown or cross-session evidence never invents a model label.
+- Added focused regressions, migration coverage and a live acceptance checklist; bumped package and plugin to 1.8.1.
+
 ## 1.8.0 - 2026-09-06
 
 ### Why we made this change

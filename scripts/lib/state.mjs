@@ -42,6 +42,7 @@ export function initialState(identity) {
     recordedReply: null,
     operationalDelivery: null,
     claudeModel: null,
+    sessionStartDiagnostic: null,
     partner: {
       transport: 'codex-sdk',
       status: 'not-started',
@@ -130,7 +131,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -196,7 +197,7 @@ async function loadValidated(paths) {
     if (sourceVersion < 9) state.ownerSelectedMode ??= ['normal', 'discussion', 'ask-once'].includes(state.route)
       ? { route: state.route, participants: state.participants, selectedAt: metadata?.lastUsedAt ?? checkpoint?.updatedAt ?? new Date().toISOString() }
       : null;
-    if (state.ownerSelectedMode === null) {
+    if (sourceVersion < 13 && state.ownerSelectedMode === null) {
       state.route = 'discussion';
       state.participants = 'both';
       state.returnTo = null;
@@ -205,6 +206,7 @@ async function loadValidated(paths) {
     state.recordedReply ??= null;
     state.operationalDelivery ??= null;
     state.claudeModel ??= null;
+    state.sessionStartDiagnostic ??= null;
     state.controller ??= { runnerPid: null, activeOperationId: null, wakeWatcher: null };
     state.controller.wakeWatcher ??= null;
     state.operations = (state.operations ?? []).map((operation) => ({

@@ -308,7 +308,7 @@ async function diagnose(root) {
   let hooksValid = false;
   try {
     const hooks = JSON.parse(await readFile(resolve(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))?.hooks;
-    hooksValid = ['SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PostCompact'].every((name) => Array.isArray(hooks?.[name]) && hooks[name].length > 0);
+    hooksValid = ['SessionStart', 'PostModelSwitch', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PostCompact'].every((name) => Array.isArray(hooks?.[name]) && hooks[name].length > 0);
   } catch {}
   let sdkInstalled = false;
   try { await access(resolve(PLUGIN_ROOT, 'node_modules', '@openai', 'codex-sdk', 'package.json')); sdkInstalled = true; } catch {}
@@ -348,6 +348,14 @@ async function diagnose(root) {
     hooks: { configPresentAndValidJson: hooksValid },
     state: { health: state.health, ...(state.lock ? { lock: state.lock } : {}), route: state.state.route, participants: state.state.participants, label: formatMode(state.state.route, state.state.participants), transaction },
     activation,
+    claude: {
+      model: state.state.claudeModel,
+      lastSessionStart: state.state.sessionStartDiagnostic,
+      label: speakerLabels(state.state.claudeModel?.id, null).claude,
+      explanation: state.state.claudeModel
+        ? 'Last hook-observed session model; retained on model-less same-session starts. Not a per-response served-model guarantee.'
+        : 'No valid session model recorded; using the plain Claude: fallback until SessionStart.model or PostModelSwitch.to_model supplies evidence.'
+    },
     codex: {
       transport: 'official TypeScript SDK',
       dependency: packageMetadata.dependencies?.['@openai/codex-sdk'] ?? null,

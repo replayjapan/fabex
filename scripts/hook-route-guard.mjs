@@ -557,6 +557,10 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     return defer();
   }
   const protectedOperation = toolName === 'Bash' ? protectedGithubOperation(toolInput.command) : null;
+  // Diagnostic only: never allow a composed control or scan an accepted heredoc body.
+  if (toolName === 'Bash' && !control && safeCommandSegments(toolInput.command)?.some((segment) => parseControlCommand(segment)?.kind?.startsWith('mode-'))) {
+    return deny('command shape is not an exact Fabex control; run the mode command standalone with no prefix, chain, or pipe');
+  }
   if (!isOperationalExecutor(executor) && (['Read', 'Bash', 'WebFetch'].includes(toolName) || toolName.startsWith('mcp__')) && (referencesImage(toolInput) || toolName === 'Bash' && commandReferencesImage(toolInput.command))) return deny('Image inspection belongs to Codex by default, or the verified operational helper; Fable and other subagents must use their description');
   if (protectedOperation && !isOperationalExecutor(executor)) {
     return deny(`${protectedOperation} requires a verified ${OPERATIONAL_AGENT} subagent; main-session, alternate-agent, and ambiguous executor identities are denied`);

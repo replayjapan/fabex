@@ -17,3 +17,5 @@ Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status` and `config` from th
 ## 1.8.0 reliability workflow
 
 Use `controller.mjs relay --operation-id <uuid>` to obtain only the exact relayBlock, and paste it unmodified. Ordinary both-participant image-only requests use `ownerMessage: ""` with attachments; mode uploads use repeated `--attach` arguments before grant consumption. Prefer `previousReplyStatus: "recorded"`; unavailable evidence must be reported, not invented or truncated. Healthy discussion/ask allow only validated external scratch/memory writes, never project writes. Image restrictions remain in unhealthy states. Follow `docs/acceptance-1.8.0.md`; automated tests do not establish live phone or resource behavior.
+
+Paste the generated relay block without routine JSON metadata; use internal structured result fields only when needed for verification.
