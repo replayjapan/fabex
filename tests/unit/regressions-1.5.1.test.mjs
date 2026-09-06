@@ -133,11 +133,11 @@ test('item 6: read-only state access waits briefly and reports bounded lock meta
 
 test('item 7: diagnose reports dynamic activation facts without stale pending text', async (t) => {
   const { project, env } = await fixture(t); await mkdir(join(env.CLAUDE_CONFIG_DIR, 'plugins'), { recursive: true });
-  await writeFile(join(env.CLAUDE_CONFIG_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'fabex@fabex': [{ version: '1.7.2', installPath: pluginRoot }] } }));
+  await writeFile(join(env.CLAUDE_CONFIG_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'fabex@fabex': [{ version: '1.8.0', installPath: pluginRoot }] } }));
   await initializeState(project, env);
   let result = await run(control, ['diagnose'], { cwd: project, env }); let diagnosed = JSON.parse(result.stdout);
-  assert.equal(diagnosed.activation.sourceVersion, '1.7.2'); assert.equal(diagnosed.activation.hooksValid, true); assert.match(diagnosed.activation.verdict, /not verified/); assert.doesNotMatch(result.stdout, /pending plugin install\/reload and live dogfood/);
-  const current = await readState(project, env); await updateState(project, (state) => { state.partner.thread.metadata.lastRecordedTurn = { at: new Date().toISOString(), version: '1.7.2' }; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);
+  assert.equal(diagnosed.activation.sourceVersion, '1.8.0'); assert.equal(diagnosed.activation.hooksValid, true); assert.match(diagnosed.activation.verdict, /not verified/); assert.doesNotMatch(result.stdout, /pending plugin install\/reload and live dogfood/);
+  const current = await readState(project, env); await updateState(project, (state) => { state.partner.thread.metadata.lastRecordedTurn = { at: new Date().toISOString(), version: '1.8.0' }; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);
   result = await run(control, ['diagnose'], { cwd: project, env }); diagnosed = JSON.parse(result.stdout); assert.match(diagnosed.activation.verdict, /^verified by/);
 });
 
@@ -157,15 +157,15 @@ test('item 9: nested repository status separates live and captured fingerprints 
   const head = (await execFile('git', ['-C', pluginRoot, 'rev-parse', 'HEAD'])).stdout.trim(); await writeFile(join(two, '.git', 'HEAD'), `${head}\n`);
   await mkdir(join(project, '.fabex')); await writeFile(join(project, '.fabex', 'config.json'), JSON.stringify({ project: { repositoryRoot: 'one' } })); await initializeState(project, env);
   await completeTurn(project, env, 'capture one'); let state = (await readState(project, env)).state;
-  assert.match(state.partner.thread.checkpoint.updatedAt, /^\d{4}-/); assert.equal(state.partner.thread.metadata.lastRecordedTurn.version, '1.7.2'); assert.deepEqual(state.partner.thread.checkpoint.repoFingerprint, state.partner.thread.metadata.repoFingerprint); assert.ok(state.partner.thread.metadata.repoFingerprintCapturedAt);
+  assert.match(state.partner.thread.checkpoint.updatedAt, /^\d{4}-/); assert.equal(state.partner.thread.metadata.lastRecordedTurn.version, '1.8.0'); assert.deepEqual(state.partner.thread.checkpoint.repoFingerprint, state.partner.thread.metadata.repoFingerprint); assert.ok(state.partner.thread.metadata.repoFingerprintCapturedAt);
   await writeFile(join(project, '.fabex', 'config.json'), JSON.stringify({ project: { repositoryRoot: 'two' } }));
   const generationBeforeStatus = state.generation; let status = JSON.parse((await run(control, ['status'], { cwd: project, env })).stdout); assert.notEqual(status.capturedRepoFingerprint.branch, status.liveRepoFingerprint.branch); assert.ok(status.partner.checkpoint.warnings.includes('captured fingerprint differs from live')); assert.equal((await readState(project, env)).state.generation, generationBeforeStatus);
   await completeTurn(project, env, 'capture two'); status = JSON.parse((await run(control, ['status'], { cwd: project, env })).stdout); assert.equal(status.capturedRepoFingerprint.branch, status.liveRepoFingerprint.branch);
 });
 
 test('item 10: current metadata and 1.5.1 migration documentation stay consistent', async () => {
-  assert.equal(JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8')).version, '1.7.2');
-  assert.equal(JSON.parse(await readFile(join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version, '1.7.2');
+  assert.equal(JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8')).version, '1.8.0');
+  assert.equal(JSON.parse(await readFile(join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version, '1.8.0');
   const readme = await readFile(join(pluginRoot, 'README.md'), 'utf8'); assert.match(readme, /allowedCommandPatterns/); assert.match(readme, /migrate broad entries/); assert.match(readme, /externalWriteRoots/);
 });
 

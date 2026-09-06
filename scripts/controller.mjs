@@ -19,7 +19,7 @@ function option(args, name) {
 
 const terminal = (status) => ['completed', 'failed', 'cancelled'].includes(status);
 const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, phase: result.request?.phase, parentOperationId: result.request?.parentOperationId, lifecycle: result.lifecycle, usage: result.usage ?? null, attachments: result.result?.attachments ?? null });
-const USAGE = 'Usage: controller.mjs submit < envelope.json | status|result|cancel --operation-id <uuid> | wait --operation-id <uuid> --timeout <1..590>';
+const USAGE = 'Usage: controller.mjs submit < envelope.json | status|result|relay|cancel --operation-id <uuid> | wait --operation-id <uuid> --timeout <1..590>';
 
 export async function waitForOperation(root, operationId, timeoutSeconds, env = process.env, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds))) {
   const deadline = Date.now() + timeoutSeconds * 1000;
@@ -96,10 +96,16 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     process.stdout.write(`${JSON.stringify(await submitOperation(root, message, env))}\n`);
     return;
   }
-  if (['status', 'result', 'cancel'].includes(command)) {
+  if (['status', 'result', 'relay', 'cancel'].includes(command)) {
     if (args.length !== 2 || args[0] !== '--operation-id') throw new ValidationError(`${command} requires exactly --operation-id <uuid>`);
     const id = assertUuid(option(args, '--operation-id'), 'operation id');
     let result = command === 'cancel' ? await cancelOperation(root, id, env) : await operationStatus(root, id, env);
+    if (command === 'relay') {
+      const block = terminal(result.status) && relayBlock(result);
+      if (!block) throw new Error('operation has no complete relay block');
+      process.stdout.write(`${block}\n`);
+      return;
+    }
     if (command === 'result' && !terminal(result.status)) throw new Error('operation is not complete');
     if (command === 'result') result = { ...result, relayBlock: relayBlock(result) };
     if (command === 'status') result = boundedStatus(result);

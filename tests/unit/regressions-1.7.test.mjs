@@ -188,7 +188,7 @@ test('1.7 schema 10 migration preserves identity, evidence, grants, results and 
   for (const item of legacy.operations) { delete item.request.attachments; delete item.result.structured; delete item.result.warning; delete item.result.relay; }
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 12);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 13);
   assert.equal(migrated.state.partner.thread.threadId, 'canonical');
   assert.deepEqual(migrated.state.ownerSelectedMode, legacy.ownerSelectedMode);
   assert.deepEqual(migrated.state.contextEvidence, legacy.contextEvidence);

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, join } from 'node:path';
+import { realpathSync, lstatSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { readState } from './lib/state.mjs';
 import { attachmentSessionId, normalizeSubmissionEnvelope } from './lib/sdk-controller.mjs';
-import { validateAttachments } from './lib/attachments.mjs';
+import { attachmentShape, validateAttachments } from './lib/attachments.mjs';
 import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 
@@ -110,6 +111,7 @@ function protectedGitOperation(tokens, gitIndex) {
     else index += 1;
   }
   const subcommand = tokens[index];
+  if (subcommand === 'tag' && readOnlyTagArgs(tokens.slice(index + 1))) return null;
   if (['add', 'commit', 'tag', 'merge', 'rebase', 'cherry-pick', 'push', 'send-pack'].includes(subcommand)) return `git ${subcommand} operation`;
   if (subcommand === 'lfs' && tokens[index + 1] === 'push') return 'Git LFS push operation';
   return null;
@@ -139,6 +141,8 @@ export function protectedGithubOperation(command) {
   if (typeof command !== 'string' || command.length === 0 || command.includes('\0')) return null;
   const tokens = simpleTokens(command);
   if (tokens) return protectedSimpleCommand(tokens);
+  const segments = safeCommandSegments(command);
+  if (segments) return segments.map((segment) => protectedSimpleCommand(simpleTokens(segment) ?? [])).find(Boolean) ?? null;
   const boundary = String.raw`(?:^|[;&|()\r\n])\s*`;
   const wrappers = String.raw`(?:(?:command|env|exec|nohup|sudo|xcrun)\s+)*`;
   const path = String.raw`(?:[^\s;&|()]+\/)*`;
@@ -172,6 +176,7 @@ export function parseControlCommand(command) {
   if (args.length === 0 || args.length === 1 && args[0] === '--help') return { kind: 'help' };
   if (args[0] === 'status' && (args.length === 1 || args.length === 2 && ['--all', '--brief'].includes(args[1]))) return { kind: 'status' };
   if (['config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
+  if (args[0] === 'cleanup' && args.length === 3 && args[1] === '--path' && isAbsolute(args[2]) && /^fabex-next(?:-\d+\.\d+\.\d+)?$/.test(basename(args[2]))) return { kind: 'cleanup' };
   if (args[0] === 'checkpoint' && (args.length === 1 || args.length === 2 && args[1] === '--help')) return { kind: 'checkpoint-help' };
   if (args[0] === 'checkpoint' && ['capacity', 'export'].includes(args[1]) && args.length === 2) return { kind: `checkpoint-${args[1]}` };
   const fields = new Set(['objective', 'current-task', 'constraint', 'decision', 'relevant-file', 'implementation-status', 'test-status', 'unresolved-problem', 'next-action']);
@@ -180,8 +185,13 @@ export function parseControlCommand(command) {
   if (args[0] === 'executor-exception' && args[1] === 'authorize' && args.length === 8 && args[2] === '--executor' && args[4] === '--scope' && args[6] === '--reason' && args[3] && args[5] && args[7]) return { kind: 'executor-exception-authorize' };
   if (args[0] === 'executor-exception' && args[1] === 'reconcile' && args.length === 4 && args[2] === '--outcome' && args[3]) return { kind: 'executor-exception-reconcile' };
   if (args[0] === 'mode' && ['normal', 'discussion', 'ask-once'].includes(args[1])) {
-    if (args.length === 4 && args[2] === '--grant' && UUID_RE.test(args[3])) return { kind: `mode-${args[1]}`, route: args[1], participants: 'both', grantId: args[3] };
-    if (args.length === 6 && args[2] === '--participants' && ['both', 'claude', 'codex'].includes(args[3]) && args[4] === '--grant' && UUID_RE.test(args[5])) return { kind: `mode-${args[1]}`, route: args[1], participants: args[3], grantId: args[5] };
+    const offset = args[2] === '--participants' ? 6 : 4;
+    const participants = offset === 6 ? args[3] : 'both';
+    if (!['both', 'claude', 'codex'].includes(participants) || args[offset - 2] !== '--grant' || !UUID_RE.test(args[offset - 1] ?? '') || (args.length - offset) % 2 || args.length < offset || args.slice(offset).some((arg, index) => index % 2 === 0 && arg !== '--attach')) return null;
+    try {
+      const attachments = attachmentShape(args.slice(offset).filter((_, index) => index % 2 === 1));
+      return { kind: `mode-${args[1]}`, route: args[1], participants, grantId: args[offset - 1], attachments };
+    } catch { return null; }
   }
   if (args[0] === 'recover' && args[1] === 'clear-dead-lock' && args.length === 2) return { kind: 'clear-dead-lock' };
   if (args[0] === 'recover' && args[1] === 'resolve-transaction' && args.length === 3 && ['--commit', '--discard'].includes(args[2])) return { kind: 'recover-resolve-transaction' };
@@ -191,7 +201,7 @@ export function parseControlCommand(command) {
 
 export function parseControllerCommand(command, { participants = null } = {}) {
   const acceptedSubmit = (message) => {
-    if (participants === 'both') {
+    if (participants !== null) {
       try { normalizeSubmissionEnvelope(message, participants); } catch { return null; }
     }
     return { kind: 'controller-submit', message };
@@ -210,7 +220,7 @@ export function parseControllerCommand(command, { participants = null } = {}) {
   const args = tokens.slice(2);
   if (args.length === 1 && args[0] === '--help') return { kind: 'controller-help' };
   if (args[0] === 'submit' && args.length === 3 && args[1] === '--message' && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 192 * 1024) return acceptedSubmit(args[2]);
-  if (['status', 'result', 'cancel'].includes(args[0]) && args.length === 3 && args[1] === '--operation-id' && UUID_RE.test(args[2])) return { kind: `controller-${args[0]}` };
+  if (['status', 'result', 'relay', 'cancel'].includes(args[0]) && args.length === 3 && args[1] === '--operation-id' && UUID_RE.test(args[2])) return { kind: `controller-${args[0]}` };
   if (args[0] === 'wait' && args.length === 5 && args[1] === '--operation-id' && UUID_RE.test(args[2]) && args[3] === '--timeout' && /^\d+$/.test(args[4]) && Number(args[4]) >= 1 && Number(args[4]) <= 590) return { kind: 'controller-wait' };
   return null;
 }
@@ -287,12 +297,18 @@ function commandPatternMatches(tokens, config, root) {
   });
 }
 
+function readOnlyTagArgs(args) {
+  return ['--list', '-l'].includes(args[0]) && (args.length === 1 || args.length === 2 && !args[1].startsWith('-'));
+}
+
 function allowedBashCommand(command, config, root) {
   const tokens = simpleTokens(command);
   if (!tokens) return false;
   const index = commandIndex(tokens);
   const executable = executableName(tokens[index]);
   const args = tokens.slice(index + 1);
+  if (executable === 'du') return args[0] === '-sh' && args.slice(1).every((arg) => !arg.startsWith('-'));
+  if (executable === 'ps') return args.length === 2 && args[0] === '-axo' && /^(?:pid|ppid|rss|etime|stat|comm)(?:,(?:pid|ppid|rss|etime|stat|comm))*$/.test(args[1]);
   const extras = new Set((config?.guard?.allowedCommands ?? []).map((value) => executableName(value)));
   if (extras.has(executable)) return true;
   if (commandPatternMatches(tokens, config, root)) return true;
@@ -318,6 +334,7 @@ function allowedBashCommand(command, config, root) {
     let cursor = index + 1;
     while (tokens[cursor]?.startsWith('-')) cursor += GIT_OPTIONS_WITH_VALUES.has(tokens[cursor]) ? 2 : 1;
     const subcommand = tokens[cursor];
+    if (subcommand === 'tag') return readOnlyTagArgs(tokens.slice(cursor + 1));
     if (!GIT_READ.has(subcommand)) return false;
     const gitArgs = tokens.slice(cursor + 1);
     if (gitArgs.some((arg) => arg === '--output' || arg.startsWith('--output='))) return false;
@@ -400,6 +417,21 @@ function safeCommandSegments(command) {
 }
 
 const SAFE_COMPOSED_CONTROLS = new Set(['status', 'config', 'diagnose', 'checkpoint-capacity', 'checkpoint-export', 'help', 'checkpoint-help', 'controller-status', 'controller-result', 'controller-wait', 'controller-help']);
+SAFE_COMPOSED_CONTROLS.add('controller-relay');
+SAFE_UNHEALTHY.add('controller-relay');
+
+function allowedDiscussionReads(command, config, root) {
+  const segments = safeCommandSegments(command);
+  return Boolean(segments?.every((segment) => {
+    const control = parseControlCommand(segment) ?? parseControllerCommand(segment);
+    if (control) return SAFE_COMPOSED_CONTROLS.has(control.kind);
+    const tokens = simpleTokens(segment);
+    if (!tokens) return false;
+    const executable = executableName(tokens[commandIndex(tokens)]);
+    if (!BASE_READ_COMMANDS.has(executable) && !['sed', 'find', 'git', 'du', 'ps', 'pwd'].includes(executable)) return false;
+    return allowedBashCommand(segment, { ...config, guard: { ...config?.guard, allowedCommands: [], allowedCommandPatterns: [] } }, root);
+  }));
+}
 
 function allowedSafeSegment(segment, config, root) {
   const control = parseControlCommand(segment) ?? parseControllerCommand(segment);
@@ -436,10 +468,17 @@ function allowedOperationalDelivery(command, config, root) {
 }
 
 function permittedExternalTarget(target, root, config) {
-  if (!isAbsolute(target) || insideRoot(target, root)) return false;
-  const normalized = resolve(target);
+  if (typeof target !== 'string' || !isAbsolute(target) || /[`$\x00-\x1f]/.test(target) || insideRoot(target, root)) return false;
+  // Resolve every existing ancestor, including a symlink at the final target.
+  const canonical = (path) => {
+    try { lstatSync(path); return realpathSync(path); }
+    catch (error) { if (error.code !== 'ENOENT' || dirname(path) === path) throw error; return join(canonical(dirname(path)), basename(path)); }
+  };
+  let normalized;
+  try { normalized = canonical(resolve(target)); if (insideRoot(normalized, canonical(resolve(root)))) return false; } catch { return false; }
   return (config?.guard?.externalWriteRoots ?? []).some((pattern) => {
-    const absolutePattern = resolve(pattern);
+    let absolutePattern;
+    try { absolutePattern = pattern.includes('*') ? resolve(pattern) : canonical(resolve(pattern)); } catch { return false; }
     if (!absolutePattern.includes('*')) return insideRoot(normalized, absolutePattern);
     const escaped = absolutePattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '[^/]*');
     return new RegExp(`^${escaped}(?:/.*)?$`).test(normalized);
@@ -475,6 +514,7 @@ const defer = () => ({ decision: 'defer' });
 
 export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput)) return deny('malformed tool request');
+  if (referencesImage(toolInput) || toolName === 'Bash' && commandReferencesImage(toolInput.command)) return deny('Image inspection remains denied while state or executor identity cannot be trusted');
   if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only');
   if (health === 'migration-deferred' && ['Monitor', 'TaskOutput', 'ToolSearch', 'AskUserQuestion'].includes(toolName)) return defer();
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
@@ -491,17 +531,25 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
   const controller = toolName === 'Bash' ? parseControllerCommand(toolInput.command, { participants: state.participants }) : null;
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
+  if (control?.kind === 'cleanup' && (state.route !== 'normal' || executor.agentId && !isOperationalExecutor(executor))) return deny('verified cleanup is restricted to the main or operational executor in work mode');
   if (control?.kind?.startsWith('mode-') && !modeGrantMatches(state.modeGrant, { id: control.grantId, sessionId: executor.sessionId ?? null, route: control.route, participants: control.participants })) return deny('mode changes require a matching unexpired grant minted by an owner-typed Fabex slash command');
+  if (control?.kind?.startsWith('mode-')) {
+    try {
+      if (control.participants === 'claude' && control.attachments.length) return deny('Claude-only mode does not forward Codex attachments');
+      validateAttachments(control.attachments, paths.canonicalRoot, config, { sessionId: state.modeGrant.sessionId, env });
+      return defer();
+    } catch (error) { return deny(`mode attachments failed validation: ${error.message}`); }
+  }
   if (toolName === 'Bash' && structuralController?.kind === 'controller-submit' && !controller) return deny('both-participant submit requires an explicit valid Claude reply status');
   if (toolName === 'Bash' && (controller?.kind === 'controller-submit' || ['checkpoint-replace', 'checkpoint-snapshot'].includes(control?.kind))) {
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
     if (controller?.kind === 'controller-submit' && !state.ownerSelectedMode) return deny('prior owner-selected mode is unknown; type a Fabex mode command');
-    if (controller?.kind === 'controller-submit' && state.participants === 'both') {
+    if (controller?.kind === 'controller-submit') {
       try {
-        const envelope = normalizeSubmissionEnvelope(controller.message, 'both');
+        const envelope = normalizeSubmissionEnvelope(controller.message, state.participants);
         const sessionId = await attachmentSessionId(paths.canonicalRoot, envelope, state, env);
         if (executor.sessionId && sessionId && executor.sessionId !== sessionId) return deny('upload session evidence does not match this host session');
-        validateAttachments(envelope.attachments, paths.canonicalRoot, config, { sessionId, env });
+        validateAttachments(envelope.attachments ?? [], paths.canonicalRoot, config, { sessionId, env });
       }
       catch (error) { return deny(`image attachments failed validation; no text-only fallback: ${error.message}`); }
     }
@@ -538,6 +586,8 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   }
   if (!['discussion', 'ask-once', 'recovery-read-only'].includes(state.route)) return deny('invalid route; use recover');
   if (['discussion', 'ask-once'].includes(state.route)) {
+    if (WRITE_TOOLS.has(toolName)) return permittedExternalTarget(writeTarget(toolInput), paths.canonicalRoot, config) ? defer() : deny('read-only route permits writes only in validated external scratch/memory roots');
+    if (toolName === 'Bash' && (externalOnlyWriteCommand(toolInput.command, paths.canonicalRoot, config) || allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot))) return defer();
     if (toolName === 'WebSearch' && typeof toolInput.query === 'string' && toolInput.query.trim()) return defer();
     if (toolName === 'WebFetch') {
       try { const url = new URL(toolInput.url); if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) return defer(); } catch {}

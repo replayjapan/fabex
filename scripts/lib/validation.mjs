@@ -3,7 +3,7 @@ import { isValidMode, PARTICIPANTS } from './mode.mjs';
 import { attachmentShape } from './attachments.mjs';
 import { validReview } from './review.mjs';
 
-export const STATE_SCHEMA_VERSION = 12;
+export const STATE_SCHEMA_VERSION = 13;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -69,7 +69,8 @@ function validDigestEvidence(value) {
 }
 
 function validModeGrant(value) {
-  return value === null || (hasExactKeys(value, ['id', 'sessionId', 'route', 'participants', 'createdAt', 'expiresAt', 'ownerMessage', 'operationId', 'pausedAt'])
+  return value === null || (hasExactKeys(value, ['id', 'sessionId', 'route', 'participants', 'createdAt', 'expiresAt', 'ownerMessage', 'operationId', 'pausedAt', 'attachments'])
+    && validAttachmentShape(value.attachments)
     && UUID_RE.test(value.id ?? '') && boundedString(value.sessionId, 256)
     && ['normal', 'discussion', 'ask-once'].includes(value.route) && PARTICIPANTS.has(value.participants)
     && isValidMode(value.route, value.participants) && nullableIsoString(value.createdAt) && value.createdAt !== null
@@ -77,6 +78,10 @@ function validModeGrant(value) {
     && boundedNullableString(value.ownerMessage, 192 * 1024)
     && (value.operationId === null || UUID_RE.test(value.operationId ?? ''))
     && nullableIsoString(value.pausedAt));
+}
+
+function validAttachmentShape(value) {
+  try { attachmentShape(value); return Array.isArray(value); } catch { return false; }
 }
 
 function validOwnerSelectedMode(value) {
@@ -108,8 +113,9 @@ function validateOperation(operation, errors) {
   if (!hasExactKeys(operation, ['id', 'kind', 'name', 'status', 'externalId', 'request', 'result', 'lifecycle', 'usage'])) { errors.push('operation record is invalid'); return; }
   if (operation.usage !== null && (!hasExactKeys(operation.usage, ['input_tokens', 'cached_input_tokens', 'output_tokens']) || Object.values(operation.usage).some((value) => !Number.isSafeInteger(value) || value < 0))) errors.push('operation usage is invalid');
   if (!UUID_RE.test(operation.id ?? '') || operation.kind !== 'partner' || operation.name !== 'sdk-turn' || !OPERATION_STATUSES.has(operation.status) || !nullableString(operation.externalId)) errors.push('operation identity is invalid');
-  if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox', 'phase', 'parentOperationId', 'ownerMessageDigest', 'claudeReplyVerified', 'ownerMessage', 'previousReplyStatus', 'previousReply', 'interrupted', 'attachments'])) errors.push('operation request shape is invalid');
+  if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox', 'phase', 'parentOperationId', 'ownerMessageDigest', 'claudeReplyVerified', 'ownerMessage', 'previousReplyStatus', 'previousReply', 'interrupted', 'attachments', 'submissionDigest'])) errors.push('operation request shape is invalid');
   else {
+    if (operation.request.submissionDigest !== null && !DIGEST_RE.test(operation.request.submissionDigest ?? '')) errors.push('operation submission digest is invalid');
     try { attachmentShape(operation.request.attachments); } catch { errors.push('operation attachments are invalid'); }
     if (['completed', 'failed', 'cancelled'].includes(operation.status) && operation.request.attachments.length) errors.push('terminal operations must erase attachment paths');
     if (!boundedNullableString(operation.request.message, 192 * 1024)) errors.push('operation message is invalid');
@@ -139,7 +145,8 @@ function validateOperation(operation, errors) {
 
 export function validateState(state, identity) {
   const errors = [];
-  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery', 'claudeModel'])) errors.push('state has unexpected or missing top-level fields');
+  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery', 'claudeModel', 'recordedReply'])) errors.push('state has unexpected or missing top-level fields');
+  if (state.recordedReply !== null && (!hasExactKeys(state.recordedReply, ['status', 'text', 'sessionId', 'at']) || !['available', 'unavailable'].includes(state.recordedReply.status) || !boundedString(state.recordedReply.sessionId, 256) || !nullableIsoString(state.recordedReply.at) || state.recordedReply.at === null || (state.recordedReply.status === 'available' ? !boundedString(state.recordedReply.text, 32 * 1024) : state.recordedReply.text !== null))) errors.push('recordedReply is invalid');
   if (state?.claudeModel !== null && (!hasExactKeys(state?.claudeModel, ['id', 'sessionId', 'at']) || !boundedString(state.claudeModel.id, 128) || !boundedString(state.claudeModel.sessionId, 256) || !nullableIsoString(state.claudeModel.at) || state.claudeModel.at === null)) errors.push('Claude model metadata is invalid');
   if (state?.schemaVersion !== STATE_SCHEMA_VERSION) errors.push('state schemaVersion is incompatible');
   if (!Number.isSafeInteger(state?.generation) || state.generation < 0) errors.push('generation must be a non-negative integer');

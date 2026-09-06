@@ -145,7 +145,7 @@ test('1.7.2 schema 11 migration preserves queued attachments, relay and canonica
   delete legacy.operations[0].result.attachments;
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(f.project, f.env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 12);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 13);
   assert.equal(migrated.state.partner.thread.threadId, 'retained-canonical');
   assert.deepEqual(migrated.state.partner.thread.checkpoint, legacy.partner.thread.checkpoint);
   assert.deepEqual(migrated.state.contextEvidence, legacy.contextEvidence);

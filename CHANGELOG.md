@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.8.0 - 2026-09-06
+
+### Why we made this change
+
+Repeated phone-image dogfood tests exposed gaps across entry points, not just an attachment-root issue. The owner requested one consolidated reliability release so ordinary work could resume without another sequence of single-path patches.
+
+### What it gave us
+
+A shared image path for ordinary, image-only, mode-command and Codex-only submissions; durable selections during authorized transitions; easier complete reply relay; and narrowly scoped coordination tools without changing Codex's writing authority or the operational Git lane.
+
+### Tradeoffs
+
+Phone forwarding still depends on Fable passing the current host-provided reference; the host may inject images into Fable's context. Live phone tests and process/RAM observations remain separate from mocked SDK coverage. One complete owner-visible reply up to 32 KiB is now retained privately, never in the recovery seed; unavailable replies are not silently truncated. Cleanup refuses unknown, differing or active copies and cannot override native restrictions. No new SDK, model, permission profile, transport or marketplace-readiness claim.
+
+### Changes
+
+- Added repeated mode `--attach` arguments, empty-caption image requests, structured single-turn Codex inputs and optional UUID request IDs for bounded duplicate-retry handling. No silent partial/text-only fallback on invalid images.
+- Preserved queued and pending-grant paths across reload and migration; cancellation still erases terminal paths. Added pre-execution cancellation checks so superseded work cannot begin SDK execution after cancellation was requested.
+- Added bounded write-lock waiting and submit conflict retries. Ask auto-return ignores notifications, waits for the first question after a no-argument both/Codex selection, and an unknown destination fails closed to discussion/both requiring an owner grant.
+- Kept image-read denial active during unhealthy state; enabled only validated external scratch/memory writes in healthy discussion/ask, exact tag-list, disk-size and bounded process probes, and verified working-copy cleanup without wildcard authority.
+- Added session-bound `previousReplyStatus: "recorded"`, unavailable handling for absent/oversized/private Claude-only replies, and `controller relay` for unmodified complete answers. Existing explicit replies and Stop enforcement remain.
+- Migrated schema 12 losslessly to 13, including queued attachments, canonical thread, grants, decisions and result metadata. Updated documentation, release pins and the consolidated automated/live acceptance matrix.
+
 ## 1.7.2 - 2026-09-06
 
 ### Why we made this change

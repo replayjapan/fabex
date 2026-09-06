@@ -25,7 +25,7 @@ export function textDigest(value) {
 }
 
 export function digestEvidence(value, sessionId, capturedAt = new Date().toISOString()) {
-  if (typeof value !== 'string' || !value.trim()) throw new Error('hook evidence text must be non-empty');
+  if (typeof value !== 'string') throw new Error('hook evidence text must be a string');
   if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('hook evidence requires a session id');
   return { digest: textDigest(value), bytes: Buffer.byteLength(value, 'utf8'), capturedAt, sessionId: sessionId.slice(0, 256) };
 }
@@ -86,7 +86,7 @@ async function mutate(root, purpose, change, env) {
       change(state);
       state.generation += 1;
       return state;
-    }, { expectedGeneration: current.state.generation, purpose }, env);
+    }, { expectedGeneration: current.state.generation, purpose, lockWaitMs: 3000 }, env);
     if (updated.ok) return updated.state;
     if (updated.health !== 'generation-conflict' && updated.error?.code !== 'generation-conflict') throw updated.error ?? new Error(`state update failed: ${updated.health}`);
   }
@@ -103,7 +103,8 @@ export async function issueModeGrant(root, { sessionId, route, participants, own
     createdAt: new Date(now).toISOString(), expiresAt: new Date(now + MODE_GRANT_TTL_MS).toISOString(),
     ownerMessage: retainedMessage,
     operationId: retainedMessage && participants !== 'claude' ? randomUUID() : null,
-    pausedAt: null
+    pausedAt: null,
+    attachments: []
   };
   await mutate(root, 'owner-mode-grant', (state) => {
     if (state.modeGrant?.pausedAt) throw new Error('an owner mode transition is already pending');
@@ -119,7 +120,7 @@ export function modeGrantMatches(grant, { id = null, sessionId = null, route, pa
 
 export async function recordOwnerPromptEvidence(root, input, env = process.env, { updateCanonicalState = true } = {}) {
   const prompt = input?.prompt;
-  if (typeof prompt !== 'string' || !prompt.trim() || notificationLikePrompt(prompt) || modeTargetForSkill(prompt.trim().split(/\s+/, 1)[0])) return null;
+  if (typeof prompt !== 'string' || notificationLikePrompt(prompt) || modeTargetForSkill(prompt.trim().split(/\s+/, 1)[0])) return null;
   const evidence = digestEvidence(prompt, input.session_id);
   await appendOwnerPromptEvidence(root, evidence, env);
   if (updateCanonicalState) await mutate(root, 'hook-owner-prompt-digest', (state) => { state.contextEvidence.ownerPrompt = evidence; }, env);
@@ -128,14 +129,19 @@ export async function recordOwnerPromptEvidence(root, input, env = process.env, 
 
 export async function recordOwnerVisibleReplyEvidence(root, input, env = process.env) {
   const message = input?.last_assistant_message;
-  if (typeof message !== 'string' || !message.trim()) return null;
-  const evidence = digestEvidence(message, input.session_id);
-  await mutate(root, 'hook-owner-visible-reply-digest', (state) => { state.contextEvidence.ownerVisibleReply = evidence; }, env);
+  const present = typeof message === 'string' && Boolean(message.trim());
+  const evidence = present ? digestEvidence(message, input.session_id) : null;
+  const available = present && Buffer.byteLength(message, 'utf8') <= 32 * 1024;
+  await mutate(root, 'hook-owner-visible-reply-digest', (state) => {
+    state.contextEvidence.ownerVisibleReply = evidence;
+    const retain = available && state.participants !== 'claude';
+    state.recordedReply = { status: retain ? 'available' : 'unavailable', text: retain ? message : null, sessionId: (input.session_id ?? '').slice(0, 256), at: new Date().toISOString() };
+  }, env);
   return evidence;
 }
 
 export async function clearOwnerVisibleReplyEvidence(root, env = process.env) {
-  await mutate(root, 'hook-owner-visible-reply-unavailable', (state) => { state.contextEvidence.ownerVisibleReply = null; }, env);
+  await mutate(root, 'hook-owner-visible-reply-unavailable', (state) => { state.contextEvidence.ownerVisibleReply = null; state.recordedReply = null; }, env);
 }
 
 export async function recordCompaction(root, input, env = process.env) {

@@ -12,8 +12,9 @@ import { applyOwnerModeTransition, compactCheckpointArray, failDeadRunnerOperati
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 import { codexModelSource, speakerLabels } from './lib/speakers.mjs';
+import { cleanupWorkingCopy } from './lib/cleanup.mjs';
 
-const USAGE = 'Usage: control.mjs status [--all|--brief] | config | diagnose | checkpoint [--help|capacity|export|...] | mode | recover | executor-exception';
+const USAGE = 'Usage: control.mjs status [--all|--brief] | config | diagnose | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
 const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
 
 async function currentState(root) {
@@ -33,16 +34,17 @@ async function mutate(root, purpose, fn) {
   return updated.state;
 }
 
-async function mode(root, target, participants, grantId) {
+async function mode(root, target, participants, grantId, attachments = []) {
   if (!['normal', 'discussion', 'ask-once'].includes(target)) throw new ValidationError('mode must be normal, discussion, or ask-once');
   if (!PARTICIPANTS.has(participants) || !isValidMode(target, participants)) throw new ValidationError(`unsupported mode combination: ${target}/${participants}`);
-  const outcome = await applyOwnerModeTransition(root, { grantId, route: target, participants }, process.env);
+  const outcome = await applyOwnerModeTransition(root, { grantId, route: target, participants, attachments }, process.env);
   const transition = outcome.status === 'pending'
     ? `Fabex mode transition pending: ${outcome.from ? formatMode(outcome.from.route, outcome.from.participants) : 'unknown'} -> ${formatMode(target, participants)}.`
     : outcome.from
       ? formatModeTransition(outcome.from, outcome.to)
       : `Fabex mode selected: ${formatMode(target, participants)}. Prior owner-selected mode was unavailable; owner authorization restored it.`;
   process.stdout.write(`${transition}\nNative permissions and sandbox: unchanged. Codex SDK sandbox is selected per queued turn.\n`);
+  if (attachments.length) process.stdout.write(`Images selected for the mode transition: ${attachments.length}. Confirm delivery with the resulting operation status.\n`);
   if (outcome.status === 'pending') {
     const next = participants === 'claude'
       ? ' Wait for it, then rerun this exact mode command to finish the transition and reveal the retained owner message.'
@@ -98,6 +100,7 @@ async function status(root, view = 'default') {
       ownerSelectedMode: result.state.ownerSelectedMode,
       ownerPromptCapturedAt: result.state.contextEvidence.ownerPrompt?.capturedAt ?? null,
       ownerVisibleReplyCapturedAt: result.state.contextEvidence.ownerVisibleReply?.capturedAt ?? null,
+      recordedReply: result.state.recordedReply ? { status: result.state.recordedReply.status, at: result.state.recordedReply.at } : null,
       operationalDelivery: result.state.operationalDelivery
     },
     partner: {
@@ -365,8 +368,16 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
   const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
   if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }
-  if (command === 'mode' && args.length === 3 && args[1] === '--grant') return mode(root, args[0], 'both', assertUuid(args[2], 'mode grant'));
-  if (command === 'mode' && args.length === 5 && args[1] === '--participants' && args[3] === '--grant') return mode(root, args[0], args[2], assertUuid(args[4], 'mode grant'));
+  if (command === 'cleanup' && args.length === 2 && args[0] === '--path') {
+    await currentState(root);
+    process.stdout.write(`${JSON.stringify(await cleanupWorkingCopy(root, args[1]))}\n`);
+    return;
+  }
+  if (command === 'mode') {
+    const offset = args[1] === '--participants' ? 5 : 3;
+    if ((offset === 5 ? args[3] !== '--grant' : args[1] !== '--grant') || args.length < offset || (args.length - offset) % 2 || args.slice(offset).some((arg, index) => index % 2 === 0 && arg !== '--attach')) throw new ValidationError('mode requires target, optional participants, grant, then repeated --attach <absolute path>');
+    return mode(root, args[0], offset === 5 ? args[2] : 'both', assertUuid(args[offset - 1], 'mode grant'), args.slice(offset).filter((_, index) => index % 2 === 1));
+  }
   if (command === 'status' && (args.length === 0 || args.length === 1 && ['--all', '--brief'].includes(args[0]))) return status(root, args[0] === '--all' ? 'all' : args[0] === '--brief' ? 'brief' : 'default');
   if (command === 'diagnose' && args.length === 0) return diagnose(root);
   if (command === 'config' && args.length === 0) return config(root);

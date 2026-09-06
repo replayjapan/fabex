@@ -147,6 +147,21 @@ export function reconciliationEnvelope(phase1OperationId, ownerMessage, fableRes
 }
 
 export function normalizeSubmissionEnvelope(value, participants) {
+  if (typeof value === 'string' && value.trim().startsWith('{')) {
+    let object;
+    try { object = JSON.parse(value); } catch { throw new Error('submission requires valid JSON without trailing text'); }
+    if (Object.hasOwn(object, 'requestId')) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(object.requestId ?? '')) throw new Error('requestId must be a UUID');
+      const { requestId, ...body } = object;
+      return { ...normalizeSubmissionEnvelope(JSON.stringify(body), participants), requestId };
+    }
+    if (participants !== 'both') {
+      const keys = Object.keys(object).sort().join(',');
+      const attachments = attachmentShape(object.attachments);
+      if (!['attachments,ownerMessage', 'attachments,ownerMessage,phase', 'ownerMessage,phase'].includes(keys) || object.phase !== undefined && object.phase !== 'single' || typeof object.ownerMessage !== 'string' || !object.ownerMessage.trim() && !attachments.length) throw new Error('single-turn JSON requires ownerMessage and optional attachments, with phase single');
+      return { phase: 'single', attachments, ownerMessage: object.ownerMessage, message: `OWNER MESSAGE (verbatim):\n${object.ownerMessage}`, claudeReplyVerified: 'unavailable', parentOperationId: null };
+    }
+  }
   if (participants !== 'both') {
     if (typeof value !== 'string' || !value.trim()) throw new Error('owner message must be non-empty');
     return { phase: 'single', ownerMessage: value, message: /^OWNER MESSAGE \(verbatim\):/m.test(value) ? value : `OWNER MESSAGE (verbatim):\n${value}`, claudeReplyVerified: 'unavailable', parentOperationId: null };
@@ -162,8 +177,8 @@ export function normalizeSubmissionEnvelope(value, participants) {
       : ['ownerMessage', 'phase', 'previousReplyStatus'];
     if (Object.hasOwn(parsed, 'attachments')) keys.push('attachments');
     if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 1 envelope has unexpected, missing, or trailing Fable fields');
-    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim()) throw new Error('Phase 1 requires ownerMessage verbatim');
-    if (!['provided', 'none'].includes(parsed.previousReplyStatus)) throw new Error('Phase 1 requires previousReplyStatus provided or none');
+    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim() && !attachments.length) throw new Error('Phase 1 requires ownerMessage verbatim or at least one image');
+    if (!['provided', 'none', 'recorded'].includes(parsed.previousReplyStatus)) throw new Error('Phase 1 requires previousReplyStatus provided, recorded or none');
     if (parsed.previousReplyStatus === 'provided' && (typeof parsed.previousReply !== 'string' || !parsed.previousReply.trim())) throw new Error('Phase 1 requires previousReply when status is provided');
     return {
       phase: 'independent', attachments, ownerMessage: parsed.ownerMessage, previousReplyStatus: parsed.previousReplyStatus,
@@ -176,7 +191,7 @@ export function normalizeSubmissionEnvelope(value, participants) {
     const keys = ['fableResponse', 'ownerMessage', 'phase', 'phase1OperationId'];
     if (Object.hasOwn(parsed, 'attachments')) keys.push('attachments');
     if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 2 envelope has unexpected or missing fields');
-    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim() || typeof parsed.fableResponse !== 'string' || !parsed.fableResponse.trim()) throw new Error('Phase 2 requires ownerMessage and fableResponse verbatim');
+    if (typeof parsed.ownerMessage !== 'string' || typeof parsed.fableResponse !== 'string' || !parsed.fableResponse.trim()) throw new Error('Phase 2 requires ownerMessage and fableResponse verbatim');
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed.phase1OperationId ?? '')) throw new Error('Phase 2 requires a valid phase1OperationId');
     return { phase: 'reconcile', attachments, ownerMessage: parsed.ownerMessage, fableResponse: parsed.fableResponse, message: null, claudeReplyVerified: 'unavailable', parentOperationId: parsed.phase1OperationId };
   }
@@ -231,7 +246,7 @@ function boundedFinalResponse(value) {
   return `${result}...`;
 }
 
-function operationRecord({ id, message, route, participants, phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage = null, previousReplyStatus = null, previousReply = null, interrupted = false, attachments = [], sessionId = '', now }) {
+function operationRecord({ id, message, route, participants, phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage = null, previousReplyStatus = null, previousReply = null, interrupted = false, attachments = [], sessionId = '', submissionDigest = null, now }) {
   return {
     id,
     kind: 'partner',
@@ -239,7 +254,7 @@ function operationRecord({ id, message, route, participants, phase, parentOperat
     status: 'queued',
     externalId: null,
     usage: null,
-    request: { message, route, participants, sandbox: sandboxForRoute(route), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage, previousReplyStatus, previousReply, interrupted, attachments },
+    request: { message, route, participants, sandbox: sandboxForRoute(route), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage, previousReplyStatus, previousReply, interrupted, attachments, submissionDigest },
     result: { finalResponse: null, error: null, structured: null, warning: null, relay: { label: 'Codex:', sessionId, status: 'pending' }, attachments: attachments.map((_, index) => ({ index, status: 'selected' })) },
     lifecycle: { phase: 'queued', detail: 'Queued behind earlier owner messages.', queuedAt: now, startedAt: null, finishedAt: null, cancelRequested: false }
   };
@@ -285,22 +300,25 @@ function applyModeSelection(state, grant, now) {
 }
 
 function enqueueGrantMessage(state, grant, now, attachments) {
-  if (!grant.ownerMessage || !grant.ownerMessage.trim() || grant.participants === 'claude') return null;
+  if ((!grant.ownerMessage?.trim() && !attachments.length) || grant.participants === 'claude') return null;
+  const ownerMessage = grant.ownerMessage ?? '';
   const phase = grant.participants === 'both' ? 'independent' : 'single';
+  const reply = state.recordedReply?.status === 'available' && state.recordedReply.sessionId === grant.sessionId && state.contextEvidence.ownerVisibleReply?.digest === textDigest(state.recordedReply.text) ? state.recordedReply.text : null;
   const id = grant.operationId ?? randomUUID();
   if (state.operations.some((operation) => operation.id === id)) throw new Error('reserved mode-message operation id already exists');
   state.operations = pruneOperations(state.operations);
   state.operations.push(operationRecord({
     id,
-    message: phase === 'single' ? `OWNER MESSAGE (verbatim):\n${grant.ownerMessage}` : null,
+    message: phase === 'single' ? `OWNER MESSAGE (verbatim):\n${ownerMessage}` : null,
     route: grant.route,
     participants: grant.participants,
     phase,
     parentOperationId: null,
-    ownerMessageDigest: textDigest(grant.ownerMessage),
-    claudeReplyVerified: 'unavailable',
-    ownerMessage: phase === 'independent' ? grant.ownerMessage : null,
-    previousReplyStatus: phase === 'independent' ? 'unavailable' : null,
+    ownerMessageDigest: textDigest(ownerMessage),
+    claudeReplyVerified: phase === 'independent' && reply !== null ? true : 'unavailable',
+    ownerMessage: phase === 'independent' ? ownerMessage : null,
+    previousReplyStatus: phase === 'independent' ? reply === null ? 'unavailable' : 'provided' : null,
+    previousReply: phase === 'independent' ? reply : null,
     sessionId: grant.sessionId,
     attachments,
     now
@@ -313,8 +331,11 @@ function enqueueGrantMessage(state, grant, now, attachments) {
 }
 
 function modeAttachments(grant, root, config, env) {
-  if (grant.participants === 'claude') return [];
-  try { return validateAttachments(selectedModeAttachments(grant.ownerMessage), root, config, { sessionId: grant.sessionId, env }); }
+  if (grant.participants === 'claude') {
+    if (grant.attachments?.length) throw new ValidationError('Claude-only mode does not forward Codex attachments; grant retained');
+    return [];
+  }
+  try { return validateAttachments([...new Set([...selectedModeAttachments(grant.ownerMessage), ...(grant.attachments ?? [])])], root, config, { sessionId: grant.sessionId, env }); }
   catch (error) { throw new ValidationError(`Mode attachment validation failed; grant and owner text retained: ${error.message}`); }
 }
 
@@ -344,17 +365,19 @@ function spawnControllerRunner(root, env, spawnImpl = spawn) {
   child.unref?.();
 }
 
-export async function applyOwnerModeTransition(root, { grantId, route, participants }, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
+export async function applyOwnerModeTransition(root, { grantId, route, participants, attachments = [] }, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
   let outcome = null;
   let runnerToCancel = null;
   const config = (await loadEffectiveConfig(root, env)).config;
   const state = await mutate(root, `owner-mode-${route}-${participants}`, (draft) => {
     const grant = draft.modeGrant;
     if (!modeGrantMatches(grant, { id: grantId, route, participants })) throw new ValidationError('mode grant was consumed, expired, or changed');
+    grant.attachments = attachmentShape([...new Set([...(grant.attachments ?? []), ...attachmentShape(attachments)])]);
     modeAttachments(grant, draft.project.canonicalRoot, config, env);
+    if (grant.attachments.length && participants !== 'claude') grant.operationId ??= randomUUID();
     const from = draft.ownerSelectedMode ?? (draft.route !== 'recovery-read-only' ? { route: draft.route, participants: draft.participants, selectedAt: new Date().toISOString() } : null);
     const active = draft.operations.find((operation) => operation.status === 'working');
-    const sameModeWithoutMessage = !grant.ownerMessage && draft.ownerSelectedMode !== null
+    const sameModeWithoutMessage = !grant.ownerMessage && !grant.attachments.length && draft.ownerSelectedMode !== null
       && draft.route === route && draft.participants === participants;
     if (sameModeWithoutMessage) {
       draft.modeGrant = null;
@@ -392,12 +415,31 @@ export async function attachmentSessionId(root, envelope, state, env = process.e
 }
 
 export async function submitOperation(root, message, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
+  const deadline = Date.now() + 3000;
+  let delay = 50;
+  while (true) {
+    try { return await submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline }); }
+    catch (error) {
+      if (!['generation-conflict', 'lock-contention'].includes(error.code) || Date.now() >= deadline) throw error;
+      await new Promise((done) => setTimeout(done, delay));
+      delay = Math.min(delay * 2, 400);
+    }
+  }
+}
+
+async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline }) {
   const current = await readState(root, env);
   if (!current.ok) throw new Error(`partner operation denied: ${current.health}`);
   if (current.state.route === 'recovery-read-only') throw new Error('partner operation denied in recovery-read-only');
   if (!current.state.ownerSelectedMode) throw new Error('partner operation denied: prior owner-selected mode is unknown; type a Fabex mode command');
   if (current.state.participants === 'claude') throw new Error('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
   const envelope = normalizeSubmissionEnvelope(message, current.state.participants);
+  const submissionDigest = textDigest(message);
+  const previous = envelope.requestId && current.state.operations.find((operation) => operation.id === envelope.requestId);
+  if (previous) {
+    if (previous.request.submissionDigest !== submissionDigest) throw new Error('requestId already belongs to a different submission');
+    return { operationId: previous.id, phase: previous.request.phase, status: previous.status, duplicate: true, attachments: previous.result.attachments };
+  }
   const config = (await loadEffectiveConfig(current.paths.canonicalRoot, env)).config;
   const uploadSessionId = await attachmentSessionId(root, envelope, current.state, env);
   const selection = validateSubmissionAttachments(envelope.attachments ?? [], current.paths.canonicalRoot, config, { sessionId: uploadSessionId, env });
@@ -409,7 +451,14 @@ export async function submitOperation(root, message, env = process.env, { spawnR
   let sessionId = uploadSessionId || promptCandidates.find((evidence) => evidence.digest === ownerMessageDigest)?.sessionId || promptEvidence?.sessionId || '';
   if (envelope.phase === 'independent' && promptCandidates.length && !promptCandidates.some((evidence) => evidence.digest === ownerMessageDigest)) throw new Error('Phase 1 ownerMessage does not match a recent owner-typed prompt');
   if (envelope.phase === 'independent') {
-    const replyEvidence = current.state.contextEvidence.ownerVisibleReply;
+    const stored = current.state.recordedReply;
+    const replyEvidence = current.state.contextEvidence.ownerVisibleReply?.sessionId === sessionId ? current.state.contextEvidence.ownerVisibleReply : null;
+    if (envelope.previousReplyStatus === 'recorded') {
+      if (stored?.status === 'available' && stored.sessionId === sessionId && replyEvidence?.digest === textDigest(stored.text)) {
+        envelope.previousReplyStatus = 'provided';
+        envelope.previousReply = stored.text;
+      } else envelope.previousReplyStatus = 'unavailable';
+    }
     if (envelope.previousReplyStatus === 'provided' && replyEvidence) {
       if (replyEvidence.digest !== textDigest(envelope.previousReply)) throw new Error('Phase 1 previousReply does not match the last owner-visible Claude reply');
       envelope.claudeReplyVerified = true;
@@ -427,7 +476,7 @@ export async function submitOperation(root, message, env = process.env, { spawnR
   const retainedPreviousStatus = envelope.phase === 'independent' ? envelope.previousReplyStatus : null;
   const retainedPreviousReply = envelope.phase === 'independent' && envelope.previousReplyStatus === 'provided' ? envelope.previousReply : null;
   if (Buffer.byteLength(envelope.message ?? '', 'utf8') + Buffer.byteLength(retainedOwnerMessage ?? '', 'utf8') + Buffer.byteLength(retainedPreviousReply ?? '', 'utf8') > MAX_OWNER_MESSAGE_BYTES) throw new Error('owner message envelope must be at most 192 KiB');
-  const id = randomUUID();
+  const id = envelope.requestId ?? randomUUID();
   const now = new Date().toISOString();
   const updated = await updateState(root, (state) => {
     state.operations = pruneOperations(state.operations);
@@ -445,6 +494,7 @@ export async function submitOperation(root, message, env = process.env, { spawnR
       previousReply: retainedPreviousReply,
       attachments,
       sessionId,
+      submissionDigest,
       now
     }));
     state.partner.status = state.controller.activeOperationId ? 'working' : 'queued';
@@ -453,7 +503,7 @@ export async function submitOperation(root, message, env = process.env, { spawnR
     state.task.joint.status = 'pending';
     state.generation += 1;
     return state;
-  }, { expectedGeneration: current.state.generation, purpose: 'sdk-submit' }, env);
+  }, { expectedGeneration: current.state.generation, purpose: 'sdk-submit', lockWaitMs: Math.max(0, deadline - Date.now()) }, env);
   if (!updated.ok) throw updated.error ?? new Error(`submit failed safely: ${updated.health}`);
   if (spawnRunner) {
     const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', updated.paths.canonicalRoot], { detached: true, stdio: 'ignore', env });
@@ -725,6 +775,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const before = await readState(root, env);
     if (!before.ok) throw new Error(`partner state unavailable: ${before.health}`);
     expectedId = before.state.partner.thread.threadId;
+    if (before.state.operations.find((item) => item.id === operation.id)?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK execution'), { name: 'AbortError' });
     const config = (await loadEffectiveConfig(before.paths.canonicalRoot, env)).config;
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
     const options = {
@@ -748,6 +799,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
       const stored = state.operations.find((op) => op.id === operation.id);
+      if (stored?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK submission'), { name: 'AbortError' });
       stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
     }, env);
     const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' ? { outputSchema: reviewSchema(operation.request.phase) } : {}) });

@@ -6,7 +6,7 @@ import { checkpointWarnings } from './lib/checkpoint.mjs';
 import { formatMode, replyBadgeInstruction } from './lib/mode.mjs';
 import { rootFromHookInput } from './lib/paths.mjs';
 import { initializeState, readState, updateState } from './lib/state.mjs';
-import { recordOwnerPromptEvidence } from './lib/hook-evidence.mjs';
+import { recordOwnerPromptEvidence, notificationLikePrompt } from './lib/hook-evidence.mjs';
 import { codexModelSource, speakerLabels } from './lib/speakers.mjs';
 
 async function readInput() {
@@ -55,12 +55,17 @@ export async function main() {
       await recordOwnerPromptEvidence(root, input, process.env, { updateCanonicalState: result.ok });
       if (result.ok) result = await readState(root, process.env);
     }
-    if (result.ok && hookEventName === 'UserPromptSubmit' && result.state.route === 'ask-once') {
+    let returnWarning = '';
+    const waitingForAskQuestion = result.ok && result.state.ownerSelectedMode?.route === 'ask-once' && result.state.participants !== 'claude' && result.state.returnTo !== null
+      && !result.state.operations.some((operation) => operation.request.route === 'ask-once' && Date.parse(operation.lifecycle.queuedAt) >= Date.parse(result.state.ownerSelectedMode.selectedAt));
+    if (result.ok && hookEventName === 'UserPromptSubmit' && typeof input.prompt === 'string' && !notificationLikePrompt(input.prompt) && result.state.route === 'ask-once' && !waitingForAskQuestion) {
+      if (!result.state.returnTo) returnWarning = ' Ask return destination unavailable: failed closed to discussion/both; owner mode command required.';
       const reverted = await updateState(root, (state) => {
-        const destination = state.returnTo ?? { route: 'normal', participants: 'both' };
+        const proven = Boolean(state.returnTo);
+        const destination = state.returnTo ?? { route: 'discussion', participants: 'both' };
         state.route = destination.route;
         state.participants = destination.participants;
-        state.ownerSelectedMode = { route: destination.route, participants: destination.participants, selectedAt: new Date().toISOString() };
+        state.ownerSelectedMode = proven ? { route: destination.route, participants: destination.participants, selectedAt: new Date().toISOString() } : null;
         state.returnTo = null;
         state.generation += 1;
         return state;
@@ -74,6 +79,7 @@ export async function main() {
       : result.health === 'migration-deferred'
         ? 'Fabex state migration is deferred while the already-loaded controller finishes its active operation. Use controller wait or non-mutating host monitoring; do not mutate state or bypass the migration gate.'
         : `Fabex state: ${result.health}. Route: recovery-read-only; use /fabex:recover.`;
+    context += returnWarning;
     if (result.ok && result.state.partner.thread.threadId) context += ' The next Codex turn must resume this exact persisted SDK thread ID and verify the thread.started event before accepting output.';
     if (result.ok) {
       const warnings = checkpointWarnings(result.state.partner.thread.checkpoint, result.state.partner.thread.metadata, { repositoryRootConfigured: effective.config.project.repositoryRoot !== null });

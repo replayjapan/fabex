@@ -130,8 +130,12 @@ test('1.6.1 failed mode transition consumes no grant and loses no text', async (
   await submitOperation(second.project, submissionEnvelope('active work'), second.env, { spawnRunner: false });
   const active = await claimNextOperation(second.project, second.env);
   const pendingGrant = await issueModeGrant(second.project, { sessionId: 'session-a', route: 'discussion', participants: 'both', ownerMessage: message }, second.env);
-  await applyOwnerModeTransition(second.project, { grantId: pendingGrant.id, route: 'discussion', participants: 'both' }, second.env, { spawnRunner: false });
-  await assert.rejects(runOperation(second.project, active, { createCodex: async () => { throw new Error('synthetic failure'); }, signal: new AbortController().signal }, second.env));
+  // Request the switch after SDK preparation starts: 1.8 correctly prevents
+  // already-cancelled operations from entering SDK preparation at all.
+  await assert.rejects(runOperation(second.project, active, { createCodex: async () => {
+    await applyOwnerModeTransition(second.project, { grantId: pendingGrant.id, route: 'discussion', participants: 'both' }, second.env, { spawnRunner: false });
+    throw new Error('synthetic in-flight failure');
+  }, signal: new AbortController().signal }, second.env));
   const failed = (await readState(second.project, second.env)).state;
   assert.equal(failed.route, 'recovery-read-only'); assert.equal(failed.modeGrant.id, pendingGrant.id); assert.equal(failed.modeGrant.ownerMessage, message);
 });

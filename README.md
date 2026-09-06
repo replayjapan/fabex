@@ -1,12 +1,12 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.7.2 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.8.0 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 
-## What 1.7.2 changes
+## What 1.8.0 changes
 
-Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runtime to 0.153.4. Release 1.7.2 permits session-scoped phone uploads, raises the per-image limit to 16 MiB, and reports attachment selection, submission, and confirmed delivery. It preserves Codex-default image review, independent-first sequencing, owner-only grants, canonical continuity, and complete verbatim relay. Permission profiles remain deferred; there is no new write allowance or transport change.
+Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runtime to 0.153.4. Release 1.8.0 consolidates image forwarding for mode commands, image-only requests and Codex-only turns; bounded lock retries; safer ask return and unhealthy image guards; recorded previous replies and exact relay output; healthy external scratch writes and narrow diagnostics; and verified working-copy cleanup. Codex-default image review, owner-only grants, canonical continuity, independent-first sequencing and Git-delivery authority remain unchanged. See the [acceptance matrix](docs/acceptance-1.8.0.md) for automated evidence versus outstanding live checks.
 
 Fabex leaves the Codex model unset by default so Codex inherits the owner's configuration; an explicit `models.codex.model` overrides it. `diagnose` reports the model source as `Fabex config`, `Codex config default`, or `unknown`. The configuration reading is not verification of the model that served a turn; profile-based or unavailable resolution is unknown. With no configured model, the bundled CLI default can change on upgrade (0.153.4 changes it to Astra). Fabex does not alter the owner's model setting. See the [official Codex changelog](https://learn.chatgpt.com/docs/changelog).
 
@@ -58,7 +58,13 @@ When the host supplies a saved-photo reference, Fable forwards that exact curren
 
 The dedicated read allowance is `<Claude config directory>/uploads/<hook-recorded session id>/` only. It honors `CLAUDE_CONFIG_DIR` and otherwise uses the default `.claude` directory. Missing or ambiguous matching prompt evidence, sibling-session uploads, files directly under uploads, and resolved symlink escapes are denied even if a broad scratch root covers them. This does not add the uploads folder to `guard.externalWriteRoots` or grant any write permission. Phase 2 uses its stored Phase 1 session binding. Validation repeats before SDK execution.
 
-The live host supplied the file reference outside the prompt-hook text. Forwarding therefore depends on Fable conveying that reference, not a hook scraping images or a transcript. The controller proves the session boundary, not whether a same-session file belongs to this particular message; Fable must never reuse unrelated uploads or omit a rejected photo and retry text-only. If a mode command already created Phase 1 before the upload reference could be forwarded, report that gap; do not pretend the earlier turn received it. Repeat a real phone-upload test after reload before claiming seamless forwarding works. Host-injected images may still enter Fable's context despite its tool restrictions.
+The live host supplied the file reference outside the prompt-hook text. Forwarding therefore depends on Fable conveying that reference, not a hook scraping images or a transcript. The controller proves the session boundary, not whether a same-session file belongs to this particular message; Fable must never reuse unrelated uploads or omit a rejected photo and retry text-only. For a mode command, Fable must add repeated `--attach <absolute-path>` arguments **before** applying the grant. The images are validated, retained with a waiting grant, and included when the transition creates Phase 1. The owner does not type computer paths. If the host reference is unavailable, report that explicitly rather than start an uninformed review. Repeat a real phone-upload test after reload before claiming seamless forwarding works. Host-injected images may still enter Fable's context despite its tool restrictions.
+
+Image-only requests use `ownerMessage: ""` with at least one image; the empty prompt digest is recorded without inventing owner words. A mode command with neither text nor images creates no turn. Codex-only submissions support `{"phase":"single","ownerMessage":"","attachments":["/absolute/approved/photo.jpg"]}` as well as existing plain text. Claude-only modes still exclude Codex; explicit Codex attachments on a Claude-only mode command fail visibly. Phase 2 may keep the empty owner message and is validated against its stored Phase 1 digest.
+
+Selecting both-participant or Codex-only ask without a question waits for the first submitted question, including an ordinary phone photo, before the next owner prompt triggers auto-return. Notification payloads do not consume it. Mode commands with no text and no images still create no empty Phase 1.
+
+Every JSON submission may carry a unique UUID `requestId`. Keep it unchanged when retrying the exact same serialized submission; while its operation record is retained, retries return that operation rather than queue another, even after cancellation. Different input with the same ID is denied. Use a new ID for a new owner message, including repeated captions. This is bounded record-level idempotency, not an indefinite receipt archive; old records are pruned. Without a request ID, identical submissions are separate owner messages.
 
 Submit reports each supplied path as `selected` after validation and queueing. Validation errors exit nonzero, return `operationId: null` with per-path selection/failure information when available, and queue nothing. Status/result retain only zero-based image indexes in `attachments`: `selected` (queued), `submitted` (SDK submission attempted), `delivered` (that image-bearing turn emitted SDK completion), or `failed` (delivery not confirmed, including cancellation). An attempted submission is not receipt; completion is not proof of an accurate image description. Historical metadata can be null/unknown. Terminal attachment paths are erased; indexed delivery metadata remains. Photo files themselves are not deleted by Fabex.
 
@@ -105,6 +111,14 @@ Permission profiles and the legacy sandbox settings **do not combine**. The [off
 
 ## Independent-first controller and progress visibility
 
+### Healthy scratch work and verified cleanup
+
+Discussion and ask permit Write/Edit/NotebookEdit and supported single-target Bash writes only to validated memory/scratchpad or configured `guard.externalWriteRoots` locations outside the workstream. Existing ancestors and symlinks are resolved before approval. Unhealthy/recovery state does not gain write access. Native permissions still apply. Image inspection remains Codex's job even during lock contention, corruption or deferred migration.
+
+Exact read probes include `git tag --list`, `git tag -l "v*"`, `du -sh .`, and `ps -axo pid,ppid,rss,etime,comm | grep codex`. Process arguments/environment dumps are not included. Read-only routes do not gain build/test execution or Git delivery; tag creation/deletion and commits still require the operational lane in work mode.
+
+`control.mjs cleanup --path <absolute-directory>` is available to the main or operational executor in healthy work mode. It accepts only `fabex-next` or `fabex-next-<version>` directly under the workstream or system temp roots. It checks the Fabex package/manifest, compares source files against the live checkout or matching delivered tag, rejects unique files/refs and symlinks, and requires `lsof` to prove no active use. If any check or native permission fails, nothing is removed. No wildcards or force fallback. Verified disposable copies are deleted, not moved to Trash; their source files remain recoverable from the verified checkout/tag. Owner photos, caches and local settings are not cleanup targets.
+
 For `participants=both`, Phase 1 accepts strict JSON only. It contains the owner message and, when one exists, Fable's previous owner-visible reply—the reply the owner already saw. It cannot contain Fable's current commentary, extra keys, or trailing text:
 
 ```sh
@@ -121,7 +135,13 @@ The controller stores Codex's Phase 1 answer as the independent reading. Only th
 
 The controller retrieves the stored independent answer itself; callers cannot substitute it. It verifies the same owner-message digest and rejects missing, failed, cancelled, mismatched, or already-used parents. Later owner cycles may queue, but a completed Phase 1 creates a barrier until its Phase 2 completes or is explicitly abandoned. This preserves owner-cycle FIFO ordering.
 
-`UserPromptSubmit` records a digest, byte count, time, and session for owner prompts. Notification-shaped inputs containing task, system, reminder, or local-command markers are ignored. An eight-entry private digest-only sidecar lets a legitimate owner prompt survive interleaved background notifications or a second queued owner prompt; the canonical schema remains unchanged. Stop records the same metadata for the final owner-visible Fable reply. Fabex compares these when available but stores no text copy and never parses transcripts. Interruptions and unavailable hook evidence are reported honestly rather than guessed.
+`UserPromptSubmit` records a digest, byte count, time, and session for owner prompts, including empty image captions. Notification-shaped inputs containing task, system, reminder, or local-command markers are ignored, including by ask-mode auto-return. A missing ask return destination fails closed to discussion/both and requires an owner mode command. An eight-entry private digest-only sidecar accommodates queued owner prompts. Ambiguous session evidence is denied rather than guessed.
+
+Stop records the final owner-visible Fable reply and its digest. Schema 13 retains **one complete reply of at most 32 KiB**, session-bound and replaced by the next accepted Stop; it never reads transcripts, reasoning or tool logs. Oversized, absent, interrupted or Claude-only replies remain unavailable, never truncated and called complete. `previousReplyStatus: "recorded"` lets the controller insert the matching stored reply; `provided` with exact `previousReply` remains supported. Recorded text stays out of the 48 KiB recovery seed and status output. Missing evidence produces an explicit unavailable phase header and `claudeReplyVerified: "unavailable"`. Private state and pending operations are local retention; clearing state removes them, not the separate SDK history.
+
+Use `controller.mjs relay --operation-id <uuid>` to print only the ready-to-paste block. Paste it unchanged for each phase; do not retype quotes or merge away Codex's answer. The full-answer Stop check and owner-requested recovery escape remain unchanged.
+
+Controller writes now wait for locks with bounded backoff (50 ms doubling to 400 ms, about 3 seconds); submission retries generation conflicts by rereading and revalidating. Locks are never stolen. Queued selections and paused grants survive state reload. Cancellation removes terminal operation paths; it does not delete the owner's images or automatically retry ambiguous SDK work.
 
 Owner messages are limited to 192 KiB so an initial turn plus the maximum 48 KiB recovery seed remains below the former 256 KiB failure boundary.
 
@@ -313,7 +333,7 @@ If Desktop thread flooding, orphaned sessions/processes, or material RAM growth 
 
 ## Release activation status
 
-Version 1.7.2 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. Schema 12 adds path-free attachment delivery metadata and preserves schema-11 state losslessly. Update, force plugin reload, and restart before activation testing; test mode-command attachments, main-session image denial, configured-helper delegation in discussion, complete verbatim Stop acknowledgement, and the owner-requested interruption escape. Fabex remains Beta and is not yet marketplace-ready.
+Version 1.8.0 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. Schema 13 adds pending-grant images, bounded recorded replies and submission digests, preserving schema-12 queued images, results and canonical identity. The live-runner migration gate remains in place. Update, force plugin reload, and restart before running the [live acceptance checks](docs/acceptance-1.8.0.md). Fabex remains Beta and is not yet marketplace-ready.
 
 ## Platform support
 

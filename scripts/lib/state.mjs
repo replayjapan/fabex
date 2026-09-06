@@ -39,6 +39,7 @@ export function initialState(identity) {
     modeGrant: null,
     ownerSelectedMode: { route: 'normal', participants: 'both', selectedAt: createdAt },
     contextEvidence: { ownerPrompt: null, ownerVisibleReply: null },
+    recordedReply: null,
     operationalDelivery: null,
     claudeModel: null,
     partner: {
@@ -129,7 +130,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -190,6 +191,7 @@ async function loadValidated(paths) {
       state.modeGrant.ownerMessage ??= null;
       state.modeGrant.operationId ??= null;
       state.modeGrant.pausedAt ??= null;
+      state.modeGrant.attachments ??= [];
     }
     if (sourceVersion < 9) state.ownerSelectedMode ??= ['normal', 'discussion', 'ask-once'].includes(state.route)
       ? { route: state.route, participants: state.participants, selectedAt: metadata?.lastUsedAt ?? checkpoint?.updatedAt ?? new Date().toISOString() }
@@ -200,6 +202,7 @@ async function loadValidated(paths) {
       state.returnTo = null;
     }
     state.contextEvidence ??= { ownerPrompt: null, ownerVisibleReply: null };
+    state.recordedReply ??= null;
     state.operationalDelivery ??= null;
     state.claudeModel ??= null;
     state.controller ??= { runnerPid: null, activeOperationId: null, wakeWatcher: null };
@@ -209,18 +212,19 @@ async function loadValidated(paths) {
       usage: operation.usage ?? null,
       result: { ...operation.result,
         ...(sourceVersion < 11 ? { structured: null, warning: null, relay: null } : {}),
-        attachments: sourceVersion === 11 && ['queued', 'working'].includes(operation.status) ? operation.request.attachments.map((_, index) => ({ index, status: 'selected' })) : null },
+        attachments: sourceVersion >= 12 ? operation.result.attachments : sourceVersion === 11 && ['queued', 'working'].includes(operation.status) ? operation.request.attachments.map((_, index) => ({ index, status: 'selected' })) : null },
       request: {
         ...operation.request,
         phase: operation.request?.phase ?? 'single',
         parentOperationId: operation.request?.parentOperationId ?? null,
         ownerMessageDigest: operation.request?.ownerMessageDigest ?? null,
+        submissionDigest: operation.request?.submissionDigest ?? null,
         claudeReplyVerified: operation.request?.claudeReplyVerified ?? 'unavailable',
         ownerMessage: operation.request?.ownerMessage ?? null,
         previousReplyStatus: operation.request?.previousReplyStatus ?? null,
         previousReply: operation.request?.previousReply ?? null,
         interrupted: operation.request?.interrupted ?? false,
-        attachments: sourceVersion === 11 ? operation.request.attachments : []
+        attachments: sourceVersion >= 11 ? operation.request.attachments : []
       }
     }));
     state.schemaVersion = STATE_SCHEMA_VERSION;
@@ -369,7 +373,7 @@ export async function readState(root, env = process.env, { checkLock = true, loc
   }
 }
 
-export async function updateState(root, mutator, { expectedGeneration, purpose = 'update', lockWaitMs = 0, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds)) } = {}, env = process.env) {
+export async function updateState(root, mutator, { expectedGeneration, purpose = 'update', lockWaitMs = 3000, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds)) } = {}, env = process.env) {
   const paths = await projectPaths(root, env);
   let locked = false;
   let temp = null;
