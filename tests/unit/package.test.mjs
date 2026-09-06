@@ -18,26 +18,26 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfiles, and marketplace metadata agree on 1.6.1 Beta', async () => {
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.6.2 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
   const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
   const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.6.1');
-  assert.equal(pkg.version, '1.6.1');
-  assert.equal(npmLock.version, '1.6.1');
-  assert.equal(npmLock.packages[''].version, '1.6.1');
+  assert.equal(plugin.version, '1.6.2');
+  assert.equal(pkg.version, '1.6.2');
+  assert.equal(npmLock.version, '1.6.2');
+  assert.equal(npmLock.packages[''].version, '1.6.2');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);
   assert.equal(marketplace.plugins[0].source, './');
   assert.equal(marketplace.plugins[0].defaultEnabled, true);
-  assert.equal(pkg.dependencies['@openai/codex-sdk'], '0.149.0');
-  assert.match(pnpmLock, /'@openai\/codex-sdk':\s*\n\s*specifier: 0\.149\.0\s*\n\s*version: 0\.149\.0/);
-  assert.equal(npmLock.packages['node_modules/@openai/codex-sdk'].version, '0.149.0');
-  assert.equal(npmLock.packages['node_modules/@openai/codex'].version, '0.149.0');
+  assert.equal(pkg.dependencies['@openai/codex-sdk'], '0.153.4');
+  assert.match(pnpmLock, /'@openai\/codex-sdk':\s*\n\s*specifier: 0\.153\.4\s*\n\s*version: 0\.153\.4/);
+  assert.equal(npmLock.packages['node_modules/@openai/codex-sdk'].version, '0.153.4');
+  assert.equal(npmLock.packages['node_modules/@openai/codex'].version, '0.153.4');
 });
 
 test('hook registration is exec-form with no MCP result recorder', async () => {

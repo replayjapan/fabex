@@ -40,6 +40,7 @@ export function initialState(identity) {
     ownerSelectedMode: { route: 'normal', participants: 'both', selectedAt: createdAt },
     contextEvidence: { ownerPrompt: null, ownerVisibleReply: null },
     operationalDelivery: null,
+    claudeModel: null,
     partner: {
       transport: 'codex-sdk',
       status: 'not-started',
@@ -128,7 +129,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7, 8].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -190,7 +191,7 @@ async function loadValidated(paths) {
       state.modeGrant.operationId ??= null;
       state.modeGrant.pausedAt ??= null;
     }
-    state.ownerSelectedMode ??= ['normal', 'discussion', 'ask-once'].includes(state.route)
+    if (sourceVersion < 9) state.ownerSelectedMode ??= ['normal', 'discussion', 'ask-once'].includes(state.route)
       ? { route: state.route, participants: state.participants, selectedAt: metadata?.lastUsedAt ?? checkpoint?.updatedAt ?? new Date().toISOString() }
       : null;
     if (state.ownerSelectedMode === null) {
@@ -200,10 +201,12 @@ async function loadValidated(paths) {
     }
     state.contextEvidence ??= { ownerPrompt: null, ownerVisibleReply: null };
     state.operationalDelivery ??= null;
+    state.claudeModel ??= null;
     state.controller ??= { runnerPid: null, activeOperationId: null, wakeWatcher: null };
     state.controller.wakeWatcher ??= null;
     state.operations = (state.operations ?? []).map((operation) => ({
       ...operation,
+      usage: operation.usage ?? null,
       request: {
         ...operation.request,
         phase: operation.request?.phase ?? 'single',
@@ -275,7 +278,7 @@ async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v9');
+    await acquireLock(paths, 'schema-migration-to-v10');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);

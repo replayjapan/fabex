@@ -28,10 +28,10 @@ test('1.5.2 dependency locks pin the exact SDK for marketplace auto-install', as
   const pkg = JSON.parse(await readFile(resolve(pluginRoot, 'package.json'), 'utf8'));
   const npmLock = JSON.parse(await readFile(resolve(pluginRoot, 'package-lock.json'), 'utf8'));
   const pnpmLock = await readFile(resolve(pluginRoot, 'pnpm-lock.yaml'), 'utf8');
-  assert.equal(pkg.dependencies['@openai/codex-sdk'], '0.149.0');
-  assert.equal(npmLock.packages['node_modules/@openai/codex-sdk'].version, '0.149.0');
-  assert.equal(npmLock.packages['node_modules/@openai/codex'].version, '0.149.0');
-  assert.match(pnpmLock, /'@openai\/codex-sdk':\s*\n\s*specifier: 0\.149\.0\s*\n\s*version: 0\.149\.0/);
+  assert.equal(pkg.dependencies['@openai/codex-sdk'], '0.153.4');
+  assert.equal(npmLock.packages['node_modules/@openai/codex-sdk'].version, '0.153.4');
+  assert.equal(npmLock.packages['node_modules/@openai/codex'].version, '0.153.4');
+  assert.match(pnpmLock, /'@openai\/codex-sdk':\s*\n\s*specifier: 0\.153\.4\s*\n\s*version: 0\.153\.4/);
 });
 
 test('1.5.2 operational delivery accepts multiple commit messages with quoted parentheses', async () => {

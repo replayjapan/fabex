@@ -446,6 +446,7 @@ const defer = () => ({ decision: 'defer' });
 export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput)) return deny('malformed tool request');
   if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only');
+  if (health === 'migration-deferred' && ['Monitor', 'TaskOutput', 'ToolSearch', 'AskUserQuestion'].includes(toolName)) return defer();
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
   if (toolName === 'Bash') {
     const control = parseControlCommand(toolInput.command) ?? parseControllerCommand(toolInput.command);

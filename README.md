@@ -1,12 +1,24 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.6.1 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.6.2 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 
-## What 1.6.1 changes
+## What 1.6.2 changes
 
-Fabex uses the official TypeScript `@openai/codex-sdk`. Release 1.6.1 fixes three regressions in the independent-first workflow: text after a mode command is preserved and processed, recovery restores the owner-selected route instead of defaulting to work, and a valid owner mode command can safely interrupt a missing Phase 2. Existing 1.6.0 sequencing, grants, thread continuity, hooks, and security boundaries remain unchanged.
+Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runtime to 0.153.4. Release 1.6.2 adds model-family speaker labels, a host-argument prompt-rewrite candidate, waiting through deferred migrations, and bounded token usage. Independent-first sequencing, owner-only grants, canonical continuity, and security boundaries remain unchanged.
+
+Fabex leaves the Codex model unset by default so Codex inherits the owner's configuration; an explicit `models.codex.model` overrides it. `diagnose` reports the model source as `Fabex config`, `Codex config default`, or `unknown`. The configuration reading is not verification of the model that served a turn; profile-based or unavailable resolution is unknown. With no configured model, the bundled CLI default can change on upgrade (0.153.4 changes it to Astra). Fabex does not alter the owner's model setting. See the [official Codex changelog](https://learn.chatgpt.com/docs/changelog).
+
+Speaker labels use model family names only, for example `Claude (Fable):` and `Codex (Astra):`. Claude's name comes from SessionStart model metadata; Codex's comes from known configuration. Unknown models produce `Claude:` or `Codex:`. Labels accompany, never modify, verbatim relay bodies:
+
+```text
+Codex (Astra):
+<stored independent answer verbatim>
+
+Claude (Fable):
+<owner-visible response verbatim>
+```
 
 There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hook, structured-content recorder, and begin-authorized tool protocol were removed.
 
@@ -28,6 +40,10 @@ Questions authorize answers only. Codex performs project edits. Claude coordinat
 Mode commands are owner-only. Typing a Fabex mode slash command fires `UserPromptExpansion`, which issues a grant bound to that session, project, route, and participant set. Optional same-line or multiline text is captured byte-for-byte in private grant state; it is not interpolated into Fable's expanded prompt. The atomic mode command validates the grant, applies the route, consumes the grant, and only then exposes or submits the owner text. Both-participant text becomes a fresh independent Phase 1; Codex-only text becomes one read-only relay turn; Claude-only text is printed to Fable only after the transition. No text means no empty operation. AI-issued mode skills, missing grants, mismatches, and replays fail closed.
 
 An owner mode command supersedes a completed Phase 1 that is still awaiting reconciliation: Fabex retains and marks that reading interrupted, so Stop no longer blocks on it. If a Codex operation is active, the transition and its text remain durable, grant expiry pauses, and the transition applies only after that operation stops. Old queued work is cancelled. A switch to discussion cannot later release workspace-write work from the interrupted cycle.
+
+### Host ARGUMENTS limitation
+
+Claude Code was observed appending an `ARGUMENTS` section itself in 1.6.1, exposing owner text to Fable before Phase 1. The 1.6.2 expansion hook preserves the exact text in grant state and returns an `updatedInput` candidate without that suffix, or the trusted packaged skill body when only the original command is available. Current documentation is inconsistent with the reported rewrite capability: the [UserPromptExpansion reference](https://code.claude.com/docs/en/hooks#userpromptexpansion-decision-control) describes blocking and additional context, not a guaranteed rewrite. This candidate is unverified until the owner's next typed mode command after reload. If the host ignores it, early Fable visibility remains a platform limitation; Codex still receives only the private independent Phase 1 input. Do not claim early Fable blindness based on the unit test alone.
 
 ## Mechanically enforced and platform-limited behavior
 
@@ -79,6 +95,14 @@ Reasoning events and command output are never exposed as progress. Claude may bl
 A `PostToolUse` `asyncRewake` hook can wake Claude when a submitted phase becomes terminal. Fabex permits only one live watcher per project; `wait` remains the reliable fallback because Claude Code creates a process for every asynchronous hook invocation and does not deduplicate them.
 
 Read-only state commands and runner/operation claims wait up to about three seconds for a live state lock using bounded exponential backoff. They never steal or delete it. A timeout reports `lock-contention` with only PID, purpose, and lock age. `controller wait` treats transient lock ownership as normal and continues until the operation or caller timeout ends.
+
+`controller wait` also retries `migration-deferred` within the same caller timeout (exit 3 on timeout), without migrating state owned by a live old-schema runner. Non-mutating host monitoring such as Monitor and TaskOutput remains available during deferral; project writes and arbitrary Bash remain denied.
+
+Operations expose nullable `usage` with non-negative safe-integer `input_tokens`, `cached_input_tokens`, and `output_tokens` from `turn.completed`. Missing or invalid usage is unknown, not zero. These counts are not billing estimates. Reasoning and tool output remain excluded.
+
+### SDK feature review
+
+Adopted from the installed 0.153.4 SDK surface: creation-only `threadSource: "fabex"`, bounded completion usage, and the `persistent` reasoning-effort value (opt-in; the default is unchanged). Source classification aids identification but does not guarantee Desktop invisibility; resumed canonical threads are not reclassified. Recheck thread counts, runner processes, and RAM after activation. `local_image` inputs and `outputSchema` are deferred to 1.7 because screenshot relay and structured scope/parity output change the partner contract. App-server-only features are not assumed to exist in this TypeScript SDK. The SDK continues to [start and resume local threads](https://learn.chatgpt.com/docs/codex-sdk).
 
 Cancellation is explicit:
 
@@ -229,7 +253,7 @@ The SDK and Codex CLI persist the canonical thread under Codex's own storage and
 
 The route guard parses exact invoked script paths and argv rather than matching command substrings. It rejects malformed two-phase envelopes before queueing, denies AI calls to mode-changing skills, validates owner mode grants on Bash calls, gates controller/checkpoint controls, and allowlists the three project-mutation channels: file tools, Bash, and MCP. The mode command independently consumes the grant, covering direct Codex sandbox attempts that Claude hooks cannot observe. The entire Git delivery lane remains reserved for the operational agent.
 
-Fabex 1.6.1 uses documented stable hook events: `UserPromptExpansion`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, and `PostCompact`. Operational subagent hooks record start/finish metadata and a result digest. PostCompact stores only its trigger and timestamp, warning when the checkpoint predates compaction. Fabex does not depend on preview function hooks. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks.md).
+Fabex 1.6.2 uses documented stable hook events: `UserPromptExpansion`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, and `PostCompact`. Operational subagent hooks record start/finish metadata and a result digest. PostCompact stores only its trigger and timestamp, warning when the checkpoint predates compaction. Fabex does not depend on preview function hooks. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks.md).
 
 ## Beta dogfood and release criteria
 
@@ -246,7 +270,7 @@ If Desktop thread flooding, orphaned sessions/processes, or material RAM growth 
 
 ## Release activation status
 
-Version 1.6.1 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. The new mode transaction and schema 9 recovery behavior require an update, forced plugin reload, and session restart before activation testing. Fabex remains Beta and is not yet marketplace-ready.
+Version 1.6.2 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. Schema 10 adds nullable Claude model metadata and bounded usage without losing prior state. Update, force plugin reload, and restart before activation testing; probe a typed mode command to determine whether the host honors the argument rewrite. Fabex remains Beta and is not yet marketplace-ready.
 
 ## Platform support
 

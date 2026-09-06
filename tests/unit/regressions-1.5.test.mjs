@@ -246,7 +246,7 @@ test('item 16: intermediate schema 6 state loads without losing thread or decisi
   intermediate.partner.thread.checkpoint.updatedAt = '2026-09-04T00:00:00.000Z'; intermediate.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions = '2026-09-04T00:00:00.000Z';
   delete intermediate.partner.thread.checkpoint.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.lastRecordedTurn;
   await writeFile(initialized.paths.stateFile, JSON.stringify(intermediate));
-  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 9); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
+  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 10); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
   assert.equal(loaded.state.executorException.reason, 'preserve'); assert.equal(loaded.state.partner.thread.checkpoint.updatedAt, '2026-09-04T00:00:00.000Z'); assert.equal(loaded.state.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions, '2026-09-04T00:00:00.000Z');
 });
 

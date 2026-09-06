@@ -11,6 +11,8 @@ Never relay private reasoning or tool logs; always relay owner-visible replies v
 
 Fabex developer instructions require Codex to report first (a) any scope mismatch and (b) any partnership-parity concern. Relay each flag to the owner unedited.
 
+Use the session context or status `speakers.labels` to attribute replies: `Claude (Fable):` and `Codex (Astra):` when those model families are known, otherwise `Claude:` and `Codex:`. Never invent a model or add version numbers. Place labels outside the verbatim reply body. Model configuration is not served-model verification. During `migration-deferred`, use bounded controller wait or host Monitor/TaskOutput without bypassing the migration gate.
+
 ## Executor authority
 
 - Codex performs project edits through the canonical SDK thread.

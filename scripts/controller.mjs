@@ -17,7 +17,7 @@ function option(args, name) {
 }
 
 const terminal = (status) => ['completed', 'failed', 'cancelled'].includes(status);
-const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, phase: result.request?.phase, parentOperationId: result.request?.parentOperationId, lifecycle: result.lifecycle });
+const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, phase: result.request?.phase, parentOperationId: result.request?.parentOperationId, lifecycle: result.lifecycle, usage: result.usage ?? null });
 const USAGE = 'Usage: controller.mjs submit < envelope.json | status|result|cancel --operation-id <uuid> | wait --operation-id <uuid> --timeout <1..590>';
 
 export async function waitForOperation(root, operationId, timeoutSeconds, env = process.env, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds))) {
@@ -36,7 +36,7 @@ export async function waitForOperation(root, operationId, timeoutSeconds, env = 
       lastOperation = boundedStatus(operation);
       if (terminal(operation.status)) return { operation: lastOperation, timedOut: false };
     } catch (error) {
-      if (error?.code !== 'lock-contention') throw error;
+      if (!['lock-contention', 'migration-deferred'].includes(error?.code)) throw error;
     }
     const afterRead = deadline - Date.now();
     if (afterRead <= 0) continue;

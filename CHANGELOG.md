@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.2 - 2026-09-06
+
+### Why we made this change
+
+The SDK upgrade and live dogfood exposed missing speaker attribution, host-added arguments, and waits that stopped during safe migration deferral.
+
+### What it gave us
+
+Explicit model-family labels and bounded usage metadata, with reliable waiting while an old runner finishes. Existing independent-first, mode authorization, thread continuity, and security guarantees remain intact.
+
+### Tradeoffs
+
+The host `updatedInput` rewrite is a candidate requiring a live post-reload probe; early Fable visibility remains a platform limitation if ignored. The `fabex` thread source is not a guarantee of Desktop invisibility. Configured model identity is not served-model verification, and the upgraded CLI's unset-model default may change.
+
+### Changes
+
+- Pinned SDK and CLI runtime to 0.153.4, retaining both lockfiles and existing subscription authentication. Diagnose identifies the model configuration source without changing the owner's model selection.
+- Added `Claude (Fable):` / `Codex (Astra):` family-only labels with plain-speaker fallbacks; SessionStart records bounded Claude model metadata. Schema 10 migrates prior state losslessly.
+- Added a mode-expansion `updatedInput` candidate that removes the host arguments suffix or uses the packaged skill body, while retaining exact owner text privately for Phase 1.
+- Retried `migration-deferred` in bounded controller waits; permitted non-mutating host monitoring during migration while preserving Bash/write restrictions.
+- Adopted creation-only `threadSource: "fabex"`, bounded per-operation input/cached/output usage, and opt-in `persistent` effort. Deferred `outputSchema` scope/parity output and `local_image` screenshot relay to 1.7; no app-server transport change.
+
 ## 1.6.1 - 2026-09-05
 
 Fabex 1.6.1 is a focused patch for three regressions found while dogfooding the 1.6.0 two-phase workflow. It preserves independent-first sequencing, owner-only mode grants, canonical thread continuity, Codex-only project writing, and the existing fail-closed guards.

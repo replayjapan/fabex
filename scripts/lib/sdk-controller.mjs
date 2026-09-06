@@ -203,6 +203,12 @@ function finalResponseFromEvent(event) {
   return item?.type === 'agent_message' && typeof item.text === 'string' ? item.text : null;
 }
 
+export function boundedUsage(value) {
+  const fields = ['input_tokens', 'cached_input_tokens', 'output_tokens'];
+  if (!value || fields.some((field) => !Number.isSafeInteger(value[field]) || value[field] < 0)) return null;
+  return Object.fromEntries(fields.map((field) => [field, value[field]]));
+}
+
 function boundedFinalResponse(value) {
   if (typeof value !== 'string') return null;
   if (Buffer.byteLength(value, 'utf8') <= 32 * 1024) return value;
@@ -219,6 +225,7 @@ function operationRecord({ id, message, route, participants, phase, parentOperat
     name: 'sdk-turn',
     status: 'queued',
     externalId: null,
+    usage: null,
     request: { message, route, participants, sandbox: sandboxForRoute(route), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage, previousReplyStatus, previousReply, interrupted },
     result: { finalResponse: null, error: null },
     lifecycle: { phase: 'queued', detail: 'Queued behind earlier owner messages.', queuedAt: now, startedAt: null, finishedAt: null, cancelRequested: false }
@@ -548,11 +555,12 @@ async function recordLifecycle(root, operationId, update, env) {
   }, env);
 }
 
-async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null, requiresRecovery = false } = {}, env) {
+async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null, requiresRecovery = false, usage = null } = {}, env) {
   return mutate(root, `sdk-operation-${status}`, (state) => {
     const operation = state.operations.find((item) => item.id === operationId);
     if (!operation || operation.status !== 'working') throw new Error('active operation record is missing');
     operation.status = status;
+    operation.usage = usage;
     operation.externalId = threadId ?? state.partner.thread.threadId;
     if (operation.request.phase !== 'independent') operation.request.message = null;
     operation.result.finalResponse = finalResponse;
@@ -647,6 +655,7 @@ export async function failDeadRunnerOperation(root, operationId, env = process.e
 
 export async function runOperation(root, operation, { createCodex, signal } = {}, env = process.env) {
   let finalResponse = null;
+  let usage = null;
   let verifiedId = null;
   let expectedId = null;
   try {
@@ -656,6 +665,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const config = (await loadEffectiveConfig(before.paths.canonicalRoot, env)).config;
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
     const options = {
+      ...(!expectedId ? { threadSource: 'fabex' } : {}),
       workingDirectory: before.paths.canonicalRoot,
       skipGitRepoCheck: true,
       sandboxMode: operation.request.sandbox,
@@ -687,6 +697,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
         }
       }
       const response = finalResponseFromEvent(event);
+      if (event.type === 'turn.completed') usage = boundedUsage(event.usage);
       if (response !== null) finalResponse = response;
       await recordLifecycle(root, operation.id, lifecycleUpdate(event), env);
       if (event.type === 'turn.failed') throw new Error(event.error?.message ?? 'Codex turn failed');
@@ -697,7 +708,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const completedAt = new Date().toISOString();
     const version = await sourceVersion();
     finalResponse = boundedFinalResponse(finalResponse);
-    await finishOperation(root, operation.id, 'completed', { finalResponse, threadId: verifiedId, fingerprint, completedAt, version }, env);
+    await finishOperation(root, operation.id, 'completed', { finalResponse, threadId: verifiedId, fingerprint, completedAt, version, usage }, env);
     return { status: 'completed', threadId: verifiedId, finalResponse };
   } catch (error) {
     const cancelled = signal?.aborted || error?.name === 'AbortError';

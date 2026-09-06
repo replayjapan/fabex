@@ -11,6 +11,7 @@ import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
 import { applyOwnerModeTransition, compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
+import { codexModelSource, speakerLabels } from './lib/speakers.mjs';
 
 const USAGE = 'Usage: control.mjs status [--all|--brief] | config | diagnose | checkpoint [--help|capacity|export|...] | mode | recover | executor-exception';
 const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
@@ -80,7 +81,7 @@ async function status(root, view = 'default') {
   if (!isDeepStrictEqual(capturedValue, liveFingerprintValue)) warnings.push('captured fingerprint differs from live');
   const terminal = result.state.operations.filter((operation) => ['completed', 'failed', 'cancelled'].includes(operation.status)).slice(-3);
   const selected = view === 'all' ? result.state.operations : result.state.operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status) || terminal.includes(operation));
-  const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle }));
+  const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle, usage }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle, usage }));
   const output = {
     health: result.health,
     ...(result.lock ? { lock: result.lock } : {}),
@@ -109,6 +110,8 @@ async function status(root, view = 'default') {
     capturedRepoFingerprint: { ...capturedValue, capturedAt: result.state.partner.thread.metadata.repoFingerprintCapturedAt },
     liveRepoFingerprint: { ...liveFingerprintValue, computedAt: new Date().toISOString() }
   };
+  const model = await codexModelSource(effective.config, process.env);
+  output.speakers = { labels: speakerLabels(result.state.claudeModel?.id, model.id), claude: result.state.claudeModel, codex: model };
   if (view !== 'brief') {
     output.controller = result.state.controller;
     output.operations = operations;
@@ -316,6 +319,7 @@ async function diagnose(root) {
     lastRecordedTurn,
     verdict: !state.ok ? 'unknown' : activationVerified ? 'verified by a recorded turn on this version' : 'not verified: no turn recorded on this version'
   };
+  const model = await codexModelSource(effective.config, process.env);
   process.stdout.write(`${JSON.stringify({
     plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown', loadedRoot: PLUGIN_ROOT, beta: true, installed, warnings: installWarnings },
     node: process.version,
@@ -327,6 +331,8 @@ async function diagnose(root) {
       transport: 'official TypeScript SDK',
       dependency: packageMetadata.dependencies?.['@openai/codex-sdk'] ?? null,
       installed: sdkInstalled,
+      model,
+      threadSource: 'fabex (new threads only; Desktop visibility unverified)',
       authentication: 'existing Codex CLI ChatGPT subscription sign-in only; Fabex has no API-key option'
     },
     effective: {

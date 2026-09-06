@@ -7,6 +7,7 @@ import { formatMode, replyBadgeInstruction } from './lib/mode.mjs';
 import { rootFromHookInput } from './lib/paths.mjs';
 import { initializeState, readState, updateState } from './lib/state.mjs';
 import { recordOwnerPromptEvidence } from './lib/hook-evidence.mjs';
+import { codexModelSource, speakerLabels } from './lib/speakers.mjs';
 
 async function readInput() {
   const chunks = [];
@@ -14,9 +15,9 @@ async function readInput() {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
 
-export function renderSessionContext(route, participants, config) {
+export function renderSessionContext(route, participants, config, labels = speakerLabels(null, config.models?.codex?.model)) {
   const label = formatMode(route, participants);
-  const badge = replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always');
+  const badge = `${replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always')} Attribute owner-visible replies using ${labels.claude} and ${labels.codex} outside verbatim relay text; do not invent model names.`;
   if (route === 'normal' && participants === 'both') {
     const joint = config.collaboration.jointByDefault ? 'on' : 'off';
     return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Both-participant owner cycles use strict Phase 1 independent review, then a separately linked Phase 2 convergence on the same canonical Codex SDK thread. Never relay private reasoning or tool logs; relay only verbatim owner-visible context. Owner-only mode grants are single-use. Questions authorize answers only. Codex alone edits files; Claude project writes are denied unless a structured owner-named executor exception is active. Report genuine lifecycle status, verify thread.started, and delegate Git delivery to fabex-operational.`;
@@ -41,6 +42,15 @@ export async function main() {
     const root = await rootFromHookInput(input, process.env);
     const effective = await loadEffectiveConfig(root, process.env);
     let result = await initializeState(root, process.env, { recoverUnresolved: hookEventName === 'SessionStart' });
+    if (result.ok && hookEventName === 'SessionStart') {
+      const recorded = await updateState(root, (state) => {
+        state.claudeModel = typeof input.model === 'string' && /^[A-Za-z0-9._:/-]{1,128}$/.test(input.model) && typeof input.session_id === 'string' && input.session_id.length > 0 && input.session_id.length <= 256
+          ? { id: input.model, sessionId: input.session_id, at: new Date().toISOString() } : null;
+        state.generation += 1;
+        return state;
+      }, { expectedGeneration: result.state.generation, purpose: 'session-model-metadata', lockWaitMs: 3000 }, process.env);
+      result = recorded.ok ? recorded : await readState(root, process.env);
+    }
     if (hookEventName === 'UserPromptSubmit' && (result.ok || result.health === 'migration-deferred')) {
       await recordOwnerPromptEvidence(root, input, process.env, { updateCanonicalState: result.ok });
       if (result.ok) result = await readState(root, process.env);
@@ -57,10 +67,12 @@ export async function main() {
       }, { expectedGeneration: result.state.generation, purpose: 'ask-once-auto-revert' }, process.env);
       result = reverted.ok ? reverted : await readState(root, process.env);
     }
+    const codexModel = await codexModelSource(effective.config, process.env);
+    const claudeModel = result.state?.claudeModel?.sessionId === input.session_id ? result.state.claudeModel.id : null;
     let context = result.ok
-      ? renderSessionContext(result.state.route, result.state.participants, effective.config)
+      ? renderSessionContext(result.state.route, result.state.participants, effective.config, speakerLabels(claudeModel, codexModel.id))
       : result.health === 'migration-deferred'
-        ? 'Fabex state migration is deferred while the already-loaded controller finishes its active operation. Do not poll or mutate Fabex state; retry after that runner exits.'
+        ? 'Fabex state migration is deferred while the already-loaded controller finishes its active operation. Use controller wait or non-mutating host monitoring; do not mutate state or bypass the migration gate.'
         : `Fabex state: ${result.health}. Route: recovery-read-only; use /fabex:recover.`;
     if (result.ok && result.state.partner.thread.threadId) context += ' The next Codex turn must resume this exact persisted SDK thread ID and verify the thread.started event before accepting output.';
     if (result.ok) {

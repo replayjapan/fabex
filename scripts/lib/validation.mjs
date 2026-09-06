@@ -1,7 +1,7 @@
 import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_MUTABLE_FIELDS } from './checkpoint.mjs';
 import { isValidMode, PARTICIPANTS } from './mode.mjs';
 
-export const STATE_SCHEMA_VERSION = 9;
+export const STATE_SCHEMA_VERSION = 10;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -103,7 +103,8 @@ function validWakeWatcher(value) {
 }
 
 function validateOperation(operation, errors) {
-  if (!hasExactKeys(operation, ['id', 'kind', 'name', 'status', 'externalId', 'request', 'result', 'lifecycle'])) { errors.push('operation record is invalid'); return; }
+  if (!hasExactKeys(operation, ['id', 'kind', 'name', 'status', 'externalId', 'request', 'result', 'lifecycle', 'usage'])) { errors.push('operation record is invalid'); return; }
+  if (operation.usage !== null && (!hasExactKeys(operation.usage, ['input_tokens', 'cached_input_tokens', 'output_tokens']) || Object.values(operation.usage).some((value) => !Number.isSafeInteger(value) || value < 0))) errors.push('operation usage is invalid');
   if (!UUID_RE.test(operation.id ?? '') || operation.kind !== 'partner' || operation.name !== 'sdk-turn' || !OPERATION_STATUSES.has(operation.status) || !nullableString(operation.externalId)) errors.push('operation identity is invalid');
   if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox', 'phase', 'parentOperationId', 'ownerMessageDigest', 'claudeReplyVerified', 'ownerMessage', 'previousReplyStatus', 'previousReply', 'interrupted'])) errors.push('operation request shape is invalid');
   else {
@@ -131,7 +132,8 @@ function validateOperation(operation, errors) {
 
 export function validateState(state, identity) {
   const errors = [];
-  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery'])) errors.push('state has unexpected or missing top-level fields');
+  if (!hasExactKeys(state, ['schemaVersion', 'generation', 'project', 'route', 'participants', 'returnTo', 'task', 'partner', 'controller', 'operations', 'executorException', 'modeGrant', 'ownerSelectedMode', 'contextEvidence', 'operationalDelivery', 'claudeModel'])) errors.push('state has unexpected or missing top-level fields');
+  if (state?.claudeModel !== null && (!hasExactKeys(state?.claudeModel, ['id', 'sessionId', 'at']) || !boundedString(state.claudeModel.id, 128) || !boundedString(state.claudeModel.sessionId, 256) || !nullableIsoString(state.claudeModel.at) || state.claudeModel.at === null)) errors.push('Claude model metadata is invalid');
   if (state?.schemaVersion !== STATE_SCHEMA_VERSION) errors.push('state schemaVersion is incompatible');
   if (!Number.isSafeInteger(state?.generation) || state.generation < 0) errors.push('generation must be a non-negative integer');
   if (!hasExactKeys(state?.project, ['id', 'canonicalRoot'])) errors.push('project shape is invalid');
