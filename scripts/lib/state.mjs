@@ -129,7 +129,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -207,7 +207,9 @@ async function loadValidated(paths) {
     state.operations = (state.operations ?? []).map((operation) => ({
       ...operation,
       usage: operation.usage ?? null,
-      result: { ...operation.result, structured: null, warning: null, relay: null },
+      result: { ...operation.result,
+        ...(sourceVersion < 11 ? { structured: null, warning: null, relay: null } : {}),
+        attachments: sourceVersion === 11 && ['queued', 'working'].includes(operation.status) ? operation.request.attachments.map((_, index) => ({ index, status: 'selected' })) : null },
       request: {
         ...operation.request,
         phase: operation.request?.phase ?? 'single',
@@ -218,7 +220,7 @@ async function loadValidated(paths) {
         previousReplyStatus: operation.request?.previousReplyStatus ?? null,
         previousReply: operation.request?.previousReply ?? null,
         interrupted: operation.request?.interrupted ?? false,
-        attachments: []
+        attachments: sourceVersion === 11 ? operation.request.attachments : []
       }
     }));
     state.schemaVersion = STATE_SCHEMA_VERSION;
@@ -280,7 +282,7 @@ async function persistMigration(paths) {
   let locked = false;
   let temp = null;
   try {
-    await acquireLock(paths, 'schema-migration-to-v11');
+    await acquireLock(paths, 'schema-migration-to-v12');
     locked = true;
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete transaction requires recovery');
     const loaded = await loadValidated(paths);
@@ -325,7 +327,7 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
         draft.participants = 'both';
         draft.task.status = 'recovery-required';
         draft.operations = draft.operations.map((operation) => operation.status === 'working'
-          ? { ...operation, status: 'failed', request: { ...operation.request, message: null, attachments: [] }, result: { ...operation.result, error: 'controller stopped before the SDK turn outcome was known' }, lifecycle: { ...operation.lifecycle, phase: 'failed', detail: 'Controller stopped; recovery is required.', finishedAt: new Date().toISOString() } }
+          ? { ...operation, status: 'failed', request: { ...operation.request, message: null, attachments: [] }, result: { ...operation.result, attachments: operation.result.attachments?.map((entry) => ({ ...entry, status: 'failed' })) ?? null, error: 'controller stopped before the SDK turn outcome was known' }, lifecycle: { ...operation.lifecycle, phase: 'failed', detail: 'Controller stopped; recovery is required.', finishedAt: new Date().toISOString() } }
           : operation);
         draft.partner.status = 'failed';
         draft.controller = { runnerPid: null, activeOperationId: null, wakeWatcher: null };

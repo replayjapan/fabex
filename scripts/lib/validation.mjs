@@ -3,7 +3,7 @@ import { isValidMode, PARTICIPANTS } from './mode.mjs';
 import { attachmentShape } from './attachments.mjs';
 import { validReview } from './review.mjs';
 
-export const STATE_SCHEMA_VERSION = 11;
+export const STATE_SCHEMA_VERSION = 12;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -129,7 +129,8 @@ function validateOperation(operation, errors) {
     if (operation.request.phase !== 'independent' && (operation.request.ownerMessage !== null || operation.request.previousReplyStatus !== null || operation.request.previousReply !== null || operation.request.interrupted)) errors.push('only independent operations retain phase context');
     if (operation.request.phase === 'independent' && operation.request.previousReplyStatus === 'provided' && operation.request.previousReply === null) errors.push('provided previous reply is missing');
   }
-  if (!hasExactKeys(operation.result, ['finalResponse', 'error', 'structured', 'warning', 'relay']) || !boundedNullableString(operation.result.finalResponse, 32 * 1024) || !boundedNullableString(operation.result.error, 8192) || !boundedNullableString(operation.result.warning, 1024)) errors.push('operation result is invalid');
+  if (!hasExactKeys(operation.result, ['finalResponse', 'error', 'structured', 'warning', 'relay', 'attachments']) || !boundedNullableString(operation.result.finalResponse, 32 * 1024) || !boundedNullableString(operation.result.error, 8192) || !boundedNullableString(operation.result.warning, 1024)) errors.push('operation result is invalid');
+  if (operation.result.attachments !== null && (!Array.isArray(operation.result.attachments) || operation.result.attachments.length > 6 || operation.result.attachments.some((entry, index) => !hasExactKeys(entry, ['index', 'status']) || entry.index !== index || !['selected', 'submitted', 'delivered', 'failed'].includes(entry.status)))) errors.push('operation attachment delivery metadata is invalid');
   if (operation.result.structured !== null && (!validReview(operation.result.structured, operation.request.phase) || operation.result.structured.answer !== operation.result.finalResponse)) errors.push('structured review is invalid');
   if (operation.result.relay !== null && (!hasExactKeys(operation.result.relay, ['label', 'sessionId', 'status']) || !boundedString(operation.result.relay.label, 128) || !/^Codex(?: \([A-Za-z]+\))?:$/.test(operation.result.relay.label) || !boundedString(operation.result.relay.sessionId, 256) || !['pending', 'delivered', 'waived'].includes(operation.result.relay.status))) errors.push('operation relay is invalid');
   if (!hasExactKeys(operation.lifecycle, ['phase', 'detail', 'queuedAt', 'startedAt', 'finishedAt', 'cancelRequested'])) errors.push('operation lifecycle shape is invalid');

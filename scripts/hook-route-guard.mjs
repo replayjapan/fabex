@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { readState } from './lib/state.mjs';
-import { normalizeSubmissionEnvelope } from './lib/sdk-controller.mjs';
+import { attachmentSessionId, normalizeSubmissionEnvelope } from './lib/sdk-controller.mjs';
 import { validateAttachments } from './lib/attachments.mjs';
 import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
@@ -35,7 +35,7 @@ function commandReferencesImage(command) {
   return (safeCommandSegments(command) ?? []).some((segment) => referencesImage(simpleTokens(segment) ?? []));
 }
 
-function readOnlyDelegation(input, paths, config) {
+function readOnlyDelegation(input, paths, config, context) {
   const keys = new Set(['subagent_type', 'model', 'prompt', 'description', 'max_turns', 'run_in_background']);
   if (Object.keys(input).some((key) => !keys.has(key)) || typeof input.prompt !== 'string' || !input.prompt.trim()) return false;
   if (input.subagent_type === 'claude-code-guide') return true;
@@ -45,7 +45,7 @@ function readOnlyDelegation(input, paths, config) {
   try {
     const payload = JSON.parse(input.prompt.slice(prefix.length));
     if (!isPlainObject(payload) || Object.keys(payload).join(',') !== 'attachments' || !Array.isArray(payload.attachments) || payload.attachments.length === 0) return false;
-    validateAttachments(payload.attachments, paths.canonicalRoot, config);
+    validateAttachments(payload.attachments, paths.canonicalRoot, config, context);
     return true;
   } catch { return false; }
 }
@@ -485,7 +485,7 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
   return deny(`state is ${health}; only reads and exact diagnostic or recovery controls are available`);
 }
 
-export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {}, config = null }) {
+export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {}, config = null, env = process.env }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
   if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only; invoke the slash command directly to mint a single-use grant');
   const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
@@ -497,8 +497,13 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
     if (controller?.kind === 'controller-submit' && !state.ownerSelectedMode) return deny('prior owner-selected mode is unknown; type a Fabex mode command');
     if (controller?.kind === 'controller-submit' && state.participants === 'both') {
-      try { validateAttachments(normalizeSubmissionEnvelope(controller.message, 'both').attachments, paths.canonicalRoot, config); }
-      catch { return deny('image attachments must be valid bounded files inside permitted roots'); }
+      try {
+        const envelope = normalizeSubmissionEnvelope(controller.message, 'both');
+        const sessionId = await attachmentSessionId(paths.canonicalRoot, envelope, state, env);
+        if (executor.sessionId && sessionId && executor.sessionId !== sessionId) return deny('upload session evidence does not match this host session');
+        validateAttachments(envelope.attachments, paths.canonicalRoot, config, { sessionId, env });
+      }
+      catch (error) { return deny(`image attachments failed validation; no text-only fallback: ${error.message}`); }
     }
     if (state.route === 'recovery-read-only') return deny('recovery-read-only denies this command');
     return defer();
@@ -538,7 +543,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       try { const url = new URL(toolInput.url); if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) return defer(); } catch {}
       return deny('read-only research requires an HTTP(S) URL without embedded credentials');
     }
-    if (['Agent', 'Task'].includes(toolName)) return readOnlyDelegation(toolInput, paths, config) ? defer() : deny('read-only delegation permits claude-code-guide or the configured operational model with the exact image-description envelope only');
+    if (['Agent', 'Task'].includes(toolName)) return readOnlyDelegation(toolInput, paths, config, { env, sessionId: state.contextEvidence.ownerPrompt?.sessionId === executor.sessionId ? executor.sessionId : '' }) ? defer() : deny('read-only delegation permits claude-code-guide or the configured operational model with the exact image-description envelope only');
   }
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
   if (WRITE_TOOLS.has(toolName)) return deny(`${state.route} is read-only`);

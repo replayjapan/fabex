@@ -80,8 +80,8 @@ test('1.7 item 1: attachment bounds, external roots, symlink escape and guard re
   const link = join(project, 'link.png'); await symlink(denied, link);
   assert.throws(() => validateAttachments([link], project, config), /outside permitted/);
   for (const value of [['relative.png'], ['file.txt'], Array(7).fill(external), [12]]) assert.throws(() => attachmentShape(value));
-  const large = join(project, 'large.png'); await writeFile(large, Buffer.alloc(8 * 1024 * 1024 + 1));
-  assert.throws(() => validateAttachments([large], project, config), /8 MiB/);
+  const large = join(project, 'large.png'); await writeFile(large, Buffer.alloc(16 * 1024 * 1024 + 1));
+  assert.throws(() => validateAttachments([large], project, config), /16 MiB/);
   const envelope = JSON.stringify({ ...JSON.parse(submissionEnvelope('owner')), attachments: [link] });
   await assert.rejects(submitOperation(project, envelope, env, { spawnRunner: false }), /outside permitted/);
   assert.throws(() => normalizeSubmissionEnvelope(`${envelope}\nFABLE NOTE`, 'both'), /trailing/);
@@ -188,7 +188,7 @@ test('1.7 schema 10 migration preserves identity, evidence, grants, results and 
   for (const item of legacy.operations) { delete item.request.attachments; delete item.result.structured; delete item.result.warning; delete item.result.relay; }
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 11);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 12);
   assert.equal(migrated.state.partner.thread.threadId, 'canonical');
   assert.deepEqual(migrated.state.ownerSelectedMode, legacy.ownerSelectedMode);
   assert.deepEqual(migrated.state.contextEvidence, legacy.contextEvidence);

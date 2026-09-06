@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.7.2 - 2026-09-06
+
+### Why we made this change
+
+A phone-photo test exposed a missing permission: Remote Control supplied a local upload reference outside Fabex's permitted attachment roots, so Codex's independent turn received text only.
+
+### What it gave us
+
+Session-scoped phone-photo attachments using the existing SDK image transport, with visible validation failures and bounded delivery status. No general filesystem write permission, new transport, model change, or Git-delivery authority is added.
+
+### Tradeoffs
+
+Fable must forward the current message's host-supplied reference without inspecting the image; the prompt hook does not receive that host note. Session membership is validated, but same-message provenance and omitted host attachments cannot be mechanically proven. The host may still show photos to Fable directly. A completed image-bearing SDK turn confirms transport, not the accuracy of visual review. Live phone retesting remains required.
+
+### Changes
+
+- Permitted validated images only under the hook-recorded session directory within the Claude config directory's uploads folder, honoring `CLAUDE_CONFIG_DIR`. Missing/ambiguous evidence, sibling sessions, and symlink escapes fail closed; no upload directory scanning or broader write allowance.
+- Raised the per-image limit to 16 MiB, retaining the six-image limit and existing supported formats. Invalid attachment submissions fail as a whole and never queue a text-only fallback.
+- Added per-path selection/failure output and path-free indexed submission/delivery metadata. `delivered` requires an image-bearing SDK completion event. Schema 12 preserves schema-11 state losslessly; historical delivery remains unknown and the live-runner migration gate stays intact.
+- Updated the phone-forwarding and status instructions and added regressions for session boundaries, size, symlinks, failure reporting, image-access guards, delivery, and migration.
+
 ## 1.7.1 - 2026-09-06
 
 ### Why we made this change

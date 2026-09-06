@@ -18,7 +18,7 @@ function option(args, name) {
 }
 
 const terminal = (status) => ['completed', 'failed', 'cancelled'].includes(status);
-const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, phase: result.request?.phase, parentOperationId: result.request?.parentOperationId, lifecycle: result.lifecycle, usage: result.usage ?? null });
+const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, phase: result.request?.phase, parentOperationId: result.request?.parentOperationId, lifecycle: result.lifecycle, usage: result.usage ?? null, attachments: result.result?.attachments ?? null });
 const USAGE = 'Usage: controller.mjs submit < envelope.json | status|result|cancel --operation-id <uuid> | wait --operation-id <uuid> --timeout <1..590>';
 
 export async function waitForOperation(root, operationId, timeoutSeconds, env = process.env, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds))) {
@@ -120,6 +120,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { await main(); } catch (error) {
+    if (error.attachments) process.stdout.write(`${JSON.stringify({ status: 'failed', operationId: null, attachments: error.attachments, error: error.message })}\n`);
     process.stderr.write(`fabex-controller: ${error.message}\n`);
     process.exitCode = 1;
   }

@@ -8,7 +8,7 @@ import { loadEffectiveConfig, sourceVersion } from './config.mjs';
 import { modeGrantMatches, recentOwnerPromptEvidence, textDigest } from './hook-evidence.mjs';
 import { readState, updateState } from './state.mjs';
 import { ValidationError } from './validation.mjs';
-import { attachmentShape, selectedModeAttachments, validateAttachments } from './attachments.mjs';
+import { attachmentShape, selectedModeAttachments, validateAttachments, validateSubmissionAttachments } from './attachments.mjs';
 import { parseReview, reviewSchema } from './review.mjs';
 import { codexModelSource, speakerLabels } from './speakers.mjs';
 
@@ -240,7 +240,7 @@ function operationRecord({ id, message, route, participants, phase, parentOperat
     externalId: null,
     usage: null,
     request: { message, route, participants, sandbox: sandboxForRoute(route), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage, previousReplyStatus, previousReply, interrupted, attachments },
-    result: { finalResponse: null, error: null, structured: null, warning: null, relay: { label: 'Codex:', sessionId, status: 'pending' } },
+    result: { finalResponse: null, error: null, structured: null, warning: null, relay: { label: 'Codex:', sessionId, status: 'pending' }, attachments: attachments.map((_, index) => ({ index, status: 'selected' })) },
     lifecycle: { phase: 'queued', detail: 'Queued behind earlier owner messages.', queuedAt: now, startedAt: null, finishedAt: null, cancelRequested: false }
   };
 }
@@ -259,6 +259,7 @@ function cancelQueuedForModeTransition(state, now) {
   for (const operation of state.operations) {
     if (operation.status !== 'queued') continue;
     operation.status = 'cancelled';
+    operation.result.attachments = operation.result.attachments?.map((entry) => ({ ...entry, status: 'failed' })) ?? null;
     operation.request.attachments = [];
     operation.request.message = null;
     operation.request.ownerMessage = null;
@@ -311,16 +312,16 @@ function enqueueGrantMessage(state, grant, now, attachments) {
   return id;
 }
 
-function modeAttachments(grant, root, config) {
+function modeAttachments(grant, root, config, env) {
   if (grant.participants === 'claude') return [];
-  try { return validateAttachments(selectedModeAttachments(grant.ownerMessage), root, config); }
+  try { return validateAttachments(selectedModeAttachments(grant.ownerMessage), root, config, { sessionId: grant.sessionId, env }); }
   catch (error) { throw new ValidationError(`Mode attachment validation failed; grant and owner text retained: ${error.message}`); }
 }
 
-function completeModeTransitionInState(state, now = new Date().toISOString(), config = null) {
+function completeModeTransitionInState(state, now = new Date().toISOString(), config = null, env = process.env) {
   const grant = state.modeGrant;
   if (!grant) return null;
-  const attachments = modeAttachments(grant, state.project.canonicalRoot, config);
+  const attachments = modeAttachments(grant, state.project.canonicalRoot, config, env);
   const from = state.ownerSelectedMode ?? (state.route !== 'recovery-read-only' ? { route: state.route, participants: state.participants, selectedAt: now } : null);
   interruptUnreconciledCycles(state, now);
   cancelQueuedForModeTransition(state, now);
@@ -350,7 +351,7 @@ export async function applyOwnerModeTransition(root, { grantId, route, participa
   const state = await mutate(root, `owner-mode-${route}-${participants}`, (draft) => {
     const grant = draft.modeGrant;
     if (!modeGrantMatches(grant, { id: grantId, route, participants })) throw new ValidationError('mode grant was consumed, expired, or changed');
-    modeAttachments(grant, draft.project.canonicalRoot, config);
+    modeAttachments(grant, draft.project.canonicalRoot, config, env);
     const from = draft.ownerSelectedMode ?? (draft.route !== 'recovery-read-only' ? { route: draft.route, participants: draft.participants, selectedAt: new Date().toISOString() } : null);
     const active = draft.operations.find((operation) => operation.status === 'working');
     const sameModeWithoutMessage = !grant.ownerMessage && draft.ownerSelectedMode !== null
@@ -370,12 +371,24 @@ export async function applyOwnerModeTransition(root, { grantId, route, participa
       outcome = { status: 'pending', from, to: { route, participants }, operationId: grant.operationId, activeOperationId: active.id, ownerMessage: null };
       return;
     }
-    const completed = completeModeTransitionInState(draft, new Date().toISOString(), config);
+    const completed = completeModeTransitionInState(draft, new Date().toISOString(), config, env);
     outcome = { status: 'applied', from, to: { route, participants }, operationId: completed.operationId, ownerMessage: completed.ownerMessage };
   }, env);
   if (runnerToCancel && isProcessAlive(runnerToCancel)) process.kill(runnerToCancel, 'SIGUSR1');
   if (outcome.status === 'applied' && outcome.operationId && spawnRunner && !isProcessAlive(state.controller.runnerPid)) spawnControllerRunner(root, env, spawnImpl);
   return outcome;
+}
+
+export async function attachmentSessionId(root, envelope, state, env = process.env) {
+  if (envelope.phase === 'reconcile') {
+    const parent = state.operations.find((op) => op.id === envelope.parentOperationId && op.request.phase === 'independent' && op.status === 'completed' && op.request.ownerMessageDigest === textDigest(envelope.ownerMessage));
+    return parent?.result.relay?.sessionId ?? '';
+  }
+  const evidence = [...await recentOwnerPromptEvidence(root, env), state.contextEvidence.ownerPrompt].filter((entry) => entry?.digest === textDigest(envelope.ownerMessage));
+  const sessions = new Set(evidence.map((entry) => entry.sessionId));
+  // No caller-supplied session ID, and no guess when identical messages came
+  // from different sessions. Other attachments retain their existing policy.
+  return sessions.size === 1 ? [...sessions][0] : '';
 }
 
 export async function submitOperation(root, message, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
@@ -386,12 +399,14 @@ export async function submitOperation(root, message, env = process.env, { spawnR
   if (current.state.participants === 'claude') throw new Error('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
   const envelope = normalizeSubmissionEnvelope(message, current.state.participants);
   const config = (await loadEffectiveConfig(current.paths.canonicalRoot, env)).config;
-  const attachments = validateAttachments(envelope.attachments ?? [], current.paths.canonicalRoot, config);
+  const uploadSessionId = await attachmentSessionId(root, envelope, current.state, env);
+  const selection = validateSubmissionAttachments(envelope.attachments ?? [], current.paths.canonicalRoot, config, { sessionId: uploadSessionId, env });
+  const attachments = selection.paths;
   const ownerMessageDigest = textDigest(envelope.ownerMessage);
   const promptEvidence = current.state.contextEvidence.ownerPrompt;
   const promptEvidenceRing = envelope.phase === 'independent' ? await recentOwnerPromptEvidence(root, env) : [];
   const promptCandidates = promptEvidenceRing.length ? promptEvidenceRing : promptEvidence ? [promptEvidence] : [];
-  let sessionId = promptCandidates.find((evidence) => evidence.digest === ownerMessageDigest)?.sessionId ?? promptEvidence?.sessionId ?? '';
+  let sessionId = uploadSessionId || promptCandidates.find((evidence) => evidence.digest === ownerMessageDigest)?.sessionId || promptEvidence?.sessionId || '';
   if (envelope.phase === 'independent' && promptCandidates.length && !promptCandidates.some((evidence) => evidence.digest === ownerMessageDigest)) throw new Error('Phase 1 ownerMessage does not match a recent owner-typed prompt');
   if (envelope.phase === 'independent') {
     const replyEvidence = current.state.contextEvidence.ownerVisibleReply;
@@ -444,7 +459,7 @@ export async function submitOperation(root, message, env = process.env, { spawnR
     const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', updated.paths.canonicalRoot], { detached: true, stdio: 'ignore', env });
     child.unref?.();
   }
-  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified };
+  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified, attachments: selection.statuses };
 }
 
 const CHECKPOINT_ARRAY_FIELDS = new Set(Object.keys(CHECKPOINT_ARRAY_LIMITS));
@@ -586,12 +601,13 @@ async function recordLifecycle(root, operationId, update, env) {
   }, env);
 }
 
-async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null, requiresRecovery = false, usage = null, structured = null, warning = null, relay = null } = {}, env) {
+async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null, requiresRecovery = false, usage = null, structured = null, warning = null, relay = null, attachmentDelivered = false } = {}, env) {
   const config = (await loadEffectiveConfig(root, env)).config;
   return mutate(root, `sdk-operation-${status}`, (state) => {
     const operation = state.operations.find((item) => item.id === operationId);
     if (!operation || operation.status !== 'working') throw new Error('active operation record is missing');
     operation.status = status;
+    operation.result.attachments = operation.result.attachments?.map((entry) => ({ ...entry, status: attachmentDelivered ? 'delivered' : 'failed' })) ?? null;
     operation.request.attachments = [];
     operation.usage = usage;
     operation.externalId = threadId ?? state.partner.thread.threadId;
@@ -650,7 +666,7 @@ async function finishOperation(root, operationId, status, { finalResponse = null
     if (status !== 'failed' && state.modeGrant?.pausedAt && state.controller.activeOperationId === null) {
       if (state.modeGrant.participants === 'claude' && state.modeGrant.ownerMessage) applyModeSelection(state, state.modeGrant, new Date().toISOString());
       else {
-        try { completeModeTransitionInState(state, new Date().toISOString(), config); }
+        try { completeModeTransitionInState(state, new Date().toISOString(), config, env); }
         catch (transitionError) {
           // Retain the unused paused grant and verbatim text, not a half-applied
           // transition. Attachment validation runs before any transition effects.
@@ -667,6 +683,7 @@ function markDeadRunnerFailure(state, operationId, now = new Date().toISOString(
   const operation = state.operations.find((item) => item.id === operationId);
   if (!operation || operation.status !== 'working' || state.controller.activeOperationId !== operationId || isProcessAlive(state.controller.runnerPid)) return false;
   operation.status = 'failed';
+  operation.result.attachments = operation.result.attachments?.map((entry) => ({ ...entry, status: 'failed' })) ?? null;
   operation.request.attachments = [];
   operation.request.message = null;
   operation.result.error = 'controller stopped before the SDK turn outcome was known';
@@ -703,6 +720,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
   let usage = null;
   let verifiedId = null;
   let expectedId = null;
+  let attachmentDelivered = false;
   try {
     const before = await readState(root, env);
     if (!before.ok) throw new Error(`partner state unavailable: ${before.health}`);
@@ -722,13 +740,15 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     };
     const seed = expectedId ? null : buildRecoverySeed(before.state.partner.thread.checkpoint, before.paths.canonicalRoot);
     const prompt = turnPrompt(operation, operation.request.phase === 'independent' ? null : seed);
-    const attachments = validateAttachments(operation.request.attachments ?? [], before.paths.canonicalRoot, config);
+    const attachments = validateAttachments(operation.request.attachments ?? [], before.paths.canonicalRoot, config, { sessionId: operation.result.relay?.sessionId ?? '', env });
     const input = attachments.length ? [{ type: 'text', text: prompt }, ...attachments.map((path) => ({ type: 'local_image', path }))] : prompt;
     const initialInstructions = seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions();
     const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
+      const stored = state.operations.find((op) => op.id === operation.id);
+      stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
     }, env);
     const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' ? { outputSchema: reviewSchema(operation.request.phase) } : {}) });
     let first = true;
@@ -744,7 +764,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
         }
       }
       const response = finalResponseFromEvent(event);
-      if (event.type === 'turn.completed') usage = boundedUsage(event.usage);
+      if (event.type === 'turn.completed') { usage = boundedUsage(event.usage); attachmentDelivered = attachments.length > 0; }
       if (response !== null) finalResponse = response;
       await recordLifecycle(root, operation.id, lifecycleUpdate(event), env);
       if (event.type === 'turn.failed') throw new Error(event.error?.message ?? 'Codex turn failed');
@@ -760,17 +780,17 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     if (finalResponse !== unbounded) review.warning = 'Codex answer exceeded the 32 KiB storage bound and was truncated; this is not the complete original answer.';
     const model = await codexModelSource(config, env);
     const relay = finalResponse ? { label: speakerLabels(null, model.id).codex, sessionId: operation.result.relay?.sessionId ?? '', status: 'pending' } : null;
-    await finishOperation(root, operation.id, 'completed', { finalResponse, structured: review.structured, warning: review.warning, relay, threadId: verifiedId, fingerprint, completedAt, version, usage }, env);
+    await finishOperation(root, operation.id, 'completed', { finalResponse, structured: review.structured, warning: review.warning, relay, threadId: verifiedId, fingerprint, completedAt, version, usage, attachmentDelivered }, env);
     return { status: 'completed', threadId: verifiedId, finalResponse };
   } catch (error) {
     const cancelled = signal?.aborted || error?.name === 'AbortError';
     if (cancelled) {
-      await finishOperation(root, operation.id, 'cancelled', { threadId: verifiedId ?? expectedId }, env);
+      await finishOperation(root, operation.id, 'cancelled', { threadId: verifiedId ?? expectedId, attachmentDelivered }, env);
       return { status: 'cancelled', threadId: verifiedId ?? expectedId };
     }
     const missing = expectedId && isMissingSessionError(error);
     const mismatch = error?.code === 'thread-mismatch';
-    await finishOperation(root, operation.id, 'failed', { error: error?.message ?? String(error), threadId: expectedId, requiresRecovery: Boolean(missing || mismatch) }, env);
+    await finishOperation(root, operation.id, 'failed', { error: error?.message ?? String(error), threadId: expectedId, requiresRecovery: Boolean(missing || mismatch), attachmentDelivered }, env);
     throw error;
   }
 }
@@ -785,6 +805,7 @@ export async function cancelOperation(root, operationId, env = process.env) {
     operation.lifecycle.cancelRequested = true;
     if (operation.status === 'queued') {
       operation.status = 'cancelled';
+      operation.result.attachments = operation.result.attachments?.map((entry) => ({ ...entry, status: 'failed' })) ?? null;
       operation.request.attachments = [];
       operation.request.message = null;
       operation.request.ownerMessage = null;

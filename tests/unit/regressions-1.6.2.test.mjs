@@ -134,7 +134,7 @@ test('1.6.2 item 6: schema 9 migrates losslessly including unknown owner mode', 
   legacy.route = 'discussion'; legacy.ownerSelectedMode = null;
   await writeFile(initialized.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 11);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 12);
   assert.equal(migrated.state.partner.thread.threadId, 'keep-thread'); assert.deepEqual(migrated.state.partner.thread.checkpoint.acceptedDecisions, ['keep decision']);
   assert.equal(migrated.state.ownerSelectedMode, null); assert.equal(migrated.state.claudeModel, null);
 });
