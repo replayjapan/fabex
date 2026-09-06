@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.0 - 2026-09-06
+
+### Why we made this change
+
+Owner-approved discussion improvements must let Codex see supplied images and let the owner read Codex's exact answers, rather than a blended summary. Structured reviews make evidence, uncertainty, and disagreement explicit.
+
+### What it gave us
+
+Image-enabled independent and reconciliation turns on the same canonical SDK thread, bounded structured findings, and a ready-to-paste full-answer relay checked at Stop. Codex-only project writing and operational-only Git delivery remain unchanged.
+
+### Tradeoffs
+
+Images are sent to Codex and may remain in SDK history; Fabex erases only its own terminal operation paths. Attachment authorship and UI/spoken delivery are not mechanically verifiable. Structured output can fail validation and falls back to text with a warning. Relay matching normalizes whitespace; the owner-requested recovery escape prevents an interrupted cycle trapping the session. Pending undelivered answers consume bounded state capacity. Permission profiles were not adopted because they do not compose with the existing explicit sandbox selection.
+
+### Changes
+
+- Added up to six approved absolute image paths per phase, at most 8 MiB each, checked against workstream/external roots and resolved symlinks on submission and execution. Terminal operations erase paths; image bytes never enter Fabex state.
+- Requested a phase-specific SDK output schema for both participants; preserved the complete `answer` plus bounded evidence, assumptions, uncertainties, disagreements, recommendations, changed files, and test exit codes. Single-participant output remains free text; malformed output produces a visible fallback warning.
+- Added complete labeled `relayBlock` output and Stop checks for missing/truncated answers, with per-session acknowledgement and cycle-level `recover abandon` waiver. Protected pending relays and linked phases from pruning. Schema 11 migrates schema 10 losslessly without retroactively requiring old answers to be relayed; the live-runner migration gate remains intact.
+- Documented the permission-profile compatibility review without adding an ineffective deny-path key. Kept SDK/CLI 0.153.4, native sandbox selection, subscription authentication, and thread continuity unchanged.
+- Recorded the reported host ARGUMENTS rewrite failure as a platform limitation; no claim of early Fable blindness or new rewrite mechanism.
+
 ## 1.6.2 - 2026-09-06
 
 ### Why we made this change

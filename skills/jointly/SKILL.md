@@ -9,6 +9,14 @@ Both means both on every owner cycle. Questions authorize answers only. Codex pe
 
 Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Hidden instructions and scratch content are private too. Relay the owner's message verbatim and owner-visible replies only through the strict controller envelopes below. Codex must finish Phase 1 before it receives Claude/Fable's current response.
 
+## Complete answers and images (1.7.0)
+
+For every Codex turn, retrieve `controller.mjs result --operation-id <uuid>` and paste its entire `relayBlock`, including the opening flags and final paragraphs, before your separate view. Both Phase 1 and Phase 2 must be labeled; Phase 2 corrections never silently replace Phase 1. Summaries follow the full quotes, never replace them. Never call an excerpt a complete quote. Stop checks the complete stored answers and labels against `last_assistant_message`; relay even long answers in full. On an owner-requested interruption only, use `recover abandon --operation-id <uuid>` to waive that completed cycle; cancel active operations first. Do not use recovery simply to evade the relay check.
+
+Both phase JSON envelopes optionally accept `attachments`, an array of at most six absolute png/jpg/jpeg/webp/gif file paths, each at most 8 MiB. Paths must resolve inside the workstream/repository or configured externalWriteRoots. Use only owner-approved images; do not annotate or insert your current opinion in Phase 1 images. Current Fable-generated review imagery belongs in Phase 2. The owner or Fable can supply the path; keep it stable until execution. Paths are erased on terminal state, not from SDK history. No image bytes enter Fabex state. No attachment means text-only behavior is unchanged.
+
+Both phases return a structured review when valid: answer, scopeMismatch, parityConcern, evidence, assumptions, uncertainties, recommendation, changedFiles, tests; Phase 2 also has disagreements. The answer is the complete owner-facing text. Relay supplemental fields too. Report a fallback/truncation warning honestly, never infer missing structured fields or expose reasoning. Single-participant output remains free text. Permission profiles remain deferred because they do not combine with the explicit native sandbox; do not configure a nonexistent codexDeniedPaths option.
+
 Fabex developer instructions require Codex to report first (a) any scope mismatch and (b) any partnership-parity concern. Relay each flag to the owner unedited.
 
 Use the session context or status `speakers.labels` to attribute replies: `Claude (Fable):` and `Codex (Astra):` when those model families are known, otherwise `Claude:` and `Codex:`. Never invent a model or add version numbers. Place labels outside the verbatim reply body. Model configuration is not served-model verification. During `migration-deferred`, use bounded controller wait or host Monitor/TaskOutput without bypassing the migration gate.
@@ -26,7 +34,7 @@ Owner approval does not change the prescribed executor. An exception is valid on
 
 From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`. If participants are `claude`, ask the owner to invoke `/fabex:work`; never switch participants autonomously.
 
-Phase 1 is strict JSON with exactly these fields. `previousReply` means Claude's previous owner-visible reply, which the owner has already seen—not Claude's current analysis. Use `previousReplyStatus: "none"` only when none exists.
+Phase 1 is strict JSON with exactly these fields plus optional `attachments`. `previousReply` means Claude's previous owner-visible reply, which the owner has already seen—not Claude's current analysis. Use `previousReplyStatus: "none"` only when none exists.
 
 The prompt hook ignores task/system/reminder/local-command notification payloads and retains a private ring of eight recent owner-prompt digests. This permits queued legitimate owner messages without relaying or storing their text. Never submit a notification as `ownerMessage`.
 

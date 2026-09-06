@@ -158,7 +158,7 @@ test('1.6 item 7: async wake parsing is exact and watcher ownership is deduplica
   assert.equal((await readState(project, env)).state.controller.wakeWatcher, null);
 });
 
-test('1.6 item 8: schema 7 migrates losslessly through schema 10', async (t) => {
+test('1.6 item 8: schema 7 migrates losslessly through schema 11', async (t) => {
   const { project, env } = await fixture(t); const initialized = await initializeState(project, env);
   const legacy = structuredClone(initialized.state); legacy.schemaVersion = 7;
   delete legacy.modeGrant; delete legacy.contextEvidence; delete legacy.operationalDelivery; delete legacy.controller.wakeWatcher;
@@ -167,7 +167,7 @@ test('1.6 item 8: schema 7 migrates losslessly through schema 10', async (t) => 
   legacy.partner.thread.threadId = 'preserved-schema-7'; legacy.partner.thread.checkpoint.acceptedDecisions = ['preserved decision'];
   await writeFile(initialized.paths.stateFile, JSON.stringify(legacy));
   const loaded = await readState(project, env);
-  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 10);
+  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 11);
   assert.equal(loaded.state.partner.thread.threadId, 'preserved-schema-7');
   assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['preserved decision']);
 });
@@ -209,7 +209,7 @@ test('1.6 live fix 1: schema migration defers while a live runner owns an active
   live.controller.runnerPid = 2147483646;
   await writeFile(initialized.paths.stateFile, JSON.stringify(live));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 10);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 11);
   assert.equal(migrated.state.operations[0].id, submitted.operationId);
 });
 

@@ -1,0 +1,58 @@
+// Only owner-facing output is retained here; reasoning and tool events are excluded.
+const text = { type: 'string' };
+const nullableText = { type: ['string', 'null'] };
+const texts = { type: 'array', items: text };
+export function reviewSchema(phase) {
+  const properties = {
+    scopeMismatch: nullableText, parityConcern: nullableText, answer: text,
+    evidence: texts, assumptions: texts, uncertainties: texts,
+    ...(phase === 'reconcile' ? { disagreements: texts } : {}),
+    recommendation: nullableText, changedFiles: texts,
+    tests: { type: 'array', items: { type: 'object', additionalProperties: false,
+      properties: { command: text, exitCode: { type: ['integer', 'null'] } }, required: ['command', 'exitCode'] } }
+  };
+  return { type: 'object', additionalProperties: false, properties, required: Object.keys(properties) };
+}
+
+export function validReview(value, phase) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(reviewSchema(phase).properties).sort();
+  if (Object.keys(value).sort().join(',') !== keys.join(',')) return false;
+  if (typeof value.answer !== 'string' || !value.answer.trim() || Buffer.byteLength(value.answer) > 32768) return false;
+  const bounded = (s) => typeof s === 'string' && Buffer.byteLength(s) <= 2048;
+  if (['scopeMismatch', 'parityConcern', 'recommendation'].some((key) => value[key] !== null && !bounded(value[key]))) return false;
+  if (['evidence', 'assumptions', 'uncertainties', 'changedFiles', ...(phase === 'reconcile' ? ['disagreements'] : [])].some((key) => !Array.isArray(value[key]) || value[key].length > 16 || !value[key].every(bounded))) return false;
+  if (!Array.isArray(value.tests) || value.tests.length > 16 || !value.tests.every((item) => item && Object.keys(item).sort().join(',') === 'command,exitCode' && bounded(item.command) && (item.exitCode === null || Number.isSafeInteger(item.exitCode)))) return false;
+  return Buffer.byteLength(JSON.stringify(value)) <= 48 * 1024;
+}
+
+export function parseReview(raw, phase) {
+  try {
+    const value = JSON.parse(raw);
+    if (validReview(value, phase)) return { finalResponse: value.answer, structured: value, warning: null };
+  } catch {}
+  return { finalResponse: raw, structured: null, warning: 'Structured review unavailable: Codex returned malformed or over-budget output; relay the stored answer verbatim.' };
+}
+
+export function relayBlock(operation) {
+  const answer = operation.result.finalResponse;
+  if (typeof answer !== 'string') return null;
+  const label = operation.result.relay?.label ?? 'Codex:';
+  const phase = operation.request.phase === 'independent' ? 'Phase 1 — independent' : operation.request.phase === 'reconcile' ? 'Phase 2 — reconciliation/corrections' : 'Answer';
+  const fields = operation.result.structured ? Object.fromEntries(Object.entries(operation.result.structured).filter(([key]) => key !== 'answer')) : null;
+  return `${label} ${phase}\n\n${answer.split('\n').map((line) => `> ${line}`).join('\n')}${fields ? `\n\nStructured review fields:\n\n\`\`\`json\n${JSON.stringify(fields, null, 2)}\n\`\`\`` : ''}${operation.result.warning ? `\n\nFabex warning: ${operation.result.warning}` : ''}`;
+}
+
+export function normalizeRelay(text) {
+  return String(text ?? '').replace(/^\s*(?:>\s*)+/gm, '').replace(/\s+/gu, ' ').trim();
+}
+
+export function pendingRelays(state, sessionId) {
+  return state.operations.filter((op) => op.status === 'completed' && op.result?.relay?.status === 'pending'
+    && (!op.result.relay.sessionId || op.result.relay.sessionId === sessionId));
+}
+
+export function missingRelays(state, input) {
+  const visible = normalizeRelay(input.last_assistant_message);
+  return pendingRelays(state, input.session_id).filter((op) => !visible.includes(normalizeRelay(op.result.finalResponse)) || !visible.includes(op.result.relay.label));
+}

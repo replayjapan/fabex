@@ -1,20 +1,23 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.6.2 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.7.0 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 
-## What 1.6.2 changes
+## What 1.7.0 changes
 
-Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runtime to 0.153.4. Release 1.6.2 adds model-family speaker labels, a host-argument prompt-rewrite candidate, waiting through deferred migrations, and bounded token usage. Independent-first sequencing, owner-only grants, canonical continuity, and security boundaries remain unchanged.
+Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runtime to 0.153.4. Release 1.7.0 adds image attachments to both phases, structured reviews, and complete labeled verbatim relay with Stop verification. Independent-first sequencing, owner-only grants, canonical continuity, and security boundaries remain unchanged. Permission profiles were reviewed but not enabled: they cannot be layered safely over the current sandbox selection.
 
 Fabex leaves the Codex model unset by default so Codex inherits the owner's configuration; an explicit `models.codex.model` overrides it. `diagnose` reports the model source as `Fabex config`, `Codex config default`, or `unknown`. The configuration reading is not verification of the model that served a turn; profile-based or unavailable resolution is unknown. With no configured model, the bundled CLI default can change on upgrade (0.153.4 changes it to Astra). Fabex does not alter the owner's model setting. See the [official Codex changelog](https://learn.chatgpt.com/docs/changelog).
 
 Speaker labels use model family names only, for example `Claude (Fable):` and `Codex (Astra):`. Claude's name comes from SessionStart model metadata; Codex's comes from known configuration. Unknown models produce `Claude:` or `Codex:`. Labels accompany, never modify, verbatim relay bodies:
 
 ```text
-Codex (Astra):
+Codex (Astra): Phase 1 — independent
 <stored independent answer verbatim>
+
+Codex (Astra): Phase 2 — reconciliation/corrections
+<stored reconciliation answer verbatim, including any corrections>
 
 Claude (Fable):
 <owner-visible response verbatim>
@@ -43,9 +46,31 @@ An owner mode command supersedes a completed Phase 1 that is still awaiting reco
 
 ### Host ARGUMENTS limitation
 
-Claude Code was observed appending an `ARGUMENTS` section itself in 1.6.1, exposing owner text to Fable before Phase 1. The 1.6.2 expansion hook preserves the exact text in grant state and returns an `updatedInput` candidate without that suffix, or the trusted packaged skill body when only the original command is available. Current documentation is inconsistent with the reported rewrite capability: the [UserPromptExpansion reference](https://code.claude.com/docs/en/hooks#userpromptexpansion-decision-control) describes blocking and additional context, not a guaranteed rewrite. This candidate is unverified until the owner's next typed mode command after reload. If the host ignores it, early Fable visibility remains a platform limitation; Codex still receives only the private independent Phase 1 input. Do not claim early Fable blindness based on the unit test alone.
+Claude Code was observed appending an `ARGUMENTS` section itself in 1.6.1, exposing owner text to Fable before Phase 1. The 1.6.2 expansion hook preserves the exact text in grant state and returns an `updatedInput` candidate without that suffix, or the trusted packaged skill body when only the original command is available. Current documentation is inconsistent with the reported rewrite capability: the [UserPromptExpansion reference](https://code.claude.com/docs/en/hooks#userpromptexpansion-decision-control) describes blocking and additional context, not a guaranteed rewrite. Live dogfood reported that the host ignored this candidate and still delivered ARGUMENTS. Early Fable visibility is therefore a known platform limitation; Codex still receives only the private independent Phase 1 input. Do not claim early Fable blindness based on the unit test alone.
 
 ## Mechanically enforced and platform-limited behavior
+
+### Images and structured reviews
+
+Both strict JSON phase envelopes accept an optional `attachments` array, for example `"attachments": ["/absolute/workspace/app/review.png"]`. The owner or Fable may supply approved image paths; Phase 1 must not include current Fable annotations or opinions disguised as screenshots. Fable-generated current analysis belongs only in Phase 2. This semantic boundary remains instructional: path validation cannot prove who authored an image.
+
+At most six PNG, JPG/JPEG, WebP, or GIF files are allowed, each nonempty and at most 8 MiB. Paths must be absolute and resolve inside the workstream (including its configured repository) or an effective `guard.externalWriteRoots` directory. Symlink escapes are rejected. Files are checked at submission and immediately before execution; supplied files should remain unchanged while queued. The SDK receives `local_image` inputs alongside the phase text, including in read-only discussion and ask. Fabex stores paths only until completion, failure, or cancellation; it never stores image bytes in state. SDK/model processing and persisted Codex history have separate retention; removing Fabex paths does not erase those copies. Share only images approved for sending to Codex.
+
+Every both-participant phase requests `outputSchema` fields: `scopeMismatch`, `parityConcern`, `answer`, `evidence`, `assumptions`, `uncertainties`, `recommendation`, `changedFiles`, and `tests` (`command`, `exitCode`; null means not known). Reconciliation also requires `disagreements`. `answer` is Codex's complete owner-facing answer, including flags, not a summary derived by Fable. The controller retains the validated object in `result.structured` and the exact answer in `result.finalResponse`. Invalid JSON or schema output falls back to the raw response with `structured: null` and an explicit warning; it does not itself fail the operation. Codex-only turns retain free text.
+
+Answers have the existing 32 KiB storage bound. Structured objects have a 48 KiB total bound, 16 entries per array, and 2048 bytes per supplemental string. Overflow falls back visibly, and truncation is explicitly labeled rather than called a complete quote. Token usage is not a context-capacity or billing meter.
+
+### Complete verbatim relay
+
+`controller.mjs result --operation-id <uuid>` returns `relayBlock`: the Codex label and phase, every stored answer line quoted, then the structured fields and any warning. Paste each phase's block unchanged before Fable's separate view or a joint summary. Never call an excerpt a full quote. Phase 2 corrections must remain separately visible; a Phase 1 quote alone is not necessarily Codex's final position. Only owner-facing text is relayed, never private reasoning or tool logs.
+
+Stop checks pending completed phases for the current session against `last_assistant_message`, normalizing whitespace and blockquote prefixes. Missing full answers or speaker labels block stopping; an accepted Stop acknowledges them so later turns need not repeat old answers. This checks textual presence, not whether the UI actually displayed it, its ordering, or spoken playback. Pending unrelayed answers are protected from history pruning; the hard state budget still fails closed if too much undelivered content accumulates.
+
+For an owner-requested interruption, `control.mjs recover abandon --operation-id <uuid>` waives the completed cycle's relay and any missing Phase 2 while preserving its stored answers and canonical thread. Cancel working/queued operations before abandonment. This escape is instructional owner authority, not a new cryptographic grant. Never use it merely to shorten an answer. If the host omits `last_assistant_message`, Stop cannot verify delivery; relay explicitly or use the owner-requested escape, rather than claiming verification.
+
+### Permission-profile compatibility
+
+Permission profiles and the legacy sandbox settings **do not combine**. The [official permissions reference](https://learn.chatgpt.com/docs/permissions) says an explicit `--sandbox` selects the legacy policy rather than layering a profile's deny rules onto it. The installed 0.153.4 SDK passes `sandboxMode` as `--sandbox`; accepting TOML configuration is not proof that denial is enforced. Profiles are also Beta and can grant broader access, not just narrow it. Therefore 1.7.0 keeps the existing sandbox unchanged and deliberately does not expose `guard.codexDeniedPaths`. A future migration requires native enforcement tests across platforms and same-thread resume, not a config-only claim of secret-file protection.
 
 | Mechanically enforced | Instructional or platform-limited |
 | --- | --- |
@@ -102,7 +127,7 @@ Operations expose nullable `usage` with non-negative safe-integer `input_tokens`
 
 ### SDK feature review
 
-Adopted from the installed 0.153.4 SDK surface: creation-only `threadSource: "fabex"`, bounded completion usage, and the `persistent` reasoning-effort value (opt-in; the default is unchanged). Source classification aids identification but does not guarantee Desktop invisibility; resumed canonical threads are not reclassified. Recheck thread counts, runner processes, and RAM after activation. `local_image` inputs and `outputSchema` are deferred to 1.7 because screenshot relay and structured scope/parity output change the partner contract. App-server-only features are not assumed to exist in this TypeScript SDK. The SDK continues to [start and resume local threads](https://learn.chatgpt.com/docs/codex-sdk).
+Adopted from the installed 0.153.4 SDK surface: creation-only `threadSource: "fabex"`, bounded completion usage, and the `persistent` reasoning-effort value (opt-in; the default is unchanged). Source classification aids identification but does not guarantee Desktop invisibility; resumed canonical threads are not reclassified. Recheck thread counts, runner processes, and RAM after activation. Version 1.7.0 now uses the previously available `local_image` and `outputSchema` capabilities for images and structured reviews. Comparing 0.149.0 and 0.153.4 types, only threadSource and persistent are new additions; usage, images, and structured output were already available. App-server-only features are not assumed to exist in this TypeScript SDK. The SDK continues to [start and resume local threads](https://learn.chatgpt.com/docs/codex-sdk).
 
 Cancellation is explicit:
 
@@ -241,7 +266,7 @@ Task status is non-sticky: submission and successful completion are `active`; an
 
 ## Privacy and retention
 
-Per-workstream state is stored under the plugin data directory with restrictive permissions. A mode command temporarily retains its trailing owner text until the transition succeeds; a completed independent turn retains that owner message until Phase 2 completes or the cycle is abandoned. Other terminal prompts are erased. Fabex retains the structured checkpoint and at most 24 terminal operation records with bounded final response/error fields. Context hooks retain SHA-256 digests, byte counts, timestamps, and session identifiers—not message copies. The owner-prompt sidecar retains at most eight such digest records and no prompt text. Fabex does not store a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
+Per-workstream state is stored under the plugin data directory with restrictive permissions. A mode command temporarily retains its trailing owner text until the transition succeeds; a completed independent turn retains that owner message until Phase 2 completes or the cycle is abandoned. Other terminal prompts and all terminal attachment paths are erased. Fabex retains the structured checkpoint, bounded structured reviews, and normally at most 24 terminal records. Linked phases are pruned together, with additional byte-budget pruning; unrelayed answers and unfinished cycles are protected, so retention may exceed 24 but never the hard 1 MiB state limit. New writes fail visibly if that limit is reached. Context hooks retain SHA-256 digests, byte counts, timestamps, and session identifiers—not message copies. Relay acknowledgements retain only session, label, and status beside the already-stored answer. The owner-prompt sidecar retains at most eight such digest records and no prompt text. Fabex does not store image bytes, a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
 
 The SDK and Codex CLI persist the canonical thread under Codex's own storage and may retain data under their policies. Claude Code and host applications may retain their own data independently.
 
@@ -253,7 +278,7 @@ The SDK and Codex CLI persist the canonical thread under Codex's own storage and
 
 The route guard parses exact invoked script paths and argv rather than matching command substrings. It rejects malformed two-phase envelopes before queueing, denies AI calls to mode-changing skills, validates owner mode grants on Bash calls, gates controller/checkpoint controls, and allowlists the three project-mutation channels: file tools, Bash, and MCP. The mode command independently consumes the grant, covering direct Codex sandbox attempts that Claude hooks cannot observe. The entire Git delivery lane remains reserved for the operational agent.
 
-Fabex 1.6.2 uses documented stable hook events: `UserPromptExpansion`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, and `PostCompact`. Operational subagent hooks record start/finish metadata and a result digest. PostCompact stores only its trigger and timestamp, warning when the checkpoint predates compaction. Fabex does not depend on preview function hooks. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks.md).
+Fabex 1.7.0 uses documented stable hook events: `UserPromptExpansion`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, and `PostCompact`. Operational subagent hooks record start/finish metadata and a result digest. PostCompact stores only its trigger and timestamp, warning when the checkpoint predates compaction. Fabex does not depend on preview function hooks. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks.md).
 
 ## Beta dogfood and release criteria
 
@@ -270,7 +295,7 @@ If Desktop thread flooding, orphaned sessions/processes, or material RAM growth 
 
 ## Release activation status
 
-Version 1.6.2 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. Schema 10 adds nullable Claude model metadata and bounded usage without losing prior state. Update, force plugin reload, and restart before activation testing; probe a typed mode command to determine whether the host honors the argument rewrite. Fabex remains Beta and is not yet marketplace-ready.
+Version 1.7.0 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. Schema 11 adds bounded structured results, transient attachment paths, and relay acknowledgements without losing prior state. Update, force plugin reload, and restart before activation testing; test both image phases, complete verbatim Stop acknowledgement, and the owner-requested interruption escape. Fabex remains Beta and is not yet marketplace-ready.
 
 ## Platform support
 

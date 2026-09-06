@@ -5,6 +5,7 @@ import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { readState } from './lib/state.mjs';
 import { normalizeSubmissionEnvelope } from './lib/sdk-controller.mjs';
+import { validateAttachments } from './lib/attachments.mjs';
 import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 
@@ -466,6 +467,10 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   if (toolName === 'Bash' && (controller?.kind === 'controller-submit' || ['checkpoint-replace', 'checkpoint-snapshot'].includes(control?.kind))) {
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
     if (controller?.kind === 'controller-submit' && !state.ownerSelectedMode) return deny('prior owner-selected mode is unknown; type a Fabex mode command');
+    if (controller?.kind === 'controller-submit' && state.participants === 'both') {
+      try { validateAttachments(normalizeSubmissionEnvelope(controller.message, 'both').attachments, paths.canonicalRoot, config); }
+      catch { return deny('image attachments must be valid bounded files inside permitted roots'); }
+    }
     if (state.route === 'recovery-read-only') return deny('recovery-read-only denies this command');
     return defer();
   }

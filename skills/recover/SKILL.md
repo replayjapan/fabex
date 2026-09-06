@@ -5,6 +5,8 @@ description: Reconcile recovery-read-only state and unresolved Codex partner wor
 
 # Recover
 
+1.7.0 adds a completed-cycle relay escape: only for an owner-requested interruption, `recover abandon --operation-id <uuid>` may waive that cycle's pending full-answer relay and missing reconciliation while retaining the stored answers and thread. Cancel queued/working operations first. This is not permission to abbreviate Codex's words; normally paste each complete `relayBlock` and let Stop acknowledge it.
+
 Start with `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status`. For a recorded unresolved partner operation, offer only:
 
 - `recover inspect --operation-id <uuid>` to inspect it;

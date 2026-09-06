@@ -81,7 +81,7 @@ async function status(root, view = 'default') {
   if (!isDeepStrictEqual(capturedValue, liveFingerprintValue)) warnings.push('captured fingerprint differs from live');
   const terminal = result.state.operations.filter((operation) => ['completed', 'failed', 'cancelled'].includes(operation.status)).slice(-3);
   const selected = view === 'all' ? result.state.operations : result.state.operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status) || terminal.includes(operation));
-  const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle, usage }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle, usage }));
+  const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle, usage, result: operationResult }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle, usage, reviewStructured: Boolean(operationResult.structured), relayStatus: operationResult.relay?.status ?? null, resultWarning: operationResult.warning }));
   const output = {
     health: result.health,
     ...(result.lock ? { lock: result.lock } : {}),
@@ -253,6 +253,24 @@ async function recover(root, args) {
     return;
   }
   if (action === 'abandon') {
+    if (operation.status === 'completed' && operation.result.relay?.status === 'pending') {
+      const cycleId = operation.request.parentOperationId ?? operation.id;
+      let preserved = { route: current.state.route, participants: current.state.participants };
+      await mutate(root, 'partner-relay-abandon', (state) => {
+        const cycle = state.operations.filter((item) => item.id === cycleId || item.request.parentOperationId === cycleId);
+        if (cycle.some((item) => ['queued', 'working'].includes(item.status))) throw new ValidationError('cancel active cycle operations before abandoning the relay');
+        for (const item of cycle) {
+          if (item.result.relay) item.result.relay.status = 'waived';
+          if (item.request.phase === 'independent') { item.request.interrupted = true; item.request.ownerMessage = null; item.request.previousReply = null; item.request.message = null; }
+        }
+        if (state.route === 'recovery-read-only') preserved = restoreOwnerSelectedMode(state);
+        state.task.status = state.operations.some((item) => ['queued', 'working'].includes(item.status)) ? 'active' : null;
+        state.partner.status = state.controller.activeOperationId ? 'working' : state.operations.some((item) => item.status === 'queued') ? 'queued' : state.partner.thread.threadId ? 'completed' : 'not-started';
+        state.task.joint.status = null;
+      });
+      process.stdout.write(`Abandoned relay for cycle ${cycleId}; stored answers retained. Preserved route: ${formatMode(preserved.route, preserved.participants)}.\n`);
+      return;
+    }
     if (operation.status === 'working') {
       const recovered = await failDeadRunnerOperation(root, id, process.env);
       if (!recovered.changed) throw new ValidationError('working operation still has a live runner; cancel it before abandonment');

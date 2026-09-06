@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { rootFromControlCwd } from './lib/paths.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 import { cancelOperation, claimNextOperation, claimRunner, operationStatus, releaseRunner, releaseRunnerIfIdle, runOperation, submitOperation } from './lib/sdk-controller.mjs';
+import { relayBlock } from './lib/review.mjs';
 
 async function codexFactory(options) {
   const { Codex } = await import('@openai/codex-sdk');
@@ -100,6 +101,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     const id = assertUuid(option(args, '--operation-id'), 'operation id');
     let result = command === 'cancel' ? await cancelOperation(root, id, env) : await operationStatus(root, id, env);
     if (command === 'result' && !terminal(result.status)) throw new Error('operation is not complete');
+    if (command === 'result') result = { ...result, relayBlock: relayBlock(result) };
     if (command === 'status') result = boundedStatus(result);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;

@@ -17,10 +17,10 @@ async function readInput() {
 
 export function renderSessionContext(route, participants, config, labels = speakerLabels(null, config.models?.codex?.model)) {
   const label = formatMode(route, participants);
-  const badge = `${replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always')} Attribute owner-visible replies using ${labels.claude} and ${labels.codex} outside verbatim relay text; do not invent model names.`;
+  const badge = `${replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always')} Labels: ${labels.claude} / ${labels.codex}; never invent models. Paste each complete Codex relayBlock before Claude's view; show Phase 2 corrections separately. Stop checks full answers and labels.`;
   if (route === 'normal' && participants === 'both') {
     const joint = config.collaboration.jointByDefault ? 'on' : 'off';
-    return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Both-participant owner cycles use strict Phase 1 independent review, then a separately linked Phase 2 convergence on the same canonical Codex SDK thread. Never relay private reasoning or tool logs; relay only verbatim owner-visible context. Owner-only mode grants are single-use. Questions authorize answers only. Codex alone edits files; Claude project writes are denied unless a structured owner-named executor exception is active. Report genuine lifecycle status, verify thread.started, and delegate Git delivery to fabex-operational.`;
+    return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Strict Phase 1 independent reading, then linked Phase 2 on the canonical Codex SDK thread. Never relay private reasoning or tool logs; only verbatim owner-visible context. Owner-only mode grants are single-use. Questions authorize answers only. Codex alone edits files; Claude project writes are denied without a structured owner-named executor exception. Report lifecycle status, verify thread.started, and delegate Git delivery to fabex-operational.`;
   }
   if (route === 'normal' && participants === 'claude') {
     return `Fabex mode: ${label}. ${badge} Questions authorize answers only. Do not consult Codex or place raw Claude-only questions/answers in its checkpoint. For implementation, ask the owner to type /fabex:work; no AI may switch participants. Claude project writes are allowlist-controlled unless a structured owner-named executor exception is active. Delegate the full Git delivery lane to fabex-operational.`;
