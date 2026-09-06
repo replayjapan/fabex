@@ -8,7 +8,7 @@ import { loadEffectiveConfig, sourceVersion } from './config.mjs';
 import { modeGrantMatches, recentOwnerPromptEvidence, textDigest } from './hook-evidence.mjs';
 import { readState, updateState } from './state.mjs';
 import { ValidationError } from './validation.mjs';
-import { attachmentShape, validateAttachments } from './attachments.mjs';
+import { attachmentShape, selectedModeAttachments, validateAttachments } from './attachments.mjs';
 import { parseReview, reviewSchema } from './review.mjs';
 import { codexModelSource, speakerLabels } from './speakers.mjs';
 
@@ -283,7 +283,7 @@ function applyModeSelection(state, grant, now) {
   state.ownerSelectedMode = { route: grant.route, participants: grant.participants, selectedAt: now };
 }
 
-function enqueueGrantMessage(state, grant, now) {
+function enqueueGrantMessage(state, grant, now, attachments) {
   if (!grant.ownerMessage || !grant.ownerMessage.trim() || grant.participants === 'claude') return null;
   const phase = grant.participants === 'both' ? 'independent' : 'single';
   const id = grant.operationId ?? randomUUID();
@@ -301,6 +301,7 @@ function enqueueGrantMessage(state, grant, now) {
     ownerMessage: phase === 'independent' ? grant.ownerMessage : null,
     previousReplyStatus: phase === 'independent' ? 'unavailable' : null,
     sessionId: grant.sessionId,
+    attachments,
     now
   }));
   state.partner.status = 'queued';
@@ -310,14 +311,21 @@ function enqueueGrantMessage(state, grant, now) {
   return id;
 }
 
-function completeModeTransitionInState(state, now = new Date().toISOString()) {
+function modeAttachments(grant, root, config) {
+  if (grant.participants === 'claude') return [];
+  try { return validateAttachments(selectedModeAttachments(grant.ownerMessage), root, config); }
+  catch (error) { throw new ValidationError(`Mode attachment validation failed; grant and owner text retained: ${error.message}`); }
+}
+
+function completeModeTransitionInState(state, now = new Date().toISOString(), config = null) {
   const grant = state.modeGrant;
   if (!grant) return null;
+  const attachments = modeAttachments(grant, state.project.canonicalRoot, config);
   const from = state.ownerSelectedMode ?? (state.route !== 'recovery-read-only' ? { route: state.route, participants: state.participants, selectedAt: now } : null);
   interruptUnreconciledCycles(state, now);
   cancelQueuedForModeTransition(state, now);
   applyModeSelection(state, grant, now);
-  const operationId = enqueueGrantMessage(state, grant, now);
+  const operationId = enqueueGrantMessage(state, grant, now, attachments);
   const ownerMessage = grant.participants === 'claude' ? grant.ownerMessage : null;
   state.modeGrant = null;
   if (!operationId) {
@@ -338,9 +346,11 @@ function spawnControllerRunner(root, env, spawnImpl = spawn) {
 export async function applyOwnerModeTransition(root, { grantId, route, participants }, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
   let outcome = null;
   let runnerToCancel = null;
+  const config = (await loadEffectiveConfig(root, env)).config;
   const state = await mutate(root, `owner-mode-${route}-${participants}`, (draft) => {
     const grant = draft.modeGrant;
     if (!modeGrantMatches(grant, { id: grantId, route, participants })) throw new ValidationError('mode grant was consumed, expired, or changed');
+    modeAttachments(grant, draft.project.canonicalRoot, config);
     const from = draft.ownerSelectedMode ?? (draft.route !== 'recovery-read-only' ? { route: draft.route, participants: draft.participants, selectedAt: new Date().toISOString() } : null);
     const active = draft.operations.find((operation) => operation.status === 'working');
     const sameModeWithoutMessage = !grant.ownerMessage && draft.ownerSelectedMode !== null
@@ -360,7 +370,7 @@ export async function applyOwnerModeTransition(root, { grantId, route, participa
       outcome = { status: 'pending', from, to: { route, participants }, operationId: grant.operationId, activeOperationId: active.id, ownerMessage: null };
       return;
     }
-    const completed = completeModeTransitionInState(draft);
+    const completed = completeModeTransitionInState(draft, new Date().toISOString(), config);
     outcome = { status: 'applied', from, to: { route, participants }, operationId: completed.operationId, ownerMessage: completed.ownerMessage };
   }, env);
   if (runnerToCancel && isProcessAlive(runnerToCancel)) process.kill(runnerToCancel, 'SIGUSR1');
@@ -577,6 +587,7 @@ async function recordLifecycle(root, operationId, update, env) {
 }
 
 async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null, requiresRecovery = false, usage = null, structured = null, warning = null, relay = null } = {}, env) {
+  const config = (await loadEffectiveConfig(root, env)).config;
   return mutate(root, `sdk-operation-${status}`, (state) => {
     const operation = state.operations.find((item) => item.id === operationId);
     if (!operation || operation.status !== 'working') throw new Error('active operation record is missing');
@@ -638,7 +649,15 @@ async function finishOperation(root, operationId, status, { finalResponse = null
     }
     if (status !== 'failed' && state.modeGrant?.pausedAt && state.controller.activeOperationId === null) {
       if (state.modeGrant.participants === 'claude' && state.modeGrant.ownerMessage) applyModeSelection(state, state.modeGrant, new Date().toISOString());
-      else completeModeTransitionInState(state);
+      else {
+        try { completeModeTransitionInState(state, new Date().toISOString(), config); }
+        catch (transitionError) {
+          // Retain the unused paused grant and verbatim text, not a half-applied
+          // transition. Attachment validation runs before any transition effects.
+          if (!/attachment|attach:|ENOENT|EACCES/.test(transitionError.message)) throw transitionError;
+          operation.result.warning = 'Pending owner mode transition could not validate its selected images; grant and text retained. Restore the selected file and retry the same mode command.';
+        }
+      }
     }
     state.operations = pruneOperations(state.operations);
   }, env);

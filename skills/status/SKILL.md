@@ -5,7 +5,7 @@ description: Report the canonical Fabex mode label, route, participants, state h
 
 # Status
 
-For 1.7.0 report `reviewStructured`, `relayStatus`, and `resultWarning` metadata when present, without dumping answer text or attachment paths. Retrieve each operation's `relayBlock` through controller result when replying to that owner cycle. Complete labeled Codex quotes precede Fable's view; do not replace them with a status summary.
+For 1.7.1 report `reviewStructured`, `relayStatus`, and `resultWarning` metadata when present, without dumping answer text or attachment paths. Retrieve each operation's `relayBlock` through controller result when replying to that owner cycle. Complete labeled Codex quotes precede Fable's view; do not replace them with a status summary.
 
 Use `speakers.labels` for attribution: family-only `Claude (Fable):` / `Codex (Astra):` when known, plain `Claude:` / `Codex:` otherwise. Report configured model source honestly, not as served-model verification. Include available bounded operation usage counts without treating them as billing. `controller wait` retries both lock contention and deferred migration within its timeout; Monitor and TaskOutput remain usable during deferral.
 

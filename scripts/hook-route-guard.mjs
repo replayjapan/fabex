@@ -20,6 +20,35 @@ const OPERATIONAL_AGENT = 'fabex-operational';
 // Plugin-defined agents are reported by the hook harness with their plugin-scoped type.
 // Reject the bare agent name so an identity outside that contract cannot gain push authority.
 const OPERATIONAL_AGENT_TYPE = 'fabex:fabex-operational';
+const IMAGE_REFERENCE = /\.(?:png|jpe?g|webp|gif|bmp|tiff?|svg|heic|heif|avif|ico)(?=$|[\s"'?#)\],;])/i;
+
+function referencesImage(value) {
+  if (typeof value === 'string') return IMAGE_REFERENCE.test(value);
+  if (Array.isArray(value)) return value.some(referencesImage);
+  return isPlainObject(value) && Object.values(value).some(referencesImage);
+}
+
+function commandReferencesImage(command) {
+  // Inspect shell-resolved literal tokens too: quote concatenation must not
+  // disguise an extension (for example screen.pn'g'). Unknown shell syntax is
+  // still subject to the existing fail-closed command allowlist below.
+  return (safeCommandSegments(command) ?? []).some((segment) => referencesImage(simpleTokens(segment) ?? []));
+}
+
+function readOnlyDelegation(input, paths, config) {
+  const keys = new Set(['subagent_type', 'model', 'prompt', 'description', 'max_turns', 'run_in_background']);
+  if (Object.keys(input).some((key) => !keys.has(key)) || typeof input.prompt !== 'string' || !input.prompt.trim()) return false;
+  if (input.subagent_type === 'claude-code-guide') return true;
+  if (input.subagent_type !== OPERATIONAL_AGENT_TYPE || input.model !== config?.models?.operational) return false;
+  const prefix = 'FABEX IMAGE DESCRIPTION ONLY\n';
+  if (typeof input.prompt !== 'string' || !input.prompt.startsWith(prefix)) return false;
+  try {
+    const payload = JSON.parse(input.prompt.slice(prefix.length));
+    if (!isPlainObject(payload) || Object.keys(payload).join(',') !== 'attachments' || !Array.isArray(payload.attachments) || payload.attachments.length === 0) return false;
+    validateAttachments(payload.attachments, paths.canonicalRoot, config);
+    return true;
+  } catch { return false; }
+}
 const GIT_OPTIONS_WITH_VALUES = new Set(['-C', '-c', '--config-env', '--exec-path', '--git-dir', '--namespace', '--super-prefix', '--work-tree']);
 
 function simpleTokens(command) {
@@ -475,6 +504,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     return defer();
   }
   const protectedOperation = toolName === 'Bash' ? protectedGithubOperation(toolInput.command) : null;
+  if (!isOperationalExecutor(executor) && (['Read', 'Bash', 'WebFetch'].includes(toolName) || toolName.startsWith('mcp__')) && (referencesImage(toolInput) || toolName === 'Bash' && commandReferencesImage(toolInput.command))) return deny('Image inspection belongs to Codex by default, or the verified operational helper; Fable and other subagents must use their description');
   if (protectedOperation && !isOperationalExecutor(executor)) {
     return deny(`${protectedOperation} requires a verified ${OPERATIONAL_AGENT} subagent; main-session, alternate-agent, and ambiguous executor identities are denied`);
   }
@@ -502,6 +532,14 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     return defer();
   }
   if (!['discussion', 'ask-once', 'recovery-read-only'].includes(state.route)) return deny('invalid route; use recover');
+  if (['discussion', 'ask-once'].includes(state.route)) {
+    if (toolName === 'WebSearch' && typeof toolInput.query === 'string' && toolInput.query.trim()) return defer();
+    if (toolName === 'WebFetch') {
+      try { const url = new URL(toolInput.url); if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) return defer(); } catch {}
+      return deny('read-only research requires an HTTP(S) URL without embedded credentials');
+    }
+    if (['Agent', 'Task'].includes(toolName)) return readOnlyDelegation(toolInput, paths, config) ? defer() : deny('read-only delegation permits claude-code-guide or the configured operational model with the exact image-description envelope only');
+  }
   if (isPluginSkill(toolName, toolInput) || READ_TOOLS.has(toolName)) return defer();
   if (WRITE_TOOLS.has(toolName)) return deny(`${state.route} is read-only`);
   if (toolName === 'Bash') {

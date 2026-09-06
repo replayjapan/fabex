@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.7.1 - 2026-09-06
+
+### Why we made this change
+
+Image review should belong to Codex, with Fable consuming its description rather than inspecting screenshots itself. Read-only routes also need narrowly scoped research and an optional configured-model image-description helper.
+
+### What it gave us
+
+Extension-based image access restrictions, explicit mode-command attachments in independent Phase 1, and read-only research/delegation without changing modes. Canonical continuity, independent-first sequencing, owner-only mode grants, and Git delivery authority remain unchanged.
+
+### Tradeoffs
+
+The guard recognizes image references by extension; it cannot identify disguised image content or prevent the host from placing images directly in Fable's context. The requested helper model is explicit, not proof of the model served or its price. Selected files must remain available until execution; validation failures retain the unused mode grant and owner text.
+
+### Changes
+
+- Made Codex the default image reviewer; Fable uses Codex's description or an explicitly requested operational helper. Denied main-session and non-operational image references through Read, Bash, MCP, and image-URL WebFetch while preserving validated attachment submissions.
+- Permitted only the configured operational model with a data-only image-description envelope, plus WebSearch, HTTP(S) WebFetch, and the claude-code-guide agent in discussion/ask. Recovery restrictions and read-only project/Git guards remain intact.
+- Added explicit `attach: <absolute path>` lines in mode-command text to Phase 1 attachments without changing the verbatim owner message. Mere path mentions are not attachments. Kept existing image bounds and schema 11.
+- Added a portable `.claude/` ignore rule; retained local settings. Updated the image-review instructions, complete relay guidance, and regression tests.
+
 ## 1.7.0 - 2026-09-06
 
 ### Why we made this change

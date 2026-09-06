@@ -1,12 +1,12 @@
 # Fabex — Beta
 
-> **Beta:** Fabex 1.7.0 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.7.1 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 
-## What 1.7.0 changes
+## What 1.7.1 changes
 
-Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runtime to 0.153.4. Release 1.7.0 adds image attachments to both phases, structured reviews, and complete labeled verbatim relay with Stop verification. Independent-first sequencing, owner-only grants, canonical continuity, and security boundaries remain unchanged. Permission profiles were reviewed but not enabled: they cannot be layered safely over the current sandbox selection.
+Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runtime to 0.153.4. Release 1.7.1 makes Codex the default image reviewer, adds explicit mode-command attachments, and permits narrowly scoped read-only research and image-description delegation. It preserves 1.7.0's structured reviews and complete labeled verbatim relay with Stop verification. Independent-first sequencing, owner-only grants, canonical continuity, and security boundaries remain unchanged. Permission profiles were reviewed but not enabled: they cannot be layered safely over the current sandbox selection.
 
 Fabex leaves the Codex model unset by default so Codex inherits the owner's configuration; an explicit `models.codex.model` overrides it. `diagnose` reports the model source as `Fabex config`, `Codex config default`, or `unknown`. The configuration reading is not verification of the model that served a turn; profile-based or unavailable resolution is unknown. With no configured model, the bundled CLI default can change on upgrade (0.153.4 changes it to Astra). Fabex does not alter the owner's model setting. See the [official Codex changelog](https://learn.chatgpt.com/docs/changelog).
 
@@ -52,7 +52,15 @@ Claude Code was observed appending an `ARGUMENTS` section itself in 1.6.1, expos
 
 ### Images and structured reviews
 
-Both strict JSON phase envelopes accept an optional `attachments` array, for example `"attachments": ["/absolute/workspace/app/review.png"]`. The owner or Fable may supply approved image paths; Phase 1 must not include current Fable annotations or opinions disguised as screenshots. Fable-generated current analysis belongs only in Phase 2. This semantic boundary remains instructional: path validation cannot prove who authored an image.
+Both strict JSON phase envelopes accept an optional `attachments` array, for example `"attachments": ["/absolute/workspace/app/review.png"]`. The owner or Fable may supply approved image paths; Phase 1 must not include current Fable annotations or opinions disguised as screenshots. Fable forwards approved paths without reviewing the images itself. Current Fable text belongs only in Phase 2. This semantic boundary remains instructional: path validation cannot prove who authored an image.
+
+**Codex is the default image reviewer.** Fable uses Codex's description, not its own image inspection. The guard denies main-session and non-operational subagent Read, Bash, MCP, and WebFetch image references by extension (PNG, JPG/JPEG, WebP, GIF, BMP, TIF/TIFF, SVG, HEIC/HEIF, AVIF, ICO). Validated controller attachment envelopes remain allowed. This is an extension-based routing boundary, not content inspection: disguised or extensionless files cannot reliably be recognized, and the host may still place an image directly in Fable's context.
+
+If an additional description is needed, Fable may explicitly spawn `fabex:fabex-operational` using the effective `models.operational` value, including in discussion and ask. In those read-only routes the prompt must be exactly `FABEX IMAGE DESCRIPTION ONLY`, a newline, then a JSON object containing only `attachments` (one to six validated image paths). No arbitrary chore text, agent resume, or model substitution is allowed. The helper reads only the selected images and returns a description; it performs no Git delivery, project writes, or shell chores. The model option selects the configured helper, not a guaranteed lower cost or verified served model.
+
+To attach an image from an owner-typed mode command, put a line `attach: /absolute/workspace/app/review.png` in its trailing message. Use the literal lowercase `attach:` at the start of the line and an unquoted absolute path (spaces are supported). Fabex keeps the entire message byte-for-byte, validates the selected images before applying the grant, and sends them with independent Phase 1. Merely mentioning a path does not attach it. Missing or invalid selected files produce a visible error without consuming the grant or discarding the text; if a paused transition's image disappears, restore it and retry the same mode command. Claude-only modes retain their existing no-Codex routing.
+
+Discussion and ask also permit read-only WebSearch, HTTP(S) WebFetch without embedded credentials, and the `claude-code-guide` research agent. These exceptions do not change the mode, permit project writes, or authorize Git delivery; other delegation remains denied. Recovery remains fail-closed. Fable pastes the controller's `relayBlock` unmodified rather than retyping Codex's words.
 
 At most six PNG, JPG/JPEG, WebP, or GIF files are allowed, each nonempty and at most 8 MiB. Paths must be absolute and resolve inside the workstream (including its configured repository) or an effective `guard.externalWriteRoots` directory. Symlink escapes are rejected. Files are checked at submission and immediately before execution; supplied files should remain unchanged while queued. The SDK receives `local_image` inputs alongside the phase text, including in read-only discussion and ask. Fabex stores paths only until completion, failure, or cancellation; it never stores image bytes in state. SDK/model processing and persisted Codex history have separate retention; removing Fabex paths does not erase those copies. Share only images approved for sending to Codex.
 
@@ -295,7 +303,7 @@ If Desktop thread flooding, orphaned sessions/processes, or material RAM growth 
 
 ## Release activation status
 
-Version 1.7.0 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. Schema 11 adds bounded structured results, transient attachment paths, and relay acknowledgements without losing prior state. Update, force plugin reload, and restart before activation testing; test both image phases, complete verbatim Stop acknowledgement, and the owner-requested interruption escape. Fabex remains Beta and is not yet marketplace-ready.
+Version 1.7.1 is implemented in this repository. Until a successful turn is recorded on this version, activation is unknown. `diagnose` reports source and installed versions, hook validity, whether reload is provably required, and the last successfully recorded Fabex turn/version. Schema 11 is unchanged. Update, force plugin reload, and restart before activation testing; test mode-command attachments, main-session image denial, configured-helper delegation in discussion, complete verbatim Stop acknowledgement, and the owner-requested interruption escape. Fabex remains Beta and is not yet marketplace-ready.
 
 ## Platform support
 

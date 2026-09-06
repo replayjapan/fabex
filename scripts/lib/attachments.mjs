@@ -6,6 +6,19 @@ export function attachmentShape(paths = []) {
   return paths;
 }
 
+// Explicit owner selection only. Do not scan arbitrary prose for file paths or
+// remove these lines from the verbatim owner message used by digest verification.
+export function selectedModeAttachments(message) {
+  const paths = [];
+  for (const line of (message ?? '').split(/\r?\n/)) {
+    if (!/^attach:/.test(line)) continue;
+    const path = line.slice('attach:'.length).trim();
+    if (!path) throw new Error('attach: requires an absolute image path');
+    paths.push(path);
+  }
+  return attachmentShape(paths);
+}
+
 const inside = (path, root) => { const rel = relative(root, path); return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel); };
 function permitted(path, pattern) {
   if (!isAbsolute(pattern)) return false;
