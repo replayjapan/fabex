@@ -173,6 +173,8 @@ export function parseControlCommand(command) {
   const tokens = simpleTokens(command);
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
+  if (args[0] === 'dev' && args.length === 2 && ['start', 'stop', 'restart', 'status', 'logs'].includes(args[1])) return { kind: `dev-${args[1]}` };
+  if (args[0] === 'dev' && args[1] === 'logs' && args.length === 4 && args[2] === '--lines' && /^[1-9]\d{0,2}$/.test(args[3]) && Number(args[3]) <= 400) return { kind: 'dev-logs' };
   if (args.length === 0 || args.length === 1 && args[0] === '--help') return { kind: 'help' };
   if (args[0] === 'status' && (args.length === 1 || args.length === 2 && ['--all', '--brief'].includes(args[1]))) return { kind: 'status' };
   if (['config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
@@ -418,6 +420,8 @@ function safeCommandSegments(command) {
 
 const SAFE_COMPOSED_CONTROLS = new Set(['status', 'config', 'diagnose', 'checkpoint-capacity', 'checkpoint-export', 'help', 'checkpoint-help', 'controller-status', 'controller-result', 'controller-wait', 'controller-help']);
 SAFE_COMPOSED_CONTROLS.add('controller-relay');
+SAFE_COMPOSED_CONTROLS.add('dev-status');
+SAFE_COMPOSED_CONTROLS.add('dev-logs');
 SAFE_UNHEALTHY.add('controller-relay');
 
 function allowedDiscussionReads(command, config, root) {
@@ -531,6 +535,13 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
   const controller = toolName === 'Bash' ? parseControllerCommand(toolInput.command, { participants: state.participants }) : null;
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
+  if (control?.kind?.startsWith('dev-')) {
+    const mutation = ['dev-start', 'dev-stop', 'dev-restart'].includes(control.kind);
+    if (!['normal', 'discussion', 'ask-once'].includes(state.route)) return deny('dev controls require healthy work, discussion, or ask mode');
+    if (mutation && (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt || executor.agentId && !isOperationalExecutor(executor))) return deny('dev lifecycle requires owner-selected work mode and the main or verified operational executor, with no pending transition');
+    if (mutation && !config?.devServer) return deny('devServer lane disabled; use project config and inspect configuration warnings');
+    return defer();
+  }
   if (control?.kind === 'cleanup' && (state.route !== 'normal' || executor.agentId && !isOperationalExecutor(executor))) return deny('verified cleanup is restricted to the main or operational executor in work mode');
   if (control?.kind?.startsWith('mode-') && !modeGrantMatches(state.modeGrant, { id: control.grantId, sessionId: executor.sessionId ?? null, route: control.route, participants: control.participants })) return deny('mode changes require a matching unexpired grant minted by an owner-typed Fabex slash command');
   if (control?.kind?.startsWith('mode-')) {

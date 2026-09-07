@@ -263,7 +263,7 @@ test('1.8 schema 12 migration retains queued images pending grants reply digests
 });
 
 test('1.8 cleanup refuses symlinks unique files wrong names and active use before removal', async (t) => {
-  const f = await fixture(t); const target = join(f.project, 'fabex-next-1.8.1');
+  const f = await fixture(t); const target = join(f.project, 'fabex-next-1.8.2');
   await cp(plugin, target, { recursive: true, filter: (path) => !path.includes('/node_modules') && !path.includes('/.git') });
   await writeFile(join(target, 'unique-owner-note'), 'keep this');
   await assert.rejects(inspectCleanup(f.project, target, { source: plugin, activeCheck: async () => {} }), /unique\/untracked/);

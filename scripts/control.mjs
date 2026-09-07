@@ -13,8 +13,9 @@ import { clearDeadLock, initializeState, inspectTransaction, readState, resolveT
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 import { codexModelSource, speakerLabels } from './lib/speakers.mjs';
 import { cleanupWorkingCopy } from './lib/cleanup.mjs';
+import { devControl, parseDevArgs } from './lib/dev-server.mjs';
 
-const USAGE = 'Usage: control.mjs status [--all|--brief] | config | diagnose | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
+const USAGE = 'Usage: control.mjs status [--all|--brief] | config | diagnose | dev start|stop|restart|status|logs [--lines 1..400] | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
 const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
 
 async function currentState(root) {
@@ -367,6 +368,7 @@ async function diagnose(root) {
     effective: {
       networkAccessEnabled: effective.config.models.codex.networkAccessEnabled,
       repositoryRoot: effective.config.project.repositoryRoot,
+      devServer: { enabled: Boolean(effective.config.devServer), config: effective.config.devServer },
       warnings: effective.warnings
     }
   }, null, 2)}\n`);
@@ -375,6 +377,17 @@ async function diagnose(root) {
 export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
   const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
+  if (command === 'dev') {
+    parseDevArgs(args);
+    const effective = await loadEffectiveConfig(root, process.env);
+    const authorize = async () => {
+      const { state } = await currentState(root);
+      if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('dev lifecycle requires healthy owner-selected work mode with no pending transition');
+    };
+    const result = await devControl(root, effective.config.devServer, args, { authorize });
+    process.stdout.write(`${JSON.stringify({ ...result, warnings: effective.warnings.filter(item => item.includes('devServer')) })}\n`);
+    return;
+  }
   if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }
   if (command === 'cleanup' && args.length === 2 && args[0] === '--path') {
     await currentState(root);

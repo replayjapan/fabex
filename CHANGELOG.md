@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.8.2 - 2026-09-07
+
+### Why we made this change
+
+Commit `3b1616e` in 1.5.0 replaced normal-mode Bash deferral with an allowlist that excluded development-server lifecycle and inspection commands. The installed 1.8.1 guard matched the source. Native sandbox network failures are a separate boundary, not fixed by changing command matching.
+
+### What it gave us
+
+An opt-in project-only exact argv server lane, detached host execution, ownership-verified stop/restart, and bounded read-only readiness/status/logs. Repository cwd is explicit, so nested applications do not launch from the wrong workstream directory.
+
+### Tradeoffs
+
+A full 1.5.0 rollback was rejected because it would restore arbitrary Bash authority. This patch preserves existing allowlists, migrations, network defaults, all newer protocol/image/relay improvements and state schema 14. The small private ownership sidecar has an independent lifecycle lock; unknown identities, orphaned groups and inspection failures fail closed. Logs persist privately and require local maintenance. Native host permissions and project-side live acceptance remain prerequisites; no server was started for this patch's simulated process tests.
+
+### Changes
+
+- Added strictly validated project-only `devServer` configuration; invalid values disable the lane and appear in config/diagnose warnings.
+- Added exact `dev start`, `stop`, `restart`, `status` and bounded `logs` controls. Lifecycle runs only in healthy owner-selected work through main/operational host execution; inspection remains non-mutating in healthy discussion and ask too.
+- Added port conflict refusal, detached argv launch, process-start/executable/group verification, bounded shutdown and no port-based killing. Private sidecars/logs remain outside the workstream.
+- Kept direct shell, migrations and database administration restricted. Read-only database diagnostics continue to require an existing exact script permission, not a general executable grant.
+- Added focused regressions and live acceptance instructions; bumped package/plugin to 1.8.2 without changing SDK or state schemas.
+
 ## 1.8.1 - 2026-09-06
 
 ### Why we made this change

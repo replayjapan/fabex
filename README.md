@@ -1,5 +1,46 @@
 # Fabex — Beta
 
+### 1.8.2: project-scoped development server compatibility
+
+The 1.5.0 normal-route Bash allowlist excluded the development-server loop. A full rollback would restore arbitrary Bash authority, so 1.8.2 adds only exact, opt-in server controls. All existing guards, exact script permissions, SDK network settings, image rules, relay, state schema 14, migrations and canonical threads remain unchanged. Native host permissions still apply; the guard defers approved commands, it does not grant operating-system capabilities.
+
+Merge an owner-approved block into the **project** `.fabex/config.json` (never machine configuration):
+
+```json
+{
+  "devServer": {
+    "cwd": "app",
+    "start": ["pnpm", "dev", "--hostname", "0.0.0.0", "--port", "3000"],
+    "port": 3000,
+    "readyUrl": "http://localhost:3000/",
+    "readyTimeoutMs": 30000,
+    "stopGraceMs": 5000
+  }
+}
+```
+
+`cwd` defaults to `project.repositoryRoot` or the workstream root, and must resolve to an existing directory inside that root, including through symlinks. `start` is an exact non-empty argv array (at most 32 bounded arguments), not a shell string. The owner must review the configured executable/script: its effects are authorized by this configuration, not inferred from its name. Avoid start scripts that migrate, reset databases, or use a test database implicitly. The host environment is inherited. Invalid configuration disables the lane with warnings in `config` and `diagnose`; absent or null configuration means disabled. `port` is 1–65535; readiness requires HTTP on `localhost` or `127.0.0.1` at that port, without embedded credentials. Choose a side-effect-free GET endpoint; redirects are not followed. Startup timeout is 100–120000 ms; stop grace is 100–30000 ms.
+
+Run from the owning workstream, using the loaded plugin's absolute control path:
+
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev start
+node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev status
+node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev logs --lines 80
+node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev restart
+node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev stop
+```
+
+Start/stop/restart must be standalone commands in healthy owner-selected work mode, executed by the main Claude session or verified operational executor. Discussion, ask, recovery, pending transitions and unhealthy states cannot invoke lifecycle mutations. Status/logs are observational controls in healthy work, discussion and ask, and can be composed with other approved read commands. They never create or repair ownership records, change mode, or start/stop anything. Unknown/unhealthy state denies all dev controls. Generic `pnpm dev`, `curl`, `lsof`, arbitrary kills and migrations receive no new permission.
+
+The host executor—not the constrained Codex runner—launches the configured argv detached in its own process group, with private sidecar ownership and log files next to `state.json`, outside the workstream. No state schema change is required. Stop verifies the leader's PID, process-group ID, start time and executable before TERM and any KILL escalation. A dead or mismatched identity clears only stale ownership, never signals another process. Port conflicts identify the listener and fail visibly; no port-selected kill is used. If the leader disappears while descendants survive, stop fails closed instead of guessing ownership. Existing externally started servers are not adopted. Restart is stop followed by start; if the port becomes occupied in between, it fails rather than reclaiming it.
+
+Lifecycle commands serialize through a separate exclusive lock. A crashed command can leave that lock behind; verify no lifecycle command is active before manually clearing that exact lock—status never repairs it. A startup/readiness failure may leave an owned server running: inspect status/logs and stop explicitly. HTTP status alone is not proof the app or its database works. Port inspection failure is not treated as a free port.
+
+Logs are read at most 64 KiB / 400 lines (default 80), with best-effort credential-pattern redaction. Do not put secrets in logs: redaction cannot guarantee removal of every secret. The private file itself is retained and may grow; inspect and maintain it locally, never copy it wholesale into the public repo or owner relay. Database diagnostics remain separately exact-script-authorized using `guard.allowedCommandPatterns`; adding one diagnostic does not permit migrations, resets, accounts or grants. These exact patterns apply in work, not as general script authority in discussion.
+
+The implementation does not enable Codex network access or override Claude Code's own permission classifier. Use a host executor that can bind the configured port and reach the development database. Approved existing screenshot scripts may capture desktop and phone-width views for Codex to inspect; Fable does not inspect the image itself. Live lifecycle, turn-boundary, browser, LAN and actual phone verification remain required: see [1.8.2 acceptance](docs/acceptance-1.8.2.md).
+
 ### 1.8.1: readable relay and explainable speaker labels
 
 Owner-visible relay keeps the complete Codex answer verbatim under its speaker and phase label, followed only by non-empty scope mismatch, parity concern, disagreement and uncertainty flags in labeled prose. Routine JSON metadata is no longer displayed. Evidence, assumptions, recommendations, changed files and tests remain available internally through `controller result`. `controller relay` prints the ready-to-paste block; Stop still checks the complete answer and label, not supplemental fields.
@@ -10,7 +51,7 @@ The model-label diagnosis found that a model-less SessionStart erased earlier ev
 
 Schema 14 adds one bounded SessionStart diagnostic (session ID, enumerated source, model-field status and timestamp), with lossless schema-13 migration and the existing live-runner migration gate. `control.mjs diagnose` exposes `claude.model`, `claude.lastSessionStart` and an explanation. If no valid model has been captured, the label stays honestly `Claude:`. Previously erased metadata cannot be reconstructed; the next model-bearing hook must restore it. No transcripts, image bytes, private reasoning or tool results are collected for this diagnostic. Live checks are tracked in [1.8.1 acceptance](docs/acceptance-1.8.1.md).
 
-> **Beta:** Fabex 1.8.1 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.8.2 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 

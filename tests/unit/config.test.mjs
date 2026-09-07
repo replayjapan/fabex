@@ -19,6 +19,7 @@ test('shipped defaults load without configuration', async (t) => {
   const result = await loadEffectiveConfig(root, env);
   assert.deepEqual(result.config, {
     schemaVersion: 1,
+    devServer: null,
     models: { codex: { model: null, reasoningEffort: 'high', networkAccessEnabled: false }, operational: 'sonnet' },
     collaboration: { jointByDefault: true },
     display: { replyModeBadge: 'always' },

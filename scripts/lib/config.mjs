@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
 import { dataRoot, PLUGIN_ROOT } from './paths.mjs';
-import { isPlainObject } from './validation.mjs';
+import { isPlainObject, validateDevServer } from './validation.mjs';
 
 export const CONFIG_SCHEMA_VERSION = 1;
 export const DEFAULTS_FILE = resolve(PLUGIN_ROOT, 'config', 'defaults.json');
@@ -10,7 +10,7 @@ export const PROJECT_CONFIG_RELATIVE_PATH = '.fabex/config.json';
 export const CODEX_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent']);
 export const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const KEYS = {
-  '': new Set(['schemaVersion', 'models', 'collaboration', 'display', 'project', 'guard']),
+  '': new Set(['schemaVersion', 'models', 'collaboration', 'display', 'project', 'guard', 'devServer']),
   models: new Set(['claudePrimary', 'codex', 'operational']),
   'models.codex': new Set(['model', 'reasoningEffort', 'networkAccessEnabled']),
   collaboration: new Set(['jointByDefault']),
@@ -52,6 +52,14 @@ function mergeLayer(base, overlay, warnings, name, { projectLayer = false } = {}
     return result;
   }
   warnUnknown(overlay, '', warnings);
+  if ('devServer' in overlay) {
+    result.devServer = null;
+    if (!projectLayer) warnings.push('devServer is project-layer only; value ignored');
+    else if (overlay.devServer !== null) {
+      try { result.devServer = validateDevServer(overlay.devServer); }
+      catch (error) { warnings.push(`${error.message}; devServer lane disabled`); }
+    }
+  }
   if ('schemaVersion' in overlay) result.schemaVersion = overlay.schemaVersion;
   if ('models' in overlay) {
     if (!isPlainObject(overlay.models)) warnings.push('models must be an object; using lower-precedence model values');
@@ -158,6 +166,15 @@ export async function loadEffectiveConfig(root, env = process.env) {
   let config = mergeLayer(defaults, {}, warnings, 'shipped');
   if (machine.loaded) config = mergeLayer(config, machine.value, warnings, 'machine');
   if (project.loaded) config = mergeLayer(config, project.value, warnings, 'project', { projectLayer: true });
+  config.devServer ??= null;
+  if (config.devServer) {
+    try {
+      const canonical = await realpath(root);
+      const cwd = await realpath(resolve(canonical, config.devServer.cwd ?? config.project.repositoryRoot ?? '.'));
+      if ((cwd !== canonical && !cwd.startsWith(canonical + '/')) || !(await stat(cwd)).isDirectory()) throw new Error('outside workstream or not a directory');
+      config.devServer.cwd = cwd;
+    } catch { warnings.push('devServer.cwd must resolve to an existing directory inside the workstream; devServer lane disabled'); config.devServer = null; }
+  }
   config.guard.externalWriteRoots = config.guard.externalWriteRoots.map((value) => value.startsWith('~/') ? resolve(homedir(), value.slice(2)) : normalize(value));
   for (const executable of config.guard.allowedCommands) warnings.push(`guard.allowedCommands grants every invocation of ${executable}; prefer allowedCommandPatterns`);
   return {

@@ -190,3 +190,19 @@ export function assertUuid(value, label = 'id') {
   if (!UUID_RE.test(value ?? '')) throw new ValidationError(`${label} must be a UUID`);
   return value;
 }
+// This authorizes one project-owned command, never a shell command string.
+export function validateDevServer(value) {
+  const allowed = new Set(['cwd', 'start', 'port', 'readyUrl', 'readyTimeoutMs', 'stopGraceMs']);
+  const text = (s, max) => typeof s === 'string' && s.length > 0 && Buffer.byteLength(s) <= max && !/[\0\r\n]/.test(s);
+  if (!isPlainObject(value) || Object.keys(value).some(key => !allowed.has(key))) throw new ValidationError('devServer must be an object containing only supported fields');
+  if (value.cwd !== undefined && !text(value.cwd, 4096)) throw new ValidationError('devServer.cwd must be a bounded path inside the workstream');
+  if (!Array.isArray(value.start) || !value.start.length || value.start.length > 32 || !value.start.every(arg => text(arg, 512))) throw new ValidationError('devServer.start must be a bounded non-empty argv array');
+  if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) throw new ValidationError('devServer.port must be an integer from 1 to 65535');
+  let url;
+  try { url = new URL(value.readyUrl); } catch { throw new ValidationError('devServer.readyUrl must be a loopback HTTP URL'); }
+  if (!text(value.readyUrl, 2048) || url.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(url.hostname) || url.username || url.password || url.hash || Number(url.port || 80) !== value.port) throw new ValidationError('devServer.readyUrl must use HTTP localhost or 127.0.0.1, the configured port, and no credentials or fragment');
+  for (const [key, maximum] of [['readyTimeoutMs', 120000], ['stopGraceMs', 30000]]) {
+    if (value[key] !== undefined && (!Number.isInteger(value[key]) || value[key] < 100 || value[key] > maximum)) throw new ValidationError(`devServer.${key} is outside its bounded range`);
+  }
+  return { ...value, start: [...value.start], readyTimeoutMs: value.readyTimeoutMs ?? 30000, stopGraceMs: value.stopGraceMs ?? 5000 };
+}
