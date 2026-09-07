@@ -9,6 +9,7 @@ import { attachmentSessionId, normalizeSubmissionEnvelope } from './lib/sdk-cont
 import { attachmentShape, validateAttachments } from './lib/attachments.mjs';
 import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
+import { developmentInvocation, developmentProbe } from './lib/development.mjs';
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
@@ -306,6 +307,7 @@ function readOnlyTagArgs(args) {
 function allowedBashCommand(command, config, root) {
   const tokens = simpleTokens(command);
   if (!tokens) return false;
+  if (developmentProbe(tokens)) return true;
   const index = commandIndex(tokens);
   const executable = executableName(tokens[index]);
   const args = tokens.slice(index + 1);
@@ -431,6 +433,7 @@ function allowedDiscussionReads(command, config, root) {
     if (control) return SAFE_COMPOSED_CONTROLS.has(control.kind);
     const tokens = simpleTokens(segment);
     if (!tokens) return false;
+    if (developmentProbe(tokens)) return true;
     const executable = executableName(tokens[commandIndex(tokens)]);
     if (!BASE_READ_COMMANDS.has(executable) && !['sed', 'find', 'git', 'du', 'ps', 'pwd'].includes(executable)) return false;
     return allowedBashCommand(segment, { ...config, guard: { ...config?.guard, allowedCommands: [], allowedCommandPatterns: [] } }, root);
@@ -529,7 +532,7 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
   return deny(`state is ${health}; only reads and exact diagnostic or recovery controls are available`);
 }
 
-export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {}, config = null, env = process.env }) {
+export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {}, config = null, env = process.env, invocationCwd = paths?.canonicalRoot }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
   if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only; invoke the slash command directly to mint a single-use grant');
   const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
@@ -539,7 +542,6 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     const mutation = ['dev-start', 'dev-stop', 'dev-restart'].includes(control.kind);
     if (!['normal', 'discussion', 'ask-once'].includes(state.route)) return deny('dev controls require healthy work, discussion, or ask mode');
     if (mutation && (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt || executor.agentId && !isOperationalExecutor(executor))) return deny('dev lifecycle requires owner-selected work mode and the main or verified operational executor, with no pending transition');
-    if (mutation && !config?.devServer) return deny('devServer lane disabled; use project config and inspect configuration warnings');
     return defer();
   }
   if (control?.kind === 'cleanup' && (state.route !== 'normal' || executor.agentId && !isOperationalExecutor(executor))) return deny('verified cleanup is restricted to the main or operational executor in work mode');
@@ -581,6 +583,24 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     if (invokesFabexScript(toolInput.command, CONTROLLER_PATH) && !controller) return deny('only exact Fabex controller submit, status, result, cancel, wait, and help entry points are allowed');
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
     if (controller?.kind === 'controller-submit' && state.route === 'recovery-read-only') return deny('recovery-read-only denies new Codex SDK turns');
+  }
+  if (toolName === 'Bash') {
+    const segments = safeCommandSegments(toolInput.command);
+    const words = segments?.map(simpleTokens);
+    const candidates = words?.filter(tokens => tokens && ['pnpm', 'npm', 'yarn'].includes(tokens[0]) && tokens.some(token => ['dev', 'start'].includes(token))) ?? [];
+    if (candidates.length) {
+      if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt || executor.agentId && !isOperationalExecutor(executor)) return deny('development scripts require healthy owner-selected work mode and the main or operational executor');
+      // Preserve separately owner-configured exact script permissions in work.
+      if (words.length === 1 && commandPatternMatches(words[0], config, paths.canonicalRoot)) return defer();
+      try {
+        let cwd = invocationCwd;
+        if (words.length === 2 && words[0]?.length === 2 && words[0][0] === 'cd' && toolInput.command.slice(toolInput.command.indexOf(segments[0]) + segments[0].length).trimStart().startsWith('&&')) cwd = realpathSync(resolve(invocationCwd, words[0][1]));
+        else if (words.length !== 1) return deny('run the development command alone or after one literal in-workstream cd && prefix');
+        const invocation = developmentInvocation(words.at(-1), paths.canonicalRoot, config, cwd);
+        if (!invocation) return deny('unsupported development command shape');
+        return defer();
+      } catch (error) { return deny(`development command refused: ${error.message}`); }
+    }
   }
   if (state.route === 'normal') {
     if (isOperationalExecutor(executor) && protectedOperation) return defer();
@@ -648,7 +668,8 @@ export async function main() {
         state: stateResult.state,
         paths: stateResult.paths,
         executor: { agentId: input.agent_id, agentType: input.agent_type, sessionId: input.session_id },
-        config: effective.config
+        config: effective.config,
+        invocationCwd: input.cwd
       })
       : classifyUnhealthyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, health: stateResult.health });
   } catch {

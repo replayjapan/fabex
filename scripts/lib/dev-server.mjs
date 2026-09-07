@@ -131,7 +131,7 @@ export async function devControl(root, config, args, { env = process.env, depend
       const member = owned ? await io.identity(item.pid) : null;
       ports.push({ ...item, ours: Boolean(owned && member?.pgid === record.pgid) });
     }
-    return { record: record ? (owned ? 'owned' : 'stale') : 'absent', pid: record?.pid ?? null, alive: Boolean(live), owned, port: port ?? null, listeners: ports };
+    return { record: record ? (owned ? 'owned' : 'stale') : 'absent', pid: record?.pid ?? null, alive: Boolean(live), owned, command: record?.command ?? config?.start ?? null, cwd: record?.cwd ?? config?.cwd ?? null, port: port ?? null, listeners: ports };
   }
   if (action === 'logs') {
     const text = await readBounded(files.log, MAX_LOG_BYTES, true);
@@ -143,13 +143,15 @@ export async function devControl(root, config, args, { env = process.env, depend
   if (action === 'status') {
     const record = await read();
     const status = await observed(record, record?.port ?? config?.port);
-    return { enabled: Boolean(config), ...status, readiness: config && (!record || record.port === config.port) ? await io.ready(config.readyUrl) : null };
+    return { available: true, ...status, readiness: config && (!record || config.port === record.port) ? await io.ready(config.readyUrl) : record ? await io.ready(`http://localhost:${record.port}/`) : null };
   }
   await authorize();
-  if (!config) throw new Error('devServer lane disabled; configure it in the project layer and inspect config warnings');
-  config = validateDevServer(config);
-  config.cwd = await realpath(config.cwd);
-  if (config.cwd !== paths.canonicalRoot && !config.cwd.startsWith(paths.canonicalRoot + '/')) throw new Error('devServer.cwd escaped the workstream');
+  if (!config && action !== 'stop') throw new Error('development command could not be resolved; name the application directory or command');
+  if (config) {
+    config = validateDevServer(config);
+    config.cwd = await realpath(config.cwd);
+    if (config.cwd !== paths.canonicalRoot && !config.cwd.startsWith(paths.canonicalRoot + '/')) throw new Error('devServer.cwd escaped the workstream');
+  }
   await mkdir(paths.projectDir, { recursive: true, mode: 0o700 });
   // Independent lifecycle lock: no schema changes or canonical-runner lock coupling.
   let lock;
@@ -168,7 +170,7 @@ export async function devControl(root, config, args, { env = process.env, depend
       // Recheck immediately before each signal. Never signal a port-selected PID.
       if (!sameProcess(record, await io.identity(record.pid))) throw new Error('process identity changed before stop; no signal sent');
       await io.signal(-record.pgid, 'SIGTERM');
-      const deadline = io.now() + config.stopGraceMs;
+      const deadline = io.now() + (config?.stopGraceMs ?? 5000);
       // Give children the grace period even when the package-manager leader exits first.
       while (io.now() < deadline && (await io.members(record.pgid)).length) await io.sleep(100);
       if (sameProcess(record, await io.identity(record.pid))) {
@@ -189,7 +191,7 @@ export async function devControl(root, config, args, { env = process.env, depend
     if (status.listeners.some(item => !item.ours)) throw new Error(`port ${config.port} conflict: ${status.listeners.filter(item => !item.ours).map(item => `${item.pid} (${item.command})`).join(', ')}; nothing started or killed`);
     if (status.owned) {
       if (previous.port !== config.port || previous.cwd !== config.cwd || JSON.stringify(previous.command) !== JSON.stringify(config.start)) throw new Error('owned server configuration changed; stop it explicitly before starting the new configuration');
-      return { status: 'already-running', pid: previous.pid, readiness: await io.ready(config.readyUrl) };
+      return { status: 'already-running', pid: previous.pid, command: previous.command, cwd: previous.cwd, port: previous.port, readiness: await io.ready(config.readyUrl) };
     }
     if (previous) throw new Error('stale ownership record; run dev stop to clear it without signalling before starting');
     await authorize();
@@ -216,7 +218,7 @@ export async function devControl(root, config, args, { env = process.env, depend
     do {
       readiness = await io.ready(config.readyUrl, Math.max(1, Math.min(1500, deadline - io.now())));
       const owned = await observed(await read(), config.port);
-      if (readiness.ready && owned.owned && owned.listeners.length && owned.listeners.every(item => item.ours)) return { status: 'started', pid, readiness, detached: true, ...(stopped ? { previous: stopped } : {}) };
+      if (readiness.ready && owned.owned && owned.listeners.length && owned.listeners.every(item => item.ours)) return { status: 'started', pid, command: config.start, cwd: config.cwd, port: config.port, readiness, detached: true, ...(stopped ? { previous: stopped } : {}) };
       if (!owned.owned) throw new Error('dev server exited during startup; inspect dev logs (record retained)');
       if (io.now() < deadline) await io.sleep(200);
     } while (io.now() < deadline);

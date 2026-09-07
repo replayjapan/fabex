@@ -18,6 +18,6 @@ Before consuming the owner grant, forward every current-message host upload refe
 
 Run the mode command standalone: no `cd` prefix, `&&` chain, trailing command, or pipe. Paste the generated relay block unchanged: complete answer plus non-empty plain-language flags, never internal JSON metadata. Claude-only modes still do not invoke Codex.
 
-## 1.8.2 development server
+## 1.8.3 development server
 
-An owner-configured devServer lane permits the main host session or verified operational executor to run standalone `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev start|stop|restart` in healthy owner-selected work mode. `dev status` and `dev logs --lines 80` are bounded inspection controls. This does not authorize project edits, arbitrary commands or migrations. Keep native host permissions and Codex-default image review intact.
+On an owner request, ordinary inspected pnpm/npm/yarn dev or start commands are built in: no devServer JSON or activation step. Determine the real application directory, use an in-workstream directory selector or one literal cd && prefix, and run via the host's background-task option. Inspect the intended port first and verify the actual listener afterward; report conflicts, never silently change ports. Stop the exact host-owned task with host task control, never generic kill. The optional control.mjs dev helper now discovers a single app without configuration and retains ownership-verified shutdown; it does not adopt raw host tasks. Use bounded loopback probes or helper status/logs. Unknown scripts, additional effects, migrations and installs retain their separate permission requirements. Native host restrictions still apply; no claim of persistence or successful startup without live evidence.

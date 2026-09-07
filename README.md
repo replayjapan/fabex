@@ -1,45 +1,38 @@
 # Fabex — Beta
 
-### 1.8.2: project-scoped development server compatibility
+### 1.8.3: ordinary development, out of the box
 
-The 1.5.0 normal-route Bash allowlist excluded the development-server loop. A full rollback would restore arbitrary Bash authority, so 1.8.2 adds only exact, opt-in server controls. All existing guards, exact script permissions, SDK network settings, image rules, relay, state schema 14, migrations and canonical threads remain unchanged. Native host permissions still apply; the guard defers approved commands, it does not grant operating-system capabilities.
+In owner-selected work mode, ask to run the app. No `devServer` JSON, first-use activation or saved configuration is required. The built-in guard accepts ordinary inspected `dev` and `start` scripts through pnpm, npm and yarn, with bare or `run` forms. Main Claude or the verified operational executor runs them through the host's background-task facility. Native host permissions still apply; this does not enable Codex networking or bypass Claude Code permissions.
 
-Merge an owner-approved block into the **project** `.fabex/config.json` (never machine configuration):
-
-```json
-{
-  "devServer": {
-    "cwd": "app",
-    "start": ["pnpm", "dev", "--hostname", "0.0.0.0", "--port", "3000"],
-    "port": 3000,
-    "readyUrl": "http://localhost:3000/",
-    "readyTimeoutMs": 30000,
-    "stopGraceMs": 5000
-  }
-}
-```
-
-`cwd` defaults to `project.repositoryRoot` or the workstream root, and must resolve to an existing directory inside that root, including through symlinks. `start` is an exact non-empty argv array (at most 32 bounded arguments), not a shell string. The owner must review the configured executable/script: its effects are authorized by this configuration, not inferred from its name. Avoid start scripts that migrate, reset databases, or use a test database implicitly. The host environment is inherited. Invalid configuration disables the lane with warnings in `config` and `diagnose`; absent or null configuration means disabled. `port` is 1–65535; readiness requires HTTP on `localhost` or `127.0.0.1` at that port, without embedded credentials. Choose a side-effect-free GET endpoint; redirects are not followed. Startup timeout is 100–120000 ms; stop grace is 100–30000 ms.
-
-Run from the owning workstream, using the loaded plugin's absolute control path:
+Use the application's actual working directory, a package-manager directory selector, or one literal `cd <directory> && <development-command>`. Supported selectors are pnpm `--dir`/`-C`, npm `--prefix` and yarn `--cwd`, resolving inside the workstream (including symlink checks). A bare command is checked against the host's real cwd, not assumed to run in a configured nested repository. For example:
 
 ```text
-node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev start
-node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev status
-node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev logs --lines 80
-node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev restart
-node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev stop
+pnpm --dir /absolute/workstream/app dev --hostname 0.0.0.0 --port 3000
+npm --prefix /absolute/workstream/app run start -- --port 3000
 ```
 
-Start/stop/restart must be standalone commands in healthy owner-selected work mode, executed by the main Claude session or verified operational executor. Discussion, ask, recovery, pending transitions and unhealthy states cannot invoke lifecycle mutations. Status/logs are observational controls in healthy work, discussion and ask, and can be composed with other approved read commands. They never create or repair ownership records, change mode, or start/stop anything. Unknown/unhealthy state denies all dev controls. Generic `pnpm dev`, `curl`, `lsof`, arbitrary kills and migrations receive no new permission.
+Use the host's background-task option rather than raw shell background/redirection machinery. Inspect the intended port before launch and the actual listener afterward; never silently substitute another port. Stop that exact host-owned background task through the host's task control, not generic `kill`. A raw background task is not automatically adopted by the optional Fabex ownership helper. Persistence across turns and host restarts depends on the host and remains a live acceptance check.
 
-The host executor—not the constrained Codex runner—launches the configured argv detached in its own process group, with private sidecar ownership and log files next to `state.json`, outside the workstream. No state schema change is required. Stop verifies the leader's PID, process-group ID, start time and executable before TERM and any KILL escalation. A dead or mismatched identity clears only stale ownership, never signals another process. Port conflicts identify the listener and fail visibly; no port-selected kill is used. If the leader disappears while descendants survive, stop fails closed instead of guessing ownership. Existing externally started servers are not adopted. Restart is stop followed by start; if the port becomes occupied in between, it fails rather than reclaiming it.
+The built-in script check reads bounded package.json data, including pre/post hooks and nested package-script references. Database migration/push/reset/seed/drop markers, opaque shell chains, source-write shapes and unsafe environment overrides are not silently authorized. The built-in straightforward launchers are Next, Vite, Astro, Nuxt, react-scripts and webpack serve, optionally with supported environment assignments/cross-env. Bind/port and listed build-mode flags are accepted; arbitrary package-manager flags are not. This is not a proof that application code has no effects: normal dev-generated files are expected. Unrecognized custom launchers or additional effects need the existing specific review/exact-permission path, not a blanket executable grant. Installs and unrelated scripts retain their previous restrictions.
 
-Lifecycle commands serialize through a separate exclusive lock. A crashed command can leave that lock behind; verify no lifecycle command is active before manually clearing that exact lock—status never repairs it. A startup/readiness failure may leave an owned server running: inspect status/logs and stop explicitly. HTTP status alone is not proof the app or its database works. Port inspection failure is not treated as a free port.
+Work, discussion and ask permit these bounded local probes:
 
-Logs are read at most 64 KiB / 400 lines (default 80), with best-effort credential-pattern redaction. Do not put secrets in logs: redaction cannot guarantee removal of every secret. The private file itself is retained and may grow; inspect and maintain it locally, never copy it wholesale into the public repo or owner relay. Database diagnostics remain separately exact-script-authorized using `guard.allowedCommandPatterns`; adding one diagnostic does not permit migrations, resets, accounts or grants. These exact patterns apply in work, not as general script authority in discussion.
+```text
+lsof -nP -iTCP:3000 -sTCP:LISTEN
+lsof -i :3000
+curl -q --noproxy '*' --max-time 5 -sS -o /dev/null -w '%{http_code}' http://localhost:3000/
+curl -q --noproxy '*' --max-time 5 -I http://127.0.0.1:3000/
+```
 
-The implementation does not enable Codex network access or override Claude Code's own permission classifier. Use a host executor that can bind the configured port and reach the development database. Approved existing screenshot scripts may capture desktop and phone-width views for Codex to inspect; Fable does not inspect the image itself. Live lifecycle, turn-boundary, browser, LAN and actual phone verification remain required: see [1.8.2 acceptance](docs/acceptance-1.8.2.md).
+Curl permits GET/HEAD only, HTTP loopback with an explicit port, a timeout up to 30 seconds, and output only to stdout or /dev/null. Bodies, configuration files, arbitrary write-out directives and non-loopback URLs stay denied. Use `-q` first to disable curl configuration and `--noproxy '*'` to avoid inherited proxies. Unrestricted `-L` is denied: redirects can escape loopback; `-L --max-redirs 0` only reports the initial response. Status requests must use side-effect-free endpoints, never implicit repair. Image-review restrictions still apply.
+
+The existing optional `control.mjs dev start|status|logs|restart|stop` helper also works without configuration. It discovers a single app within bounded workstream traversal (or uses repositoryRoot), chooses dev then start, reads packageManager or an unambiguous lockfile, and derives the intended port from the script or the recognized framework default. Multiple candidate apps/lockfiles or unrecognized launchers produce an actionable choice, not a guessed launch or automatic config write. For CLI-port-capable frameworks it pins that port; Vite also gets strict-port behavior. React-scripts uses its script/default port; an environment override may require explicit clarification. No server starts merely because Fabex opens a project.
+
+The helper reuses 1.8.2 detached process-group ownership checks, private logs, stale-PID and port-conflict refusal. Start/status report command, cwd and port. Status/logs never start, stop, clear stale records or repair anything; stop still works from a saved ownership record if the override is absent. Healthy work is required for start/stop/restart; discussion and ask remain read-only. Failed readiness can leave an owned process running: inspect and explicitly stop it. Unknown process identity or surviving orphaned children fail closed, never kill by port. Private logs are bounded on read, best-effort redacted and may grow on disk; do not publish raw logs. A crashed lifecycle lock requires verified manual cleanup.
+
+**Optional overrides only:** an existing project-layer `devServer` block remains supported for a selected cwd, exact start argv, port, loopback readyUrl, readyTimeoutMs and stopGraceMs. It is not an enablement gate. Invalid overrides are reported rather than silently replaced; direct ordinary command support does not require them. Existing exact command patterns and all newer phase/grant/image/relay/recovery/Git protections remain. SDK settings and state schema 14 are unchanged.
+
+Live acceptance, including no-configuration port-3000 operation and desktop/phone inspection, is tracked in [1.8.3 acceptance](docs/acceptance-1.8.3.md). No real server was started for this patch's simulated tests.
 
 ### 1.8.1: readable relay and explainable speaker labels
 
@@ -51,7 +44,7 @@ The model-label diagnosis found that a model-less SessionStart erased earlier ev
 
 Schema 14 adds one bounded SessionStart diagnostic (session ID, enumerated source, model-field status and timestamp), with lossless schema-13 migration and the existing live-runner migration gate. `control.mjs diagnose` exposes `claude.model`, `claude.lastSessionStart` and an explanation. If no valid model has been captured, the label stays honestly `Claude:`. Previously erased metadata cannot be reconstructed; the next model-bearing hook must restore it. No transcripts, image bytes, private reasoning or tool results are collected for this diagnostic. Live checks are tracked in [1.8.1 acceptance](docs/acceptance-1.8.1.md).
 
-> **Beta:** Fabex 1.8.2 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.8.3 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
 Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 

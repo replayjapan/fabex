@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.8.3 - 2026-09-07
+
+### Why we made this change
+
+The 1.5.0 command allowlist caught the ordinary development loop as a side effect. Version 1.8.2 wrongly added a per-project configuration gate instead of restoring out-of-the-box use. The owner selected built-in development support, not broad shell deferral.
+
+### What it gave us
+
+Ordinary inspected dev/start scripts and bounded local inspection without JSON or first-use activation. Existing host background-task controls remain usable. The optional ownership helper discovers a single nested application without writing configuration and preserves verified shutdown.
+
+### Tradeoffs
+
+Script names alone do not establish safe effects: checks include lifecycle hooks and nested references, with unfamiliar launchers/additional effects requiring the existing review/exact-permission path. Built-in support covers straightforward Next, Vite, Astro, Nuxt, react-scripts and webpack server commands, not arbitrary shell. Curl requires bounded duration and cannot follow redirects away from loopback. Generated development artifacts are expected; these text checks do not prove arbitrary application code has no side effects. Host background-task persistence and real server/database/browser/phone behavior remain live checks.
+
+### Changes
+
+- Added work-only main/operational dev/start command recognition, safe arguments, in-workstream selectors and literal cd handling based on actual host cwd.
+- Added bounded GET/HEAD loopback probes and exact lsof port inspections in healthy work/discussion/ask; no generic kill, installs or migrations were authorized.
+- Removed the helper's configuration gate; added bounded single-app discovery, package-manager/script/port selection and command/cwd/port reporting. Existing overrides remain optional.
+- Retained 1.8.2 process ownership and private log handling; preserved other guards, SDK settings, schema 14 and all newer protocol improvements.
+- Added named regressions and a no-configuration live acceptance checklist; bumped package/plugin to 1.8.3.
+
 ## 1.8.2 - 2026-09-07
 
 ### Why we made this change

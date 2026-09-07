@@ -85,7 +85,7 @@ test('1.8.2 dev guard enforces every route/executor and grants no generic shell 
       const mutation = ['start', 'stop', 'restart'].includes(control);
       assert.equal(result.decision, route === 'recovery-read-only' || mutation && (route !== 'normal' || index === 2) ? 'deny' : 'defer', `${route}/${index}/${control}: ${result.reason}`);
     }
-    for (const command of ['pnpm dev', 'pnpm payload migrate', 'pnpm payload migrate:status', 'lsof -nP -iTCP:3000 -sTCP:LISTEN', 'curl http://localhost:3000/', 'kill -9 1234']) {
+    for (const command of ['pnpm dev', 'pnpm payload migrate', 'pnpm payload migrate:status', 'curl http://localhost:3000/', 'kill -9 1234']) {
       assert.equal((await classifyToolUse({ ...f, state, toolName: 'Bash', toolInput: { command } })).decision, 'deny', `${route}: ${command}`);
     }
   }
@@ -95,7 +95,7 @@ test('1.8.2 dev guard enforces every route/executor and grants no generic shell 
     assert.equal((await classifyToolUse({ ...f, state, toolName: 'Bash', toolInput: { command: `node "${plugin}/scripts/control.mjs" dev ${suffix}` } })).decision, 'deny');
   }
   const result = await classifyToolUse({ ...f, state, config: { ...f.config, devServer: null }, toolName: 'Bash', toolInput: { command: `node "${plugin}/scripts/control.mjs" dev start` } });
-  assert.equal(result.decision, 'deny');
+  assert.equal(result.decision, 'defer'); // 1.8.3: configuration is no longer an enablement gate.
 });
 
 test('1.8.2 simulated lifecycle survives calls and restarts/stops only its owned process group', async t => {

@@ -22,6 +22,6 @@ Before consuming the owner grant, forward every current-message host upload refe
 
 Run the mode command standalone: no `cd` prefix, `&&` chain, trailing command, or pipe. Paste the generated relay block unchanged: complete answer plus non-empty plain-language flags, never internal JSON metadata. Claude-only modes still do not invoke Codex.
 
-## 1.8.2 development server
+## 1.8.3 development server
 
-Use exact `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs dev status` and `dev logs --lines 80` for bounded non-mutating development-server inspection. Start/stop/restart and database mutations remain denied in ask. Report native host limitations; never turn a status request into a repair or mode switch.
+Use exact lsof port inspections and bounded HTTP loopback GET/HEAD probes, or the existing control.mjs dev status/logs helpers, without project configuration. Example: curl -q --noproxy '*' --max-time 5 -I http://localhost:3000/. Do not follow redirects off loopback or inspect images yourself. Development start/stop/restart and database mutations remain denied here. No implicit repair or owner-mode change. In work mode, ordinary inspected dev/start scripts are now built in; configuration is only an optional helper override.
