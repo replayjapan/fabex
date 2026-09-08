@@ -5,6 +5,8 @@ description: Reconcile recovery-read-only state and unresolved Codex partner wor
 
 # Recover
 
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+
 1.7.0 adds a completed-cycle relay escape: only for an owner-requested interruption, `recover abandon --operation-id <uuid>` may waive that cycle's pending full-answer relay and missing reconciliation while retaining the stored answers and thread. Cancel queued/working operations first. This is not permission to abbreviate Codex's words; normally paste each complete `relayBlock` and let Stop acknowledge it.
 
 Start with `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status`. For a recorded unresolved partner operation, offer only:

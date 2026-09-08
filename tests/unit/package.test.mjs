@@ -18,17 +18,17 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfiles, and marketplace metadata agree on 1.8.3 Beta', async () => {
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.9.1 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
   const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
   const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.8.3');
-  assert.equal(pkg.version, '1.8.3');
-  assert.equal(npmLock.version, '1.8.3');
-  assert.equal(npmLock.packages[''].version, '1.8.3');
+  assert.equal(plugin.version, '1.9.1');
+  assert.equal(pkg.version, '1.9.1');
+  assert.equal(npmLock.version, '1.9.1');
+  assert.equal(npmLock.packages[''].version, '1.9.1');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);
@@ -59,7 +59,7 @@ test('only requested public skills are packaged and SDK protocol is authoritativ
   const names = (await readdir(resolve(root, 'skills'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
   assert.deepEqual(names, ['ask', 'askClaude', 'askCodex', 'diagnose', 'discussion', 'discussionClaude', 'discussionCodex', 'jointly', 'recover', 'status', 'work', 'workClaude'].sort());
   const jointly = await readFile(resolve(root, 'skills', 'jointly', 'SKILL.md'), 'utf8');
-  for (const pattern of [/owner's message verbatim/, /partnership-parity concern/, /controller\.mjs submit/, /status --operation-id/, /result --operation-id/, /cancel/, /thread\.started/, /read-only/, /workspace-write/, /Codex performs project edits/, /including delivery preflight, staging, commit, and push/]) assert.match(jointly, pattern);
+  for (const pattern of [/owner's message verbatim/, /Scope and parity/, /controller\.mjs submit/, /status --operation-id/, /result --operation-id/, /cancel/, /thread\.started/, /read-only/, /workspace-write/, /Codex performs project edits/, /reviewed owner-authorized Git delivery/]) assert.match(jointly, pattern);
   assert.doesNotMatch(jointly, /mcp__codex|hook-mcp-result|thread begin/);
   const discussion = await readFile(resolve(root, 'skills', 'discussion', 'SKILL.md'), 'utf8');
   assert.match(discussion, /SDK's `read-only` sandbox/);

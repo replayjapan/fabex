@@ -150,7 +150,7 @@ test('item 7: repositoryRoot is project-only, explicit, and escape-safe', async 
   await assert.rejects(resolveRepositoryDirectory(project, { project: { repositoryRoot: '../escape' } }), /escapes/);
 });
 
-test('item 8: normal route enforces Bash, subagent edit, and MCP allowlists', async (t) => {
+test('item 8: revised work policy retains source-authoring checks without routine allowlisting', async (t) => {
   const { project } = await fixture(t); const state = initialState({ projectId: 'id', canonicalRoot: project }); const paths = { canonicalRoot: project };
   const classify = (toolName, toolInput, executor = {}) => classifyToolUse({ toolName, toolInput, state, paths, executor });
   assert.equal((await classify('Edit', { file_path: join(project, 'x') }, { agentId: 'sub', agentType: 'worker' })).decision, 'deny');
@@ -161,17 +161,17 @@ test('item 8: normal route enforces Bash, subagent edit, and MCP allowlists', as
   const outside = join(project, '..', 'outside-note');
   assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: `cat <<'FABEX_OUT_12345678' > ${outside}\n$ literal owner text\nFABEX_OUT_12345678` }, state, paths, config })).decision, 'defer');
   assert.equal((await classify('mcp__context7__query-docs', {})).decision, 'defer');
-  assert.equal((await classify('mcp__service__create_item', {})).decision, 'deny');
+  assert.equal((await classify('mcp__service__create_item', {})).decision, 'defer');
   assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: 'custom-verify --check' }, state, paths, config: { guard: { allowedCommands: ['custom-verify'], readOnlyMcpTools: [] } } })).decision, 'defer');
 });
 
-test('item 8 correction: normal route defers host orchestration without weakening mutation guards', async (t) => {
+test('item 8 correction: host orchestration and operational effects defer while direct source edits stay guarded', async (t) => {
   const { project } = await fixture(t); const state = initialState({ projectId: 'id', canonicalRoot: project }); const paths = { canonicalRoot: project };
   for (const [toolName, toolInput] of [
     ['Agent', { prompt: 'deliver' }], ['ToolSearch', { query: 'select:Agent' }], ['Monitor', {}], ['TaskStop', {}],
     ['WebFetch', { url: 'https://example.invalid' }], ['AskUserQuestion', { questions: [] }], ['Skill', { skill: 'unrelated' }]
   ]) assert.equal((await classifyToolUse({ toolName, toolInput, state, paths })).decision, 'defer', toolName);
-  assert.equal((await classifyToolUse({ toolName: 'mcp__service__create_item', toolInput: {}, state, paths })).decision, 'deny');
+  assert.equal((await classifyToolUse({ toolName: 'mcp__service__create_item', toolInput: {}, state, paths })).decision, 'defer');
   assert.equal((await classifyToolUse({ toolName: 'Edit', toolInput: { file_path: join(project, 'x') }, state, paths, executor: { agentId: 'sub', agentType: 'worker' } })).decision, 'deny');
 });
 
@@ -222,7 +222,7 @@ test('item 13: blocking wait returns terminal state and reports timeout', async 
   assert.equal(timed.code, 3); assert.equal(JSON.parse(timed.stdout).status, 'queued');
   await import('../../scripts/lib/sdk-controller.mjs').then(({ cancelOperation }) => cancelOperation(project, pending.operationId, env));
   const done = await run(controller, ['wait', '--operation-id', pending.operationId, '--timeout', '1'], { cwd: project, env }); assert.equal(done.code, 0); assert.equal(JSON.parse(done.stdout).status, 'cancelled');
-  assert.equal(parseControllerCommand(`node ${controller} wait --operation-id ${pending.operationId} --timeout 590`).kind, 'controller-wait');
+  assert.equal(parseControllerCommand(`node ${controller} wait --operation-id ${pending.operationId} --timeout 120`).kind, 'controller-wait');
 });
 
 test('item 14: guard script recognition is path-based rather than substring-based', async (t) => {
@@ -246,7 +246,7 @@ test('item 16: intermediate schema 6 state loads without losing thread or decisi
   intermediate.partner.thread.checkpoint.updatedAt = '2026-09-04T00:00:00.000Z'; intermediate.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions = '2026-09-04T00:00:00.000Z';
   delete intermediate.partner.thread.checkpoint.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.repoFingerprintCapturedAt; delete intermediate.partner.thread.metadata.lastRecordedTurn;
   await writeFile(initialized.paths.stateFile, JSON.stringify(intermediate));
-  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 14); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
+  const loaded = await readState(project, env); assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 15); assert.equal(loaded.state.partner.thread.threadId, 'preserved-v6'); assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['keep']);
   assert.equal(loaded.state.executorException.reason, 'preserve'); assert.equal(loaded.state.partner.thread.checkpoint.updatedAt, '2026-09-04T00:00:00.000Z'); assert.equal(loaded.state.partner.thread.checkpoint.fieldUpdatedAt.acceptedDecisions, '2026-09-04T00:00:00.000Z');
 });
 

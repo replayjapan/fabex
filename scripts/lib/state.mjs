@@ -131,7 +131,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);

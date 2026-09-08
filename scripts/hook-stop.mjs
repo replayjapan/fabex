@@ -9,7 +9,7 @@ import { hasBlockingPartnerWork } from './lib/sdk-controller.mjs';
 
 export function stopDecision(input, stateResult) {
   if (!stateResult?.ok) return {};
-  if (missingRelays(stateResult.state, input).length) return { decision: 'block', reason: "Codex's complete answer must be relayed under its label, with Phase 1 and Phase 2 separately identified. Use controller relay --operation-id <uuid> for the unmodified relayBlock (controller result also includes it). An owner-requested interruption may use recover abandon --operation-id <uuid> to waive that cycle's relay." };
+  if (missingRelays(stateResult.state, input).length) return { decision: 'block', reason: "Relay Codex's ownerSummary and label verbatim using controller relay --operation-id <uuid>. A completed Phase 2 summary replaces the new-format Phase 1 display; older records and unavailable summaries require the full answer. Full phase records remain available through result and relay --full. An owner-requested interruption may use recover abandon --operation-id <uuid> to waive that cycle's relay." };
   if (input?.stop_hook_active === true) return {};
   if (hasBlockingPartnerWork(stateResult.state)) {
     return { decision: 'block', reason: 'A Codex partner cycle is queued, working, or awaiting Phase 2. Wait for the active phase, submit its matching Phase 2, or explicitly cancel/recover before stopping.' };

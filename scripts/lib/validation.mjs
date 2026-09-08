@@ -3,7 +3,7 @@ import { isValidMode, PARTICIPANTS } from './mode.mjs';
 import { attachmentShape } from './attachments.mjs';
 import { validReview } from './review.mjs';
 
-export const STATE_SCHEMA_VERSION = 14;
+export const STATE_SCHEMA_VERSION = 15;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);

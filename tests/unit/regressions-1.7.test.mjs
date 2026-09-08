@@ -138,7 +138,7 @@ test('1.7 item 3: Stop rejects truncated or unlabeled quotes, accepts full quote
   assert.equal(stopped.status, 0, stopped.stderr); assert.deepEqual(JSON.parse(stopped.stdout), {});
   assert.ok((await readState(project, env)).state.operations.every((op) => op.result.relay.status === 'delivered'));
   const result = spawnSync(process.execPath, [join(root, 'scripts/controller.mjs'), 'result', '--operation-id', second.id], { cwd: project, env, encoding: 'utf8' });
-  assert.equal(result.status, 0); assert.match(JSON.parse(result.stdout).relayBlock, /Phase 2 — reconciliation\/corrections/);
+  assert.equal(result.status, 0); assert.match(JSON.parse(result.stdout).relayBlock, /Summary unavailable; complete answer follows/);
 });
 
 test('1.7 relay session binding survives a later prompt and absent Stop text fails closed', async (t) => {
@@ -188,7 +188,7 @@ test('1.7 schema 10 migration preserves identity, evidence, grants, results and 
   for (const item of legacy.operations) { delete item.request.attachments; delete item.result.structured; delete item.result.warning; delete item.result.relay; }
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 14);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 15);
   assert.equal(migrated.state.partner.thread.threadId, 'canonical');
   assert.deepEqual(migrated.state.ownerSelectedMode, legacy.ownerSelectedMode);
   assert.deepEqual(migrated.state.contextEvidence, legacy.contextEvidence);

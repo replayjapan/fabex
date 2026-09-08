@@ -46,7 +46,7 @@ test('1.6.2 item 2: speaker families and model sources are explicit, never inven
   const { project, env } = await fixture(t);
   const config = (await loadEffectiveConfig(project, env)).config;
   assert.deepEqual(speakerLabels('claude-fable-5-1', 'openai/gpt-6-astra'), { claude: 'Claude (Fable):', codex: 'Codex (Astra):' });
-  assert.deepEqual(speakerLabels(null, null), { claude: 'Claude:', codex: 'Codex:' });
+  assert.deepEqual(speakerLabels(null, null), { claude: 'Claude (model unknown):', codex: 'Codex:' });
   assert.equal((await codexModelSource(config, env)).source, 'unknown');
   await mkdir(env.CODEX_HOME); await writeFile(join(env.CODEX_HOME, 'config.toml'), 'model = "gpt-6-astra"\n[projects.test]\nmodel = "ignored"\n');
   assert.deepEqual(await codexModelSource(config, env), { id: 'gpt-6-astra', source: 'Codex config default', verified: false });
@@ -134,7 +134,7 @@ test('1.6.2 item 6: schema 9 migrates losslessly including unknown owner mode', 
   legacy.route = 'discussion'; legacy.ownerSelectedMode = null;
   await writeFile(initialized.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 14);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 15);
   assert.equal(migrated.state.partner.thread.threadId, 'keep-thread'); assert.deepEqual(migrated.state.partner.thread.checkpoint.acceptedDecisions, ['keep decision']);
   assert.equal(migrated.state.ownerSelectedMode, null); assert.equal(migrated.state.claudeModel, null);
 });

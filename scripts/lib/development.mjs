@@ -3,7 +3,7 @@ import { basename, join, resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 
 const managers = new Set(['npm', 'pnpm', 'yarn']);
-const sensitive = /\b(migrat\w*|db:push|reset\w*|seed\w*|drop\w*)\b/i;
+const sensitive = /\b(?:migrat\w*\s+(?:fresh|reset)|db\s+reset|dropdb|DROP\s+(?:DATABASE|TABLE|SCHEMA)|sudo)\b/i;
 const mutations = /^(?:--update|-u|--update-snapshot|--write|--fix|--force)(?:=|$)/;
 const portNumber = value => /^\d{1,5}$/.test(String(value)) && Number(value) > 0 && Number(value) <= 65535;
 function contained(path, root) {
@@ -61,38 +61,44 @@ export function serverArguments(args) {
 export function inspectDevelopmentScript(cwd, script) {
   const pkg = manifest(cwd);
   const seen = new Set();
+  const notes = [];
   const inspect = name => {
     if (seen.has(name) || seen.size >= 12) throw new Error(`recursive development script ${name}`);
     seen.add(name);
     const body = pkg.scripts?.[name];
     if (typeof body !== 'string' || !body.trim()) throw new Error(`package.json has no ${name} script`);
     const match = sensitive.exec(body);
-    if (match) throw new Error(`script ${name} contains ${match[0]}; database/migration effects need separate authorization`);
+    if (match) throw new Error(`script ${name}: destructive or privileged operation ${match[0]}`);
+    if (/(?:NODE_ENV=["']?production|\.env\.production)/i.test(body) && /\b(?:migrat\w*|seed\w*|db:push)\b/i.test(body)) throw new Error(`script ${name}: production database mutation`);
+    notes.push(`Script ${name}: review its actual development target and effects; detection is not a safety verdict.`);
     for (const hook of [`pre${name}`, `post${name}`]) if (pkg.scripts?.[hook]) inspect(hook);
-    // Fail closed on unknown chains, not merely known database keywords.
-    const args = developmentWords(body);
+    // Unknown launchers/chains require executor effect review, not activation.
+    let args;
+    try { args = developmentWords(body); }
+    catch { return { framework: null, port: Number(/(?:--port[= ]|-p |PORT=)(\d+)/.exec(body)?.[1] ?? 3000) }; }
     if (args[0] === 'cross-env') args.shift();
     let envPort = null;
     while (args[0]?.includes('=') && !args[0].startsWith('-')) {
       const assignment = args.shift();
       if (/^PORT=\d+$/.test(assignment) && portNumber(assignment.slice(5))) envPort = Number(assignment.slice(5));
-      else if (!/^(?:NODE_ENV=(?:development|production)|NODE_OPTIONS=--no-deprecation)$/.test(assignment)) throw new Error(`script ${name} has an environment override requiring separate review`);
+      // Environment overrides are reviewed operational effects, not activation gates.
     }
     let framework = args.shift();
     if (managers.has(framework)) {
       if (args[0] === 'run') args.shift();
-      if (args.length !== 1) throw new Error(`script ${name} has an opaque package-manager invocation`);
+      if (args.length !== 1) return { framework: null, port: envPort ?? 3000 };
       return inspect(args[0]);
     }
     const verbs = { next: ['dev', 'start'], vite: ['dev', 'serve', 'preview'], astro: ['dev', 'preview'], nuxt: ['dev', 'start'], 'react-scripts': ['start'], webpack: ['serve'] };
-    if (!verbs[framework]) throw new Error(`script ${name} uses ${framework ?? 'an unknown launcher'}; opaque scripts need the existing exact permission/review path`);
+    if (!verbs[framework]) return { framework: null, port: envPort ?? Number(/(?:--port[= ]|-p )(\d+)/.exec(body)?.[1] ?? 3000) };
     if (verbs[framework].includes(args[0])) args.shift();
-    else if (framework !== 'vite') throw new Error(`script ${name} is not a development server command`);
-    const flagPort = serverArguments(args);
+    else if (framework !== 'vite') return { framework: null, port: envPort ?? 3000 };
+    let flagPort;
+    try { flagPort = serverArguments(args); } catch { flagPort = Number(/(?:--port[= ]|-p )(\d+)/.exec(body)?.[1] ?? 0) || null; }
     if (flagPort && envPort && flagPort !== envPort) throw new Error(`script ${name} has competing port settings`);
     return { framework, port: flagPort ?? envPort ?? ({ vite: 5173, astro: 4321, webpack: 8080 }[framework] ?? 3000) };
   };
-  return { ...inspect(script), script };
+  return { ...inspect(script), script, notes };
 }
 
 export function developmentInvocation(tokens, root, config, invocationCwd = root) {
@@ -140,7 +146,7 @@ export function detectDevelopment(root, config = {}) {
   const locks = [['pnpm-lock.yaml', 'pnpm'], ['yarn.lock', 'yarn'], ['package-lock.json', 'npm']].filter(([file]) => existsSync(join(cwd, file))).map(([, manager]) => manager);
   if (!declared && locks.length > 1) throw new Error('competing package-manager lockfiles; name the package manager');
   const manager = declared ?? locks[0] ?? 'npm';
-  const portArgs = inspected.framework === 'react-scripts' ? [] : [...(manager === 'npm' ? ['--'] : []), '--port', String(inspected.port), ...(inspected.framework === 'vite' ? ['--strictPort'] : [])];
+  const portArgs = !inspected.framework || inspected.framework === 'react-scripts' ? [] : [...(manager === 'npm' ? ['--'] : []), '--port', String(inspected.port), ...(inspected.framework === 'vite' ? ['--strictPort'] : [])];
   return { cwd, start: [manager, 'run', script, ...portArgs], port: inspected.port, readyUrl: `http://localhost:${inspected.port}/`, readyTimeoutMs: 30000, stopGraceMs: 5000 };
 }
 

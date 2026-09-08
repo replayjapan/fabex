@@ -69,7 +69,7 @@ test('discussion allows exact SDK controls but denies writes and unrelated effec
   assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'obsolete' })).decision, 'deny');
 });
 
-test('normal mode MCP tools use a read-only allowlist', async (t) => {
+test('normal mode MCP research defers without bypassing the canonical SDK controller', async (t) => {
   const ctx = await fixture(t);
   assert.equal((await classify(ctx, 'mcp__context7__query-docs', { libraryId: 'x' })).decision, 'defer');
   assert.equal((await classify(ctx, 'mcp__codex__codex', { prompt: 'not a Fabex path' })).decision, 'deny');
@@ -91,10 +91,10 @@ test('control parser permits current checkpoint, mode, diagnostic, and recovery 
   assert.equal(parseControlCommand(`node ${control} recover retry --operation-id ${id}`), null);
 });
 
-test('GitHub push and gh operations remain operational-agent-only', async (t) => {
+test('1.9.1 GitHub push and gh permit main or verified operational executor only', async (t) => {
   const ctx = await fixture(t);
   for (const command of ['git push origin main', 'git send-pack origin', 'git lfs push origin main', 'gh pr create']) assert.ok(protectedGithubOperation(command), command);
-  assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' })).decision, 'deny');
+  assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' })).decision, 'defer');
   assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' }, { agentId: 'agent', agentType: 'fabex:fabex-operational' })).decision, 'defer');
   assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' }, { agentId: 'agent', agentType: 'fabex-operational' })).decision, 'deny');
 });

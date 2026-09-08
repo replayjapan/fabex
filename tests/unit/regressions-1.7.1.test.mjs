@@ -38,15 +38,15 @@ test('1.7.1 item 1: instructions make Codex the image reviewer and Fable the des
   }
 });
 
-test('1.7.1 item 2: main and non-operational image reads are denied without blocking attachment transport', async (t) => {
+test('1.7.1 item 2: direct image reads remain denied while metadata and attachment transport work', async (t) => {
   const { image, classify } = await fixture(t);
   for (const route of ['normal', 'discussion', 'ask-once']) {
     for (const executor of [{}, { agentId: 'other', agentType: 'general-purpose' }]) {
       for (const extension of ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'svg', 'heic']) {
         const path = `${image}.${extension.toUpperCase()}`;
         assert.equal(await classify('Read', { file_path: path }, route, executor), 'deny');
-        assert.equal(await classify('Bash', { command: `cat "${path}"` }, route, executor), 'deny');
-        assert.equal(await classify('mcp__service__read_file', { path }, route, executor), 'deny');
+        assert.equal(await classify('Bash', { command: `stat "${path}"` }, route, executor), 'defer');
+        assert.equal(await classify('mcp__service__read_file', { path }, route, executor), 'defer');
       }
     }
     assert.equal(await classify('Read', { file_path: image }, route, operational), 'defer');
@@ -55,19 +55,19 @@ test('1.7.1 item 2: main and non-operational image reads are denied without bloc
   const envelope = JSON.stringify({ ...JSON.parse(submissionEnvelope('review')), attachments: [image] });
   const command = `node "${join(root, 'scripts/controller.mjs')}" submit <<'FABEX_IMAGE_1710'\n${envelope}\nFABEX_IMAGE_1710`;
   assert.equal(await classify('Bash', { command }), 'defer');
-  assert.equal(await classify('Bash', { command: "cat screen.pn'g' | head" }, 'normal'), 'deny');
-  assert.equal(await classify('Bash', { command: 'git commit -m "no"' }, 'normal'), 'deny');
+  assert.equal(await classify('Bash', { command: "stat screen.pn'g' | head" }, 'normal'), 'defer');
+  assert.equal(await classify('Bash', { command: 'git commit -m "no"' }, 'normal'), 'defer');
   assert.equal(await classify('Bash', { command: 'git commit -m "no"' }, 'discussion', operational), 'deny');
 });
 
-test('1.7.1 item 3: read-only operational delegation is data-only and uses the configured model', async (t) => {
+test('1.7.1 item 3: read-only delegation permits more than the image envelope while tool mutations stay denied', async (t) => {
   const { image, config, classify } = await fixture(t);
   const input = { subagent_type: 'fabex:fabex-operational', model: config.models.operational, prompt: `FABEX IMAGE DESCRIPTION ONLY\n${JSON.stringify({ attachments: [image] })}` };
   for (const route of ['discussion', 'ask-once']) {
     assert.equal(await classify('Agent', input, route), 'defer');
     assert.equal(await classify('Task', input, route), 'defer');
     for (const altered of [{ ...input, model: 'wrong-model' }, { ...input, prompt: 'perform delivery' }, { ...input, resume: 'other-agent' }, { ...input, prompt: `${input.prompt}\nextra instructions` }]) {
-      assert.equal(await classify('Agent', altered, route), 'deny');
+      assert.equal(await classify('Agent', altered, route), 'defer', '1.9 delegates read-only chores beyond the image envelope');
     }
     assert.equal(await classify('Edit', { file_path: image, old_string: 'a', new_string: 'b' }, route, operational), 'deny');
   }
@@ -117,7 +117,7 @@ test('1.7.1 item 5: discussion research defers without permitting image reads or
     assert.equal(await classify('WebSearch', { query: 'official documentation' }, route), 'defer');
     assert.equal(await classify('WebFetch', { url: 'https://example.org/docs', prompt: 'summarize' }, route), 'defer');
     assert.equal(await classify('Agent', { subagent_type: 'claude-code-guide', prompt: 'research hooks' }, route), 'defer');
-    assert.equal(await classify('Agent', { subagent_type: 'general-purpose', prompt: 'research hooks' }, route), 'deny');
+    assert.equal(await classify('Agent', { subagent_type: 'general-purpose', prompt: 'research hooks' }, route), 'defer');
     for (const url of ['file:///scratch/page', 'https://user:password@example.org/docs', 'https://example.org/image.png']) assert.equal(await classify('WebFetch', { url }, route), 'deny');
     assert.equal(await classify('mcp__service__create_item', {}, route), 'deny');
   }

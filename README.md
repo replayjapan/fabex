@@ -1,38 +1,20 @@
 # Fabex — Beta
 
-### 1.8.3: ordinary development, out of the box
+### 1.9.0: routine development without command-by-command setup
 
-In owner-selected work mode, ask to run the app. No `devServer` JSON, first-use activation or saved configuration is required. The built-in guard accepts ordinary inspected `dev` and `start` scripts through pnpm, npm and yarn, with bare or `run` forms. Main Claude or the verified operational executor runs them through the host's background-task facility. Native host permissions still apply; this does not enable Codex networking or bypass Claude Code permissions.
+Within owner-authorized work, review actual targets and effects, then perform necessary dependency installs, generated lockfile updates, reviewed development migrations, scoped fixtures, diagnostics, local HTTP checks and server management. No handwritten command exceptions or repeated owner approvals are required for those routine steps. Do not send the owner to a terminal to compensate for Fabex restrictions.
 
-Use the application's actual working directory, a package-manager directory selector, or one literal `cd <directory> && <development-command>`. Supported selectors are pnpm `--dir`/`-C`, npm `--prefix` and yarn `--cwd`, resolving inside the workstream (including symlink checks). A bare command is checked against the host's real cwd, not assumed to run in a configured nested repository. For example:
+Codex authors project source; Claude coordinates and may perform reviewed operational work through an authorized host executor. Generated development artifacts and database effects are not automatically source authorship. Only the operational agent performs Git delivery. Never use scripts or MCP to evade these roles. Destructive resets, production changes and unrelated privileged access remain outside scope.
 
-```text
-pnpm --dir /absolute/workstream/app dev --hostname 0.0.0.0 --port 3000
-npm --prefix /absolute/workstream/app run start -- --port 3000
-```
+The 1.5.0 normal Bash/MCP allowlists and exception-driven repairs exceeded the requested workflow. 1.9.0 removes that general work gate, retaining targeted source-writing, destructive-effect, privilege, deployment and unverified-process-termination checks. A deny list is mechanically looser: it cannot prove arbitrary program effects or identify every production target. Executor review is mandatory, not a new per-command approval ritual. Host permissions remain authoritative.
 
-Use the host's background-task option rather than raw shell background/redirection machinery. Inspect the intended port before launch and the actual listener afterward; never silently substitute another port. Stop that exact host-owned background task through the host's task control, not generic `kill`. A raw background task is not automatically adopted by the optional Fabex ownership helper. Persistence across turns and host restarts depends on the host and remains a live acceptance check.
+The optional control.mjs dev start/status/logs/restart/stop helper remains available without configuration. It discovers a single nested app and preserves process identity, stale-PID and port-conflict checks. Existing devServer configuration remains an optional override. Custom script inspection reports review notes instead of blanket migration/seed refusals; destructive markers still fail. Report the command, cwd and intended port; never silently accept a fallback port. Stop only a verified host-owned task or the owned-server helper, never a generic PID or a port occupant. No server starts automatically when a project opens.
 
-The built-in script check reads bounded package.json data, including pre/post hooks and nested package-script references. Database migration/push/reset/seed/drop markers, opaque shell chains, source-write shapes and unsafe environment overrides are not silently authorized. The built-in straightforward launchers are Next, Vite, Astro, Nuxt, react-scripts and webpack serve, optionally with supported environment assignments/cross-env. Bind/port and listed build-mode flags are accepted; arbitrary package-manager flags are not. This is not a proof that application code has no effects: normal dev-generated files are expected. Unrecognized custom launchers or additional effects need the existing specific review/exact-permission path, not a blanket executable grant. Installs and unrelated scripts retain their previous restrictions.
+Discussion and ask permit read-only searches, transformations, bounded loopback GET/HEAD probes, status/logs and delegated research under the same route guard. Mutations stay denied. Legacy command exceptions are not automatically read-only. Arbitrary database diagnostic scripts without independently read-only execution remain unresolved, rather than silently receiving mutation authority.
 
-Work, discussion and ask permit these bounded local probes:
+Image filenames in Bash/MCP no longer trigger blanket rejection: metadata and capture need not perform visual review. Direct image Read/WebFetch remains denied to Fable. Use Codex or the configured lower-model helper for visual review; host-injected image context remains a platform limitation.
 
-```text
-lsof -nP -iTCP:3000 -sTCP:LISTEN
-lsof -i :3000
-curl -q --noproxy '*' --max-time 5 -sS -o /dev/null -w '%{http_code}' http://localhost:3000/
-curl -q --noproxy '*' --max-time 5 -I http://127.0.0.1:3000/
-```
-
-Curl permits GET/HEAD only, HTTP loopback with an explicit port, a timeout up to 30 seconds, and output only to stdout or /dev/null. Bodies, configuration files, arbitrary write-out directives and non-loopback URLs stay denied. Use `-q` first to disable curl configuration and `--noproxy '*'` to avoid inherited proxies. Unrestricted `-L` is denied: redirects can escape loopback; `-L --max-redirs 0` only reports the initial response. Status requests must use side-effect-free endpoints, never implicit repair. Image-review restrictions still apply.
-
-The existing optional `control.mjs dev start|status|logs|restart|stop` helper also works without configuration. It discovers a single app within bounded workstream traversal (or uses repositoryRoot), chooses dev then start, reads packageManager or an unambiguous lockfile, and derives the intended port from the script or the recognized framework default. Multiple candidate apps/lockfiles or unrecognized launchers produce an actionable choice, not a guessed launch or automatic config write. For CLI-port-capable frameworks it pins that port; Vite also gets strict-port behavior. React-scripts uses its script/default port; an environment override may require explicit clarification. No server starts merely because Fabex opens a project.
-
-The helper reuses 1.8.2 detached process-group ownership checks, private logs, stale-PID and port-conflict refusal. Start/status report command, cwd and port. Status/logs never start, stop, clear stale records or repair anything; stop still works from a saved ownership record if the override is absent. Healthy work is required for start/stop/restart; discussion and ask remain read-only. Failed readiness can leave an owned process running: inspect and explicitly stop it. Unknown process identity or surviving orphaned children fail closed, never kill by port. Private logs are bounded on read, best-effort redacted and may grow on disk; do not publish raw logs. A crashed lifecycle lock requires verified manual cleanup.
-
-**Optional overrides only:** an existing project-layer `devServer` block remains supported for a selected cwd, exact start argv, port, loopback readyUrl, readyTimeoutMs and stopGraceMs. It is not an enablement gate. Invalid overrides are reported rather than silently replaced; direct ordinary command support does not require them. Existing exact command patterns and all newer phase/grant/image/relay/recovery/Git protections remain. SDK settings and state schema 14 are unchanged.
-
-Live acceptance, including no-configuration port-3000 operation and desktop/phone inspection, is tracked in [1.8.3 acceptance](docs/acceptance-1.8.3.md). No real server was started for this patch's simulated tests.
+Schema 14 and the network-off default are unchanged. Diagnose identifies the network default's agent-proposed provenance and unresolved disposition. See [restriction provenance](docs/provenance-1.9.0.md) and [live acceptance](docs/acceptance-1.9.0.md). Real database/install/fixture/server/browser/turn-boundary verification is pending; classifier and mock-process passes alone do not prove restoration.
 
 ### 1.8.1: readable relay and explainable speaker labels
 
@@ -44,9 +26,9 @@ The model-label diagnosis found that a model-less SessionStart erased earlier ev
 
 Schema 14 adds one bounded SessionStart diagnostic (session ID, enumerated source, model-field status and timestamp), with lossless schema-13 migration and the existing live-runner migration gate. `control.mjs diagnose` exposes `claude.model`, `claude.lastSessionStart` and an explanation. If no valid model has been captured, the label stays honestly `Claude:`. Previously erased metadata cannot be reconstructed; the next model-bearing hook must restore it. No transcripts, image bytes, private reasoning or tool results are collected for this diagnostic. Live checks are tracked in [1.8.1 acceptance](docs/acceptance-1.8.1.md).
 
-> **Beta:** Fabex 1.8.3 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
+> **Beta:** Fabex 1.9.0 is being dogfooded. Do not treat it as marketplace-ready until the live two-phase continuity, hook activation, Codex Desktop visibility, process, and RAM criteria below pass.
 
-Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and a bounded operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
+Fabex keeps Claude/Fable as the owner-facing interface while Claude and Codex collaborate as equal partners. Every both-participant owner cycle uses two turns on one continuous Codex thread: Codex first records an independent reading, then reviews Fable's owner-visible response. Codex remains the implementation agent, and Claude or an optional operational agent handles GitHub delivery chores. Private reasoning and tool logs are never relayed.
 
 ## What 1.8.0 changes
 
@@ -54,7 +36,7 @@ Fabex uses the official TypeScript `@openai/codex-sdk`, pinned with its CLI runt
 
 Fabex leaves the Codex model unset by default so Codex inherits the owner's configuration; an explicit `models.codex.model` overrides it. `diagnose` reports the model source as `Fabex config`, `Codex config default`, or `unknown`. The configuration reading is not verification of the model that served a turn; profile-based or unavailable resolution is unknown. With no configured model, the bundled CLI default can change on upgrade (0.153.4 changes it to Astra). Fabex does not alter the owner's model setting. See the [official Codex changelog](https://learn.chatgpt.com/docs/changelog).
 
-Speaker labels use model family names only, for example `Claude (Fable):` and `Codex (Astra):`. Claude's name comes from SessionStart model metadata; Codex's comes from known configuration. Unknown models produce `Claude:` or `Codex:`. Labels accompany, never modify, verbatim relay bodies:
+Use labels from session context or status. Claude session evidence takes precedence over the Claude settings default, which is marked [configured] and verified false. Bracketed context suffixes are stripped. Without evidence show Claude (model unknown):. Neither source verifies the served backend model; status and diagnose report the source.
 
 ```text
 Codex (Astra): Phase 1 — independent
@@ -82,7 +64,7 @@ There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hoo
 | `/askClaude` | ask-once | Claude | none | none |
 | `/askCodex` | ask-once | Codex relay | One owner question | `read-only` |
 
-Questions authorize answers only. Codex performs project edits. Claude coordinates and verifies. Normal-mode project writes by Claude main sessions and subagents—including file tools, Bash, and mutating MCP tools—are allowlist-controlled unless a structured owner-named executor exception is active. Only the verified plugin-scoped `fabex:fabex-operational` agent may perform Git add, commit, tag, merge, rebase, cherry-pick, push, send-pack, Git LFS push, or `gh` sequences.
+Questions authorize answers only. Codex performs project edits. Claude coordinates and verifies. Direct source authorship remains Codex’s role. File-tool and recognized shell/MCP source writes are guarded; general work execution uses targeted checks plus mandatory target/effect review, not an allowlist. Main-session or optional verified operational-agent delivery is available in work mode under host permissions; other subagents and read-only routes remain denied.
 
 Mode commands are owner-only. Typing a Fabex mode slash command fires `UserPromptExpansion`, which issues a grant bound to that session, project, route, and participant set. Optional same-line or multiline text is captured byte-for-byte in private grant state; it is not interpolated into Fable's expanded prompt. The atomic mode command validates the grant, applies the route, consumes the grant, and only then exposes or submits the owner text. Both-participant text becomes a fresh independent Phase 1; Codex-only text becomes one read-only relay turn; Claude-only text is printed to Fable only after the transition. No text means no empty operation. AI-issued mode skills, missing grants, mismatches, and replays fail closed.
 
@@ -114,13 +96,13 @@ Submit reports each supplied path as `selected` after validation and queueing. V
 
 Both strict JSON phase envelopes accept an optional `attachments` array, for example `"attachments": ["/absolute/workspace/app/review.png"]`. The owner or Fable may supply approved image paths; Phase 1 must not include current Fable annotations or opinions disguised as screenshots. Fable forwards approved paths without reviewing the images itself. Current Fable text belongs only in Phase 2. This semantic boundary remains instructional: path validation cannot prove who authored an image.
 
-**Codex is the default image reviewer.** Fable uses Codex's description, not its own image inspection. The guard denies main-session and non-operational subagent Read, Bash, MCP, and WebFetch image references by extension (PNG, JPG/JPEG, WebP, GIF, BMP, TIF/TIFF, SVG, HEIC/HEIF, AVIF, ICO). Validated controller attachment envelopes remain allowed. This is an extension-based routing boundary, not content inspection: disguised or extensionless files cannot reliably be recognized, and the host may still place an image directly in Fable's context.
+**Codex is the default image reviewer.** Fable uses Codex's description, not its own image inspection. The guard denies main-session and non-operational subagent Read and WebFetch image access by extension; Bash/MCP filename metadata and capture are not visual review. Recognized extensions include (PNG, JPG/JPEG, WebP, GIF, BMP, TIF/TIFF, SVG, HEIC/HEIF, AVIF, ICO). Validated controller attachment envelopes remain allowed. This is an extension-based routing boundary, not content inspection: disguised or extensionless files cannot reliably be recognized, and the host may still place an image directly in Fable's context.
 
-If an additional description is needed, Fable may explicitly spawn `fabex:fabex-operational` using the effective `models.operational` value, including in discussion and ask. In those read-only routes the prompt must be exactly `FABEX IMAGE DESCRIPTION ONLY`, a newline, then a JSON object containing only `attachments` (one to six validated image paths). No arbitrary chore text, agent resume, or model substitution is allowed. The helper reads only the selected images and returns a description; it performs no Git delivery, project writes, or shell chores. The model option selects the configured helper, not a guaranteed lower cost or verified served model.
+If an additional description is needed, Fable may explicitly spawn `fabex:fabex-operational` using the effective `models.operational` value, including in discussion and ask. In those read-only routes one supported image-only prompt is `FABEX IMAGE DESCRIPTION ONLY`, a newline, then a JSON object containing only `attachments` (one to six validated image paths). Other bounded read-only delegation is allowed; no mode change or mutation is implied. The helper reads only the selected images and returns a description; it performs no Git delivery, project writes, or shell chores. The model option selects the configured helper, not a guaranteed lower cost or verified served model.
 
 To attach an image from an owner-typed mode command, put a line `attach: /absolute/workspace/app/review.png` in its trailing message. Use the literal lowercase `attach:` at the start of the line and an unquoted absolute path (spaces are supported). Fabex keeps the entire message byte-for-byte, validates the selected images before applying the grant, and sends them with independent Phase 1. Merely mentioning a path does not attach it. Missing or invalid selected files produce a visible error without consuming the grant or discarding the text; if a paused transition's image disappears, restore it and retry the same mode command. Claude-only modes retain their existing no-Codex routing.
 
-Discussion and ask also permit read-only WebSearch, HTTP(S) WebFetch without embedded credentials, and the `claude-code-guide` research agent. These exceptions do not change the mode, permit project writes, or authorize Git delivery; other delegation remains denied. Recovery remains fail-closed. Fable pastes the controller's `relayBlock` unmodified rather than retyping Codex's words.
+Discussion and ask also permit read-only WebSearch, HTTP(S) WebFetch without embedded credentials, and the `claude-code-guide` research agent. These exceptions do not change the mode, permit project writes, or authorize Git delivery; other read-only delegation is permitted with route checks on each tool. Recovery remains fail-closed. Fable pastes the controller's `relayBlock` unmodified rather than retyping Codex's words.
 
 At most six PNG, JPG/JPEG, WebP, or GIF files are allowed, each nonempty and at most 16 MiB. HEIC is not accepted directly; use an authorized conversion workflow rather than silently dropping the image. Paths must be absolute and resolve inside the workstream (including its configured repository), an effective `guard.externalWriteRoots` directory, or the dedicated session-scoped uploads directory above. Symlink escapes are rejected. Files are checked at submission and immediately before execution; supplied files should remain unchanged while queued. The SDK receives `local_image` inputs alongside the phase text, including in read-only discussion and ask. Fabex stores paths only until completion, failure, or cancellation; it never stores image bytes in state. SDK/model processing and persisted Codex history have separate retention; removing Fabex paths does not erase those copies. Share only images approved for sending to Codex.
 
@@ -128,11 +110,30 @@ Every both-participant phase requests `outputSchema` fields: `scopeMismatch`, `p
 
 Answers have the existing 32 KiB storage bound. Structured objects have a 48 KiB total bound, 16 entries per array, and 2048 bytes per supplemental string. Overflow falls back visibly, and truncation is explicitly labeled rather than called a complete quote. Token usage is not a context-capacity or billing meter.
 
-### Complete verbatim relay
+### Concise owner-facing relay (1.9.1)
 
-`controller.mjs result --operation-id <uuid>` returns `relayBlock`: the Codex label and phase, every stored answer line quoted, then only non-empty scope, parity, disagreement and uncertainty flags in labeled prose and any warning. Paste each phase's block unchanged before Fable's separate view or a joint summary. Never call an excerpt a full quote. Phase 2 corrections must remain separately visible; a Phase 1 quote alone is not necessarily Codex's final position. Only owner-facing text is relayed, never private reasoning or tool logs.
+The default order is the mode badge, Claude's own summary with its model label,
+Codex's own summary relayed unchanged, Decided, Action required, and TODO tagged
+Claude or Codex. Empty sections and absent partners are omitted. Claude never
+rewrites Codex's summary. No personal name is embedded in labels or templates.
 
-Stop checks pending completed phases for the current session against `last_assistant_message`, normalizing whitespace and blockquote prefixes. Missing full answers or speaker labels block stopping; an accepted Stop acknowledges them so later turns need not repeat old answers. This checks textual presence, not whether the UI actually displayed it, its ordering, or spoken playback. Pending unrelayed answers are protected from history pruning; the hard state budget still fails closed if too much undelivered content accumulates.
+`ownerSummary` is required in both phase schemas and bounded to 1200 characters.
+Schema 15 identifies this review shape. Schema 14 migrates losslessly using the
+existing live-runner gate; old complete answers and pending operations stay intact.
+An older or missing summary prints a visible fallback and the full answer.
+The completed Phase 2 summary satisfies its linked new-format independent
+reading's display obligation, not unrelated cycles or legacy records. Full
+answers remain available with `relay --full` and `result` while retained in the
+bounded history; there is no permanent transcript archive. Material risks and
+disagreements remain visible without automatically dumping the transcript.
+
+Waits accept 1–120 seconds per invocation. Repeat on exit 3 (still working),
+prefer shorter slices, and never interpret timeout as completion or failure.
+This does not establish why any host classifier denied a previous wait.
+
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
 
 For an owner-requested interruption, `control.mjs recover abandon --operation-id <uuid>` waives the completed cycle's relay and any missing Phase 2 while preserving its stored answers and canonical thread. Cancel working/queued operations before abandonment. This escape is instructional owner authority, not a new cryptographic grant. Never use it merely to shorten an answer. If the host omits `last_assistant_message`, Stop cannot verify delivery; relay explicitly or use the owner-requested escape, rather than claiming verification.
 
@@ -149,8 +150,8 @@ Permission profiles and the legacy sandbox settings **do not combine**. The [off
 | Exact `thread.started` ID verification on every turn | SDK/CLI service availability and subscription limits |
 | Per-turn `read-only` or `workspace-write` SDK sandbox | Codex Desktop Recents visibility across future app versions |
 | Claude-only denial of SDK submit | Host model resolution for `fabex-operational` |
-| Claude executor project-write, Bash, and MCP allowlists | Complete continuity after an explicitly replaced missing session |
-| Full Git delivery lane limited to the plugin-scoped operational agent | Codex compliance with the instruction reserving delivery for `fabex-operational` |
+| Direct file-tool authorship checks (shell/MCP checks are partial) | Complete continuity after an explicitly replaced missing session |
+| Git delivery limited to work-mode main session or verified operational agent | Compliance with reviewed owner-authorized delivery |
 | Atomic schema migration and hard 48 KiB complete recovery seed | Resource use of SDK/CLI processes under live workloads |
 
 ## Independent-first controller and progress visibility
@@ -159,7 +160,7 @@ Permission profiles and the legacy sandbox settings **do not combine**. The [off
 
 Discussion and ask permit Write/Edit/NotebookEdit and supported single-target Bash writes only to validated memory/scratchpad or configured `guard.externalWriteRoots` locations outside the workstream. Existing ancestors and symlinks are resolved before approval. Unhealthy/recovery state does not gain write access. Native permissions still apply. Image inspection remains Codex's job even during lock contention, corruption or deferred migration.
 
-Exact read probes include `git tag --list`, `git tag -l "v*"`, `du -sh .`, and `ps -axo pid,ppid,rss,etime,comm | grep codex`. Process arguments/environment dumps are not included. Read-only routes do not gain build/test execution or Git delivery; tag creation/deletion and commits still require the operational lane in work mode.
+Exact read probes include `git tag --list`, `git tag -l "v*"`, `du -sh .`, and `ps -axo pid,ppid,rss,etime,comm | grep codex`. Process arguments/environment dumps are not included. Read-only routes do not gain build/test execution or Git delivery; tag creation/deletion and commits require authorized work-mode delivery.
 
 `control.mjs cleanup --path <absolute-directory>` is available to the main or operational executor in healthy work mode. It accepts only `fabex-next` or `fabex-next-<version>` directly under the workstream or system temp roots. It checks the Fabex package/manifest, compares source files against the live checkout or matching delivered tag, rejects unique files/refs and symlinks, and requires `lsof` to prove no active use. If any check or native permission fails, nothing is removed. No wildcards or force fallback. Verified disposable copies are deleted, not moved to Trash; their source files remain recoverable from the verified checkout/tag. Owner photos, caches and local settings are not cleanup targets.
 
@@ -183,7 +184,7 @@ The controller retrieves the stored independent answer itself; callers cannot su
 
 Stop records the final owner-visible Fable reply and its digest. Schema 13 retains **one complete reply of at most 32 KiB**, session-bound and replaced by the next accepted Stop; it never reads transcripts, reasoning or tool logs. Oversized, absent, interrupted or Claude-only replies remain unavailable, never truncated and called complete. `previousReplyStatus: "recorded"` lets the controller insert the matching stored reply; `provided` with exact `previousReply` remains supported. Recorded text stays out of the 48 KiB recovery seed and status output. Missing evidence produces an explicit unavailable phase header and `claudeReplyVerified: "unavailable"`. Private state and pending operations are local retention; clearing state removes them, not the separate SDK history.
 
-Use `controller.mjs relay --operation-id <uuid>` to print only the ready-to-paste block. Paste it unchanged for each phase; do not retype quotes or merge away Codex's answer. The full-answer Stop check and owner-requested recovery escape remain unchanged.
+Use `controller.mjs relay --operation-id <uuid>` to print only the ready-to-paste block. Paste the completed Phase 2 summary unchanged; legacy records retain full-answer checks.
 
 Controller writes now wait for locks with bounded backoff (50 ms doubling to 400 ms, about 3 seconds); submission retries generation conflicts by rereading and revalidating. Locks are never stolen. Queued selections and paused grants survive state reload. Cancellation removes terminal operation paths; it does not delete the owner's images or automatically retry ambiguous SDK work.
 
@@ -340,7 +341,7 @@ Configuration merges field by field from shipped defaults, machine `FABEX_HOME` 
 
 `project.repositoryRoot` is accepted only in the project layer and must be a relative path inside the workstream; Fabex never guesses between nested repositories. `models.codex.networkAccessEnabled` defaults off and affects only `workspace-write` turns; read-only turns remain offline. Fabex never selects `danger-full-access`.
 
-`guard.allowedCommandPatterns` matches parsed argv exactly after leading environment assignments. Each argument is literal or the documented one-token wildcard `"*"`; no regex or substring matching is accepted. Relative Node script paths resolve against `repositoryRoot` and cannot escape the workstream. `allowedCommands` remains compatible, but each bare executable grants every invocation and triggers a config/diagnose warning; migrate broad entries such as `"node"` to exact script patterns. Built-in package-manager verification accepts `test`, safe `test:<name>`, `lint`, `typecheck`, `build`, `check`, and corresponding `run` forms, but rejects update, write, fix, and force flags. Built-in `node --test` accepts automatic discovery or explicit test paths only inside the configured repository/workstream; outside paths and additional Node flags require an exact configured pattern.
+`guard.allowedCommandPatterns` and `allowedCommands` remain compatible for existing narrow paths, but routine work no longer requires them. Neither proves read-only effects in discussion. Scratch-root validation remains in read-only routes; source-rewrite flags still belong to Codex.
 
 `guard.externalWriteRoots` adds absolute or `~`-prefixed scratch/artifact roots. Defaults are derived at runtime for the OS temporary directory, Claude project memory, and Claude session scratchpads. Bash output is allowed only when one absolute target is outside the workstream, inside a permitted root, contains no substitution, and uses a quoted heredoc or simple `echo`/`printf`/`cat` redirect. Append mode is scoped by the same rule and is never enabled generally.
 
@@ -358,7 +359,7 @@ The SDK and Codex CLI persist the canonical thread under Codex's own storage and
 
 `/recover` can inspect an operation without exposing its retained queued text, abandon a failed/cancelled record, explicitly replace only a confirmed-missing thread, clear only a confirmed-dead lock, and commit/discard only a validated unambiguous transaction. State files must never be hand-edited.
 
-The route guard parses exact invoked script paths and argv rather than matching command substrings. It rejects malformed two-phase envelopes before queueing, denies AI calls to mode-changing skills, validates owner mode grants on Bash calls, gates controller/checkpoint controls, and allowlists the three project-mutation channels: file tools, Bash, and MCP. The mode command independently consumes the grant, covering direct Codex sandbox attempts that Claude hooks cannot observe. The entire Git delivery lane remains reserved for the operational agent.
+The route guard parses exact invoked script paths and argv rather than matching command substrings. It rejects malformed two-phase envelopes before queueing, denies AI calls to mode-changing skills, validates owner mode grants on Bash calls, gates controller/checkpoint controls, and retains direct source-authorship checks; work Bash/MCP backstops do not prove arbitrary program effects. The mode command independently consumes the grant, covering direct Codex sandbox attempts that Claude hooks cannot observe. Main-session or optional operational-agent delivery is available in work mode under host permissions.
 
 Fabex 1.7.0 uses documented stable hook events: `UserPromptExpansion`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, and `PostCompact`. Operational subagent hooks record start/finish metadata and a result digest. PostCompact stores only its trigger and timestamp, warning when the checkpoint predates compaction. Fabex does not depend on preview function hooks. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks.md).
 

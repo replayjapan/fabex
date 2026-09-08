@@ -5,6 +5,8 @@ description: Diagnose Fabex activation, state health, platform facts, hooks, and
 
 # Diagnose
 
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+
 For phone uploads, verify the current hook-recorded session matches the upload's session directory and that `CLAUDE_CONFIG_DIR` is honored. Do not scan or inspect uploaded photos with Fable. After reload, ask for one non-sensitive phone photo, forward its host-provided reference through Phase 1, and check indexed attachment delivery. Root validation tests are not proof that the host reference was forwarded automatically.
 
 For 1.8.1, verify schema 14 activation and the Stop relay check with a full-answer/truncated-answer probe in isolated state. Image and structured-review support need live post-reload checks; unit tests are not live activation proof. Permission profiles remain deferred: `--sandbox` does not combine with profile deny rules. The host ignored the ARGUMENTS rewrite in live dogfood; report that platform limitation, not a verified fix.

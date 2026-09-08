@@ -108,7 +108,7 @@ test('first turn persists thread.started and subsequent queued turns resume the 
   assert.equal(capture[0].threadOptions.approvalPolicy, 'on-request');
   assert.equal(capture[0].codexOptions.apiKey, undefined);
   assert.match(capture[0].codexOptions.config.developer_instructions, /full equal Fabex partner/);
-  assert.match(capture[0].codexOptions.config.developer_instructions, /Do not run git add, commit, tag/);
+  assert.match(capture[0].codexOptions.config.developer_instructions, /Keep Claude as the delivery interface/);
   assert.match(capture[0].codexOptions.config.compact_prompt, /structured checkpoint/);
 });
 

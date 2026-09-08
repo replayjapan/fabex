@@ -240,7 +240,7 @@ test('1.8 exact read diagnostics do not grant Git delivery or environment dumps'
   for (const route of ['normal', 'discussion', 'ask-once']) {
     await setState(f, (state) => { state.route = route; });
     for (const command of ['git tag --list', 'git tag -l "v*"', 'git tag --list | head -5', 'du -sh .', 'ps -axo pid,ppid,rss,etime,comm | grep codex']) assert.equal((await guard(f, 'Bash', { command })).decision, 'defer', command);
-    for (const command of ['git tag v9.0.0', 'git tag --list; git commit -m x', 'ps e', 'ps -axo command', 'du -sh . | tee out']) assert.equal((await guard(f, 'Bash', { command })).decision, 'deny', command);
+    for (const command of ['git tag v9.0.0', 'git tag --list; git commit -m x', 'ps e', 'ps -axo command', 'du -sh . | tee out']) assert.equal((await guard(f, 'Bash', { command })).decision, route === 'normal' && command.startsWith('git ') ? 'defer' : 'deny', command);
   }
 });
 
@@ -255,7 +255,7 @@ test('1.8 schema 12 migration retains queued images pending grants reply digests
   legacy.partner.thread.threadId = 'preserved';
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(f.project, f.env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 14);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 15);
   assert.deepEqual(migrated.state.operations[0].request.attachments, await Promise.all(f.images.map((path) => realpath(path))));
   assert.deepEqual(migrated.state.operations[0].result, legacy.operations[0].result);
   assert.equal(migrated.state.modeGrant.ownerMessage, 'next'); assert.equal(migrated.state.partner.thread.threadId, 'preserved');
@@ -263,7 +263,7 @@ test('1.8 schema 12 migration retains queued images pending grants reply digests
 });
 
 test('1.8 cleanup refuses symlinks unique files wrong names and active use before removal', async (t) => {
-  const f = await fixture(t); const target = join(f.project, 'fabex-next-1.8.3');
+  const f = await fixture(t); const target = join(f.project, 'fabex-next-1.9.1');
   await cp(plugin, target, { recursive: true, filter: (path) => !path.includes('/node_modules') && !path.includes('/.git') });
   await writeFile(join(target, 'unique-owner-note'), 'keep this');
   await assert.rejects(inspectCleanup(f.project, target, { source: plugin, activeCheck: async () => {} }), /unique\/untracked/);

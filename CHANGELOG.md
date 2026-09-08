@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.9.1 — 2026-09-08
+
+### Why
+
+The owner requested readable separately authored summaries, model-aware labels,
+and removal of the agent-proposed mandatory delivery-agent dependency. The full
+two-phase transcript and repeated flags obscured the useful conclusions.
+
+### What it gave us
+
+Claude and Codex each own their concise output. The default relay uses Codex's
+summary without quote bars, while complete phase answers remain inspectable.
+Claude can perform reviewed authorized delivery directly under host permissions.
+
+### Tradeoffs
+
+Summaries must preserve material risks and disagreement; they are not substitutes
+for the stored evidence. Configured models are explicitly unverified. Shorter
+waits and optional delegation cannot guarantee host classifier acceptance.
+Legacy answers retain full-answer relay checks. Schema 15 distinguishes the new
+review shape, with lossless schema-14 migration deferred while a runner is active.
+The network default is unchanged. Live output and delivery require reload and testing.
+
+### Changes
+
+- Require a bounded Codex-authored ownerSummary in both phase schemas; preserve
+  legacy review validation and visible full-answer fallback, with relay --full.
+- Verify the completed Phase 2 summary and label rather than both new-format
+  transcripts; preserve independent-only, session and cross-cycle obligations.
+- Derive Claude labels from session evidence or a visibly configured settings
+  default; report unknown honestly and expose source in status and diagnose.
+- Permit main-session Git delivery in work mode alongside optional operational
+  delegation; retain read-only, unhealthy, role and command-shape restrictions.
+- Bound each controller wait to 120 seconds; repeat exit-3 waits, never mark a
+  timeout as completion. Publish output guidance and acceptance regressions.
+
+## 1.9.0 — 2026-09-07
+
+### Why
+
+The agent-proposed 1.5.0 work allowlist blocked ordinary development. 1.8.2 added an unwanted configuration gate; 1.8.3 repaired servers but retained routine-work roadblocks. The owner clarified workflow-level authority.
+
+### What it gave us
+
+Routine work no longer requires handwritten command exceptions. Source authorship, mode grants, phases, relay, Git delivery, image-review routing, recovery and the optional owned-server helper remain.
+
+### Tradeoffs
+
+A deny list is mechanically looser than an allowlist and cannot establish arbitrary script, database or MCP effects. Executors must review actual targets and effects. Generic kill and mutating exceptions in discussion were rejected from the proposed brief. Network default, opaque read-only scripts and live acceptance remain explicitly unresolved. No database/server acceptance was performed in this source-edit turn.
+
+### Changes
+
+- Replace routine work Bash/MCP allowlisting with targeted authorship, destructive-effect and privilege backstops.
+- Remove blanket separate approvals for reviewed development installs, migrations and fixtures.
+- Expand read-only pipelines and delegation without promoting command exceptions into read-only authority.
+- Permit image metadata/capture paths; preserve Fable's visual-review division.
+- Report helper review notes and network-policy provenance; retain schema 14.
+- Publish provenance, limits and acceptance gates alongside revised regressions.
+
 ## 1.8.3 - 2026-09-07
 
 ### Why we made this change

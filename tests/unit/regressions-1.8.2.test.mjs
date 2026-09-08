@@ -74,7 +74,7 @@ test('1.8.2 project-only dev config is strict, cwd-contained and disabled on err
   assert.equal(validateDevServer({ ...setting, readyTimeoutMs: undefined }).readyTimeoutMs, 30000);
 });
 
-test('1.8.2 dev guard enforces every route/executor and grants no generic shell or migrations', async t => {
+test('1.8.2 dev guard preserves lifecycle route and ownership boundaries under the 1.9 work policy', async t => {
   const f = await fixture(t);
   const controls = ['start', 'stop', 'restart', 'status', 'logs', 'logs --lines 400'];
   const executors = [{}, { agentId: 'helper', agentType: 'fabex:fabex-operational', verified: true }, { agentId: 'other', agentType: 'general-purpose' }];
@@ -86,7 +86,7 @@ test('1.8.2 dev guard enforces every route/executor and grants no generic shell 
       assert.equal(result.decision, route === 'recovery-read-only' || mutation && (route !== 'normal' || index === 2) ? 'deny' : 'defer', `${route}/${index}/${control}: ${result.reason}`);
     }
     for (const command of ['pnpm dev', 'pnpm payload migrate', 'pnpm payload migrate:status', 'curl http://localhost:3000/', 'kill -9 1234']) {
-      assert.equal((await classifyToolUse({ ...f, state, toolName: 'Bash', toolInput: { command } })).decision, 'deny', `${route}: ${command}`);
+      assert.equal((await classifyToolUse({ ...f, state, toolName: 'Bash', toolInput: { command } })).decision, route === 'normal' && !command.startsWith('kill') ? 'defer' : 'deny', `${route}: ${command}`);
     }
   }
   for (const health of ['lock-contention', 'corrupt', 'migration-deferred']) for (const action of controls) assert.equal(classifyUnhealthyToolUse({ health, toolName: 'Bash', toolInput: { command: `node "${plugin}/scripts/control.mjs" dev ${action}` } }).decision, 'deny');

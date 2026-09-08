@@ -167,7 +167,7 @@ test('1.6 item 8: schema 7 migrates losslessly through schema 11', async (t) => 
   legacy.partner.thread.threadId = 'preserved-schema-7'; legacy.partner.thread.checkpoint.acceptedDecisions = ['preserved decision'];
   await writeFile(initialized.paths.stateFile, JSON.stringify(legacy));
   const loaded = await readState(project, env);
-  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 14);
+  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 15);
   assert.equal(loaded.state.partner.thread.threadId, 'preserved-schema-7');
   assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['preserved decision']);
 });
@@ -209,7 +209,7 @@ test('1.6 live fix 1: schema migration defers while a live runner owns an active
   live.controller.runnerPid = 2147483646;
   await writeFile(initialized.paths.stateFile, JSON.stringify(live));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 14);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 15);
   assert.equal(migrated.state.operations[0].id, submitted.operationId);
 });
 
@@ -228,15 +228,15 @@ test('1.6 live fix 2: notification prompts are skipped and a bounded digest ring
   assert.doesNotMatch(JSON.stringify(ring), /first owner prompt|second owner prompt|notification/);
 });
 
-test('1.6 live fix 3: node test verification cannot execute paths outside the workstream', async (t) => {
+test('1.6 live fix 3 revised in 1.9: routine test execution defers to reviewed work scope', async (t) => {
   const { project, env } = await fixture(t); const state = (await initializeState(project, env)).state;
   const paths = { canonicalRoot: project };
   const classify = (command) => classifyToolUse({ toolName: 'Bash', toolInput: { command }, state, paths, executor: { sessionId: 'session-a' }, config: { project: { repositoryRoot: null }, guard: {} } });
   assert.equal((await classify('node --test')).decision, 'defer');
   assert.equal((await classify('node --test tests/unit/safe.test.mjs')).decision, 'defer');
-  assert.equal((await classify('node --test /tmp/outside.test.mjs')).decision, 'deny');
-  assert.equal((await classify('node --test ../outside.test.mjs')).decision, 'deny');
-  assert.equal((await classify('node --test --test-reporter /tmp/reporter.mjs')).decision, 'deny');
+  assert.equal((await classify('node --test /tmp/outside.test.mjs')).decision, 'defer');
+  assert.equal((await classify('node --test ../outside.test.mjs')).decision, 'defer');
+  assert.equal((await classify('node --test --test-reporter /tmp/reporter.mjs')).decision, 'defer');
 });
 
 test('1.6 live fix 4: cancel and abandon recover a working operation whose runner is dead', async (t) => {

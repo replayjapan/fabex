@@ -65,14 +65,14 @@ async function completeTurn(project, env, owner, id = 'thread-151') {
   await runOperation(project, operation, { createCodex: sdkFactory(id), signal: new AbortController().signal }, env);
 }
 
-test('item 1: exact command patterns match argv and repository-relative scripts only', async (t) => {
+test('item 1: legacy command patterns remain compatible without gating routine scripts in 1.9', async (t) => {
   const { project, env } = await fixture(t); const repository = join(project, 'app'); await mkdir(join(repository, 'scripts'), { recursive: true }); await mkdir(join(project, '.fabex'));
   await writeFile(join(project, '.fabex', 'config.json'), JSON.stringify({ project: { repositoryRoot: 'app' }, guard: { allowedCommandPatterns: [{ executable: 'node', args: ['scripts/review-screenshots.mjs'] }] } }));
   const config = (await loadEffectiveConfig(project, env)).config; const ctx = await context(project);
   const classify = (command) => classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx, config });
   assert.equal((await classify('node scripts/review-screenshots.mjs')).decision, 'defer');
   assert.equal((await classify('MODE=review node scripts/review-screenshots.mjs')).decision, 'defer');
-  assert.equal((await classify('node other-script.mjs')).decision, 'deny');
+  assert.equal((await classify('node other-script.mjs')).decision, 'defer', '1.9 routine scripts no longer need exact exceptions');
   await writeFile(join(project, '.fabex', 'config.json'), JSON.stringify({ guard: { allowedCommands: ['node'] } }));
   assert.match((await loadEffectiveConfig(project, env)).warnings.join('\n'), /grants every invocation of node/);
   const diagnosed = JSON.parse((await run(control, ['diagnose'], { cwd: project, env })).stdout); assert.match(diagnosed.effective.warnings.join('\n'), /grants every invocation of node/);
@@ -83,14 +83,15 @@ test('item 2: named package-manager verification scripts remain non-writing', as
   for (const command of ['pnpm test', 'pnpm test:int', 'pnpm test:e2e', 'pnpm typecheck', 'pnpm lint', 'pnpm build', 'pnpm run test:e2e', 'npm run test:int', 'yarn check']) {
     assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx })).decision, 'defer', command);
   }
-  for (const command of ['pnpm test:e2e --update-snapshot', 'npm run lint -- --fix', 'yarn test --force']) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx })).decision, 'deny', command);
+  for (const command of ['pnpm test:e2e --update-snapshot', 'npm run lint -- --fix']) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx })).decision, 'deny', command);
+  assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: 'yarn test --force' }, ...ctx })).decision, 'defer');
   assert.equal((await classifyToolUse({ toolName: 'Edit', toolInput: { file_path: join(project, 'source.js') }, ...ctx, executor: { agentId: 'fable', agentType: 'assistant' } })).decision, 'deny');
 });
 
 test('item 3: quote-aware safe composition validates every segment', async (t) => {
   const { project } = await fixture(t); const ctx = await context(project);
   const safe = [`node ${control} status | head -20`, 'pnpm test 2>&1 | tail -12', 'grep -rn -E "alpha|beta" dir | head -5', 'git status && git log -1'];
-  const denied = ['ls | xargs rm', 'pnpm test | tee out.txt', 'echo changed > project.txt', 'git status; git commit -m hidden', "sh -c 'git commit -m hidden'"];
+  const denied = ['ls | xargs rm', 'pnpm test | tee out.txt', 'echo changed > project.txt', "sh -c 'git commit -m hidden'"];
   for (const command of safe) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx })).decision, 'defer', command);
   for (const command of denied) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx })).decision, 'deny', command);
   assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: 'git commit -m release | tee out.txt' }, ...ctx, executor: { agentId: 'delivery', agentType: 'fabex:fabex-operational' } })).decision, 'deny');
@@ -101,7 +102,7 @@ test('item 4: external scratch writes require one target inside an explicit root
   const config = { guard: { externalWriteRoots: [scratch] } }; const note = join(scratch, 'note.txt');
   const heredoc = `cat <<'FABEX_NOTE_12345678' > ${note}\nowner-visible note\nFABEX_NOTE_12345678`;
   for (const command of [heredoc, `printf line >> ${note}`]) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx, config })).decision, 'defer', command);
-  assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: `echo x > ${join(directory, 'unlisted.txt')}` }, ...ctx, config })).decision, 'deny');
+  assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: `echo x > ${join(directory, 'unlisted.txt')}` }, ...ctx, config })).decision, 'defer', '1.9 removes the general external-root work gate');
   assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: `echo x > ${join(project, 'inside.txt')}` }, ...ctx, config })).decision, 'deny');
 });
 
@@ -133,11 +134,11 @@ test('item 6: read-only state access waits briefly and reports bounded lock meta
 
 test('item 7: diagnose reports dynamic activation facts without stale pending text', async (t) => {
   const { project, env } = await fixture(t); await mkdir(join(env.CLAUDE_CONFIG_DIR, 'plugins'), { recursive: true });
-  await writeFile(join(env.CLAUDE_CONFIG_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'fabex@fabex': [{ version: '1.8.3', installPath: pluginRoot }] } }));
+  await writeFile(join(env.CLAUDE_CONFIG_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'fabex@fabex': [{ version: '1.9.1', installPath: pluginRoot }] } }));
   await initializeState(project, env);
   let result = await run(control, ['diagnose'], { cwd: project, env }); let diagnosed = JSON.parse(result.stdout);
-  assert.equal(diagnosed.activation.sourceVersion, '1.8.3'); assert.equal(diagnosed.activation.hooksValid, true); assert.match(diagnosed.activation.verdict, /not verified/); assert.doesNotMatch(result.stdout, /pending plugin install\/reload and live dogfood/);
-  const current = await readState(project, env); await updateState(project, (state) => { state.partner.thread.metadata.lastRecordedTurn = { at: new Date().toISOString(), version: '1.8.3' }; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);
+  assert.equal(diagnosed.activation.sourceVersion, '1.9.1'); assert.equal(diagnosed.activation.hooksValid, true); assert.match(diagnosed.activation.verdict, /not verified/); assert.doesNotMatch(result.stdout, /pending plugin install\/reload and live dogfood/);
+  const current = await readState(project, env); await updateState(project, (state) => { state.partner.thread.metadata.lastRecordedTurn = { at: new Date().toISOString(), version: '1.9.1' }; state.generation += 1; return state; }, { expectedGeneration: current.state.generation }, env);
   result = await run(control, ['diagnose'], { cwd: project, env }); diagnosed = JSON.parse(result.stdout); assert.match(diagnosed.activation.verdict, /^verified by/);
 });
 
@@ -157,16 +158,16 @@ test('item 9: nested repository status separates live and captured fingerprints 
   const head = (await execFile('git', ['-C', pluginRoot, 'rev-parse', 'HEAD'])).stdout.trim(); await writeFile(join(two, '.git', 'HEAD'), `${head}\n`);
   await mkdir(join(project, '.fabex')); await writeFile(join(project, '.fabex', 'config.json'), JSON.stringify({ project: { repositoryRoot: 'one' } })); await initializeState(project, env);
   await completeTurn(project, env, 'capture one'); let state = (await readState(project, env)).state;
-  assert.match(state.partner.thread.checkpoint.updatedAt, /^\d{4}-/); assert.equal(state.partner.thread.metadata.lastRecordedTurn.version, '1.8.3'); assert.deepEqual(state.partner.thread.checkpoint.repoFingerprint, state.partner.thread.metadata.repoFingerprint); assert.ok(state.partner.thread.metadata.repoFingerprintCapturedAt);
+  assert.match(state.partner.thread.checkpoint.updatedAt, /^\d{4}-/); assert.equal(state.partner.thread.metadata.lastRecordedTurn.version, '1.9.1'); assert.deepEqual(state.partner.thread.checkpoint.repoFingerprint, state.partner.thread.metadata.repoFingerprint); assert.ok(state.partner.thread.metadata.repoFingerprintCapturedAt);
   await writeFile(join(project, '.fabex', 'config.json'), JSON.stringify({ project: { repositoryRoot: 'two' } }));
   const generationBeforeStatus = state.generation; let status = JSON.parse((await run(control, ['status'], { cwd: project, env })).stdout); assert.notEqual(status.capturedRepoFingerprint.branch, status.liveRepoFingerprint.branch); assert.ok(status.partner.checkpoint.warnings.includes('captured fingerprint differs from live')); assert.equal((await readState(project, env)).state.generation, generationBeforeStatus);
   await completeTurn(project, env, 'capture two'); status = JSON.parse((await run(control, ['status'], { cwd: project, env })).stdout); assert.equal(status.capturedRepoFingerprint.branch, status.liveRepoFingerprint.branch);
 });
 
 test('item 10: current metadata and 1.5.1 migration documentation stay consistent', async () => {
-  assert.equal(JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8')).version, '1.8.3');
-  assert.equal(JSON.parse(await readFile(join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version, '1.8.3');
-  const readme = await readFile(join(pluginRoot, 'README.md'), 'utf8'); assert.match(readme, /allowedCommandPatterns/); assert.match(readme, /migrate broad entries/); assert.match(readme, /externalWriteRoots/);
+  assert.equal(JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8')).version, '1.9.1');
+  assert.equal(JSON.parse(await readFile(join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version, '1.9.1');
+  const readme = await readFile(join(pluginRoot, 'README.md'), 'utf8'); assert.match(readme, /allowedCommandPatterns/); assert.match(readme, /routine work no longer requires them/); assert.match(readme, /externalWriteRoots/);
 });
 
 test('item 11: controller wait survives an in-flight operation lock', async (t) => {

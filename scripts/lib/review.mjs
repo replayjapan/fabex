@@ -4,7 +4,7 @@ const nullableText = { type: ['string', 'null'] };
 const texts = { type: 'array', items: text };
 export function reviewSchema(phase) {
   const properties = {
-    scopeMismatch: nullableText, parityConcern: nullableText, answer: text,
+    scopeMismatch: nullableText, parityConcern: nullableText, answer: text, ownerSummary: text,
     evidence: texts, assumptions: texts, uncertainties: texts,
     ...(phase === 'reconcile' ? { disagreements: texts } : {}),
     recommendation: nullableText, changedFiles: texts,
@@ -14,10 +14,12 @@ export function reviewSchema(phase) {
   return { type: 'object', additionalProperties: false, properties, required: Object.keys(properties) };
 }
 
-export function validReview(value, phase) {
+export function validReview(value, phase, { allowLegacy = true } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(reviewSchema(phase).properties).sort();
+  if (allowLegacy && !Object.hasOwn(value, 'ownerSummary')) keys.splice(keys.indexOf('ownerSummary'), 1);
   if (Object.keys(value).sort().join(',') !== keys.join(',')) return false;
+  if (Object.hasOwn(value, 'ownerSummary') && !validSummary(value.ownerSummary)) return false;
   if (typeof value.answer !== 'string' || !value.answer.trim() || Buffer.byteLength(value.answer) > 32768) return false;
   const bounded = (s) => typeof s === 'string' && Buffer.byteLength(s) <= 2048;
   if (['scopeMismatch', 'parityConcern', 'recommendation'].some((key) => value[key] !== null && !bounded(value[key]))) return false;
@@ -34,7 +36,11 @@ export function parseReview(raw, phase) {
   return { finalResponse: raw, structured: null, warning: 'Structured review unavailable: Codex returned malformed or over-budget output; relay the stored answer verbatim.' };
 }
 
-export function relayBlock(operation) {
+export function validSummary(value) {
+  return typeof value === 'string' && Boolean(value.trim()) && value.length <= 1200;
+}
+
+export function relayBlock(operation, { full = false } = {}) {
   const answer = operation.result.finalResponse;
   if (typeof answer !== 'string') return null;
   const label = operation.result.relay?.label ?? 'Codex:';
@@ -46,7 +52,12 @@ export function relayBlock(operation) {
       if (typeof value === 'string' && value.trim()) flags.push(`- ${title}: ${value.replace(/\s+/gu, ' ').trim()}`);
     }
   }
-  return `${label} ${phase}\n\n${answer.split('\n').map((line) => `> ${line}`).join('\n')}${flags.length ? `\n\nCodex flags:\n\n${flags.join('\n')}` : ''}${operation.result.warning ? `\n\nFabex warning: ${operation.result.warning}` : ''}`;
+  const summary = validSummary(fields?.ownerSummary) ? fields.ownerSummary : null;
+  if (full) return `${label} ${phase}\n\n${answer.split('\n').map((line) => `> ${line}`).join('\n')}${flags.length ? `\n\nCodex flags:\n\n${flags.join('\n')}` : ''}${operation.result.warning ? `\n\nFabex warning: ${operation.result.warning}` : ''}`;
+  const differed = operation.request.phase === 'reconcile' && (fields?.scopeMismatch?.trim() || fields?.disagreements?.some(value => value.trim()));
+  // A disagreement can be with Claude rather than with Phase 1. Do not invent
+  // a change in the independent position merely from a non-empty flag.
+  return `${label}\n\n${summary ?? `Summary unavailable; complete answer follows.\n\n${answer}`}${flags.length ? `\n\n${flags.map(line => line.slice(2)).join('\n')}` : ''}${differed ? '\n\nA disagreement or scope mismatch is recorded; controller result for this operation and its parent shows the independent and reconciled answers in full.' : ''}${operation.result.warning ? `\n\nFabex warning: ${operation.result.warning}` : ''}`;
 }
 
 export function normalizeRelay(text) {
@@ -60,5 +71,13 @@ export function pendingRelays(state, sessionId) {
 
 export function missingRelays(state, input) {
   const visible = normalizeRelay(input.last_assistant_message);
-  return pendingRelays(state, input.session_id).filter((op) => !visible.includes(normalizeRelay(op.result.finalResponse)) || !visible.includes(op.result.relay.label));
+  const pending = pendingRelays(state, input.session_id);
+  return pending.filter(op => {
+    // Only new-format cycles can collapse their independent reading. Legacy records
+    // retain their full-answer obligation even when a newer child exists.
+    if (op.request.phase === 'independent' && validSummary(op.result.structured?.ownerSummary)
+      && pending.some(child => child.request.phase === 'reconcile' && child.request.parentOperationId === op.id && validSummary(child.result.structured?.ownerSummary))) return false;
+    const required = validSummary(op.result.structured?.ownerSummary) ? op.result.structured.ownerSummary : op.result.finalResponse;
+    return !visible.includes(normalizeRelay(required)) || !visible.includes(op.result.relay.label);
+  });
 }

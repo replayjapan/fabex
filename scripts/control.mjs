@@ -11,7 +11,7 @@ import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
 import { applyOwnerModeTransition, compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
-import { codexModelSource, speakerLabels } from './lib/speakers.mjs';
+import { claudeModelSource, codexModelSource, speakerLabels } from './lib/speakers.mjs';
 import { cleanupWorkingCopy } from './lib/cleanup.mjs';
 import { devControl, parseDevArgs } from './lib/dev-server.mjs';
 import { detectDevelopment, developmentInvocation } from './lib/development.mjs';
@@ -116,7 +116,8 @@ async function status(root, view = 'default') {
     liveRepoFingerprint: { ...liveFingerprintValue, computedAt: new Date().toISOString() }
   };
   const model = await codexModelSource(effective.config, process.env);
-  output.speakers = { labels: speakerLabels(result.state.claudeModel?.id, model.id), claude: result.state.claudeModel, codex: model };
+  const claude = await claudeModelSource(result.state.claudeModel, process.env);
+  output.speakers = { labels: speakerLabels(claude.id, model.id, claude.source), claude, codex: model };
   if (view !== 'brief') {
     output.controller = result.state.controller;
     output.operations = operations;
@@ -343,6 +344,7 @@ async function diagnose(root) {
     verdict: !state.ok ? 'unknown' : activationVerified ? 'verified by a recorded turn on this version' : 'not verified: no turn recorded on this version'
   };
   const model = await codexModelSource(effective.config, process.env);
+  const claude = await claudeModelSource(state.state.claudeModel, process.env);
   process.stdout.write(`${JSON.stringify({
     plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown', loadedRoot: PLUGIN_ROOT, beta: true, installed, warnings: installWarnings },
     node: process.version,
@@ -352,11 +354,12 @@ async function diagnose(root) {
     activation,
     claude: {
       model: state.state.claudeModel,
+      modelSource: claude,
       lastSessionStart: state.state.sessionStartDiagnostic,
-      label: speakerLabels(state.state.claudeModel?.id, null).claude,
+      label: speakerLabels(claude.id, null, claude.source).claude,
       explanation: state.state.claudeModel
         ? 'Last hook-observed session model; retained on model-less same-session starts. Not a per-response served-model guarantee.'
-        : 'No valid session model recorded; using the plain Claude: fallback until SessionStart.model or PostModelSwitch.to_model supplies evidence.'
+        : claude.id ? 'Claude settings default, configured only; not verified for this session or response.' : 'No valid session evidence or configured default; Claude (model unknown).'
     },
     codex: {
       transport: 'official TypeScript SDK',
@@ -368,6 +371,7 @@ async function diagnose(root) {
     },
     effective: {
       networkAccessEnabled: effective.config.models.codex.networkAccessEnabled,
+      networkPolicyProvenance: 'Agent-proposed in 1.5.0 (3b1616e), not a host requirement. Default unchanged pending owner decision; native permissions remain authoritative.',
       repositoryRoot: effective.config.project.repositoryRoot,
       devServer: { available: true, override: effective.config.devServer },
       warnings: effective.warnings
@@ -392,7 +396,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
       if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('dev lifecycle requires healthy owner-selected work mode with no pending transition');
     };
     const result = await devControl(root, server, args, { authorize });
-    process.stdout.write(`${JSON.stringify({ ...result, warnings: effective.warnings.filter(item => item.includes('devServer')) })}\n`);
+    process.stdout.write(`${JSON.stringify({ ...result, notes: ['start', 'restart'].includes(args[0]) ? ['Review the selected script, lifecycle hooks, development target and effects before execution; detection is not a safety verdict.'] : [], warnings: effective.warnings.filter(item => item.includes('devServer')) })}\n`);
     return;
   }
   if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }

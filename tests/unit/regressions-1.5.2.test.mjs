@@ -37,7 +37,7 @@ test('1.5.2 dependency locks pin the exact SDK for marketplace auto-install', as
 test('1.5.2 operational delivery accepts multiple commit messages with quoted parentheses', async () => {
   const command = 'git commit -m "1.5.2 - prepare marketplace" -m "Why (installer reliability)" -m "Keep the \\"Beta\\" label"';
   assert.equal((await classify(command, operational)).decision, 'defer');
-  assert.equal((await classify(command)).decision, 'deny');
+  assert.equal((await classify(command)).decision, 'defer');
 });
 
 test('1.5.2 operational delivery accepts a quoted multiline commit message', async () => {
@@ -45,7 +45,7 @@ test('1.5.2 operational delivery accepts a quoted multiline commit message', asy
 
 Auto-installs the pinned SDK dependency (without weakening delivery guards)."`;
   assert.equal((await classify(command, operational)).decision, 'defer');
-  assert.equal((await classify(command)).decision, 'deny');
+  assert.equal((await classify(command)).decision, 'defer');
 });
 
 test('1.5.2 operational delivery accepts backslash-newline continuations between commit flags', async () => {
@@ -60,7 +60,7 @@ test('1.5.2 operational delivery accepts backslash-newline continuations between
   ];
   for (const command of commands) {
     assert.equal((await classify(command, operational)).decision, 'defer', command);
-    assert.equal((await classify(command)).decision, 'deny', command);
+    assert.equal((await classify(command)).decision, 'defer', command);
   }
 });
 

@@ -132,7 +132,7 @@ test('1.7.2 failed or cancelled SDK turns never claim delivered; Fable image rea
   await cancelOperation(queued.project, id, queued.env);
   assert.deepEqual((await readState(queued.project, queued.env)).state.operations[0].result.attachments, [{ index: 0, status: 'failed' }]);
   for (const [toolName, toolInput] of [['Read', { file_path: queued.image }], ['Bash', { command: `cat "${queued.image}"` }], ['mcp__service__read_file', { path: queued.image }]]) {
-    assert.equal((await classifyToolUse({ ...(await readState(queued.project, queued.env)), config: queued.config, env: queued.env, toolName, toolInput })).decision, 'deny');
+    assert.equal((await classifyToolUse({ ...(await readState(queued.project, queued.env)), config: queued.config, env: queued.env, toolName, toolInput })).decision, toolName === 'Read' ? 'deny' : 'defer');
   }
 });
 
@@ -145,7 +145,7 @@ test('1.7.2 schema 11 migration preserves queued attachments, relay and canonica
   delete legacy.operations[0].result.attachments;
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(f.project, f.env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 14);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 15);
   assert.equal(migrated.state.partner.thread.threadId, 'retained-canonical');
   assert.deepEqual(migrated.state.partner.thread.checkpoint, legacy.partner.thread.checkpoint);
   assert.deepEqual(migrated.state.contextEvidence, legacy.contextEvidence);

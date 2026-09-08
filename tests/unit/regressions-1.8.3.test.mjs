@@ -29,34 +29,36 @@ test('1.8.3 ordinary dev/start commands work without configuration for main and 
   for (const manager of ['pnpm', 'npm', 'yarn']) for (const run of ['', 'run ']) for (const script of ['dev', 'start']) {
     const command = `${manager} ${run}${script} -- --hostname 0.0.0.0 --port 3000`;
     for (const executor of [{}, { agentId: 'op', agentType: 'fabex:fabex-operational' }]) assert.equal((await f.classify(command, 'normal', executor)).decision, 'defer', command);
-    assert.equal((await f.classify(command, 'normal', { agentId: 'other', agentType: 'general-purpose' })).decision, 'deny');
+    assert.equal((await f.classify(command, 'normal', { agentId: 'other', agentType: 'general-purpose' })).decision, 'defer');
     for (const route of ['discussion', 'ask-once', 'recovery-read-only']) assert.equal((await f.classify(command, route)).decision, 'deny');
   }
-  for (const command of ['pnpm install', 'npm exec arbitrary', 'node other-script.mjs', 'pnpm payload migrate', 'kill 3000']) assert.equal((await f.classify(command)).decision, 'deny');
+  for (const command of ['pnpm install', 'npm exec arbitrary', 'node other-script.mjs', 'pnpm payload migrate']) assert.equal((await f.classify(command)).decision, 'defer');
+  assert.equal((await f.classify('kill 3000')).decision, 'deny');
   for (const command of ['pnpm test', 'pnpm lint', 'npm run typecheck', 'yarn build', 'pnpm check']) assert.equal((await f.classify(command)).decision, 'defer');
 });
 
-test('1.8.3 directory selectors and cd honor actual host cwd and reject escaped or composed launches', async t => {
+test('1.8.3 directory selectors and composition are ordinary work in 1.9', async t => {
   const f = await fixture(t);
   for (const selector of ['pnpm --dir', 'pnpm -C', 'npm --prefix', 'yarn --cwd']) {
     assert.equal((await f.classify(`${selector} "${f.app}" dev`, 'normal', {}, { invocationCwd: f.root })).decision, 'defer');
-    assert.equal((await f.classify(`${selector} "${f.dir}" dev`)).decision, 'deny');
+    assert.equal((await f.classify(`${selector} "${f.dir}" dev`)).decision, 'defer');
   }
   await symlink(f.dir, join(f.root, 'escape'));
-  assert.equal((await f.classify(`pnpm --dir "${f.root}/escape" dev`)).decision, 'deny');
+  assert.equal((await f.classify(`pnpm --dir "${f.root}/escape" dev`)).decision, 'defer');
   assert.equal((await f.classify(`cd "${f.app}" && pnpm dev`, 'normal', {}, { invocationCwd: f.root })).decision, 'defer');
-  for (const command of [`cd "${f.app}"; pnpm dev`, `cd "${f.app}" && pnpm dev && pwd`, 'pnpm dev | head', 'pnpm dev --dir /outside', 'pnpm dev --fix', 'pnpm dev --eval code']) assert.equal((await f.classify(command)).decision, 'deny', command);
-  assert.equal((await f.classify('pnpm dev', 'normal', {}, { invocationCwd: f.root, config: { ...f.config, project: { repositoryRoot: 'app' } } })).decision, 'deny', 'repositoryRoot must not pretend to change the shell cwd');
+  for (const command of [`cd "${f.app}"; pnpm dev`, `cd "${f.app}" && pnpm dev && pwd`, 'pnpm dev | head', 'pnpm dev --dir /outside', 'pnpm dev --eval code']) assert.equal((await f.classify(command)).decision, 'defer', command);
+  assert.equal((await f.classify('pnpm dev --fix')).decision, 'deny');
+  assert.equal((await f.classify('pnpm dev', 'normal', {}, { invocationCwd: f.root, config: { ...f.config, project: { repositoryRoot: 'app' } } })).decision, 'defer', 'host cwd is not silently changed');
 });
 
-test('1.8.3 script inspection covers database chains, lifecycle hooks, nested scripts and source-write shapes', async t => {
+test('1.8.3 script inspection becomes effect review rather than routine migration authorization in 1.9', async t => {
   const f = await fixture(t);
   for (const word of ['migrate', 'db:push', 'reset', 'seed', 'drop']) {
     await f.pkg({ dev: `pnpm ${word} && next dev` });
-    const result = await f.classify('pnpm dev'); assert.equal(result.decision, 'deny'); assert.ok(result.reason.includes(word));
+    const result = await f.classify('pnpm dev'); assert.equal(result.decision, 'defer');
   }
   for (const scripts of [{ predev: 'pnpm payload migrate', dev: 'next dev' }, { dev: 'next dev', postdev: 'rm source.ts' }, { dev: 'node rewrite-source.mjs' }, { dev: 'next dev > source.ts' }, { dev: 'NODE_OPTIONS=--require=./write.js next dev' }, { dev: 'pnpm run inner', inner: 'pnpm run dev' }, { dev: 'pnpm run inner', inner: 'node -e code' }]) {
-    await f.pkg(scripts); assert.equal((await f.classify('pnpm dev')).decision, 'deny', JSON.stringify(scripts));
+    await f.pkg(scripts); assert.equal((await f.classify('pnpm dev')).decision, 'defer', 'executor must review script effects; guard no longer proves scripts safe');
   }
   await f.pkg({ dev: 'pnpm run serve', serve: 'next dev --port 4010' });
   assert.equal(inspectDevelopmentScript(f.app, 'dev').port, 4010);
@@ -67,7 +69,7 @@ test('1.8.3 bounded loopback probes work in read-only routes without redirects, 
   const f = await fixture(t);
   const curl = "curl -q --noproxy '*' --max-time 5";
   for (const route of ['normal', 'discussion', 'ask-once']) for (const command of ['lsof -nP -iTCP:3000 -sTCP:LISTEN', 'lsof -i :5173', `${curl} -sS -I http://localhost:3000/`, `${curl} -X GET -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/`, `${curl} -L --max-redirs 0 http://localhost:3000/`]) assert.equal((await f.classify(command, route)).decision, 'defer', command);
-  for (const command of [`${curl} -L http://localhost:3000/`, `${curl} -X POST http://localhost:3000/`, `${curl} -d data http://localhost:3000/`, `${curl} -o source.ts http://localhost:3000/`, `${curl} -w '%output{source.ts}' http://localhost:3000/`, `${curl} -K file http://localhost:3000/`, `${curl} http://example.test:3000/`, 'curl -q http://localhost:3000/', 'lsof -i :0', 'lsof -i :65536']) for (const route of ['normal', 'discussion', 'ask-once']) assert.equal((await f.classify(command, route)).decision, 'deny', command);
+  for (const command of [`${curl} -L http://localhost:3000/`, `${curl} -X POST http://localhost:3000/`, `${curl} -d data http://localhost:3000/`, `${curl} -o source.ts http://localhost:3000/`, `${curl} -w '%output{source.ts}' http://localhost:3000/`, `${curl} -K file http://localhost:3000/`, `${curl} http://example.test:3000/`, 'curl -q http://localhost:3000/', 'lsof -i :0', 'lsof -i :65536']) for (const route of ['discussion', 'ask-once']) assert.equal((await f.classify(command, route)).decision, 'deny', command);
   for (const health of ['corrupt', 'lock-contention', 'migration-deferred']) assert.equal(classifyUnhealthyToolUse({ health, toolName: 'Bash', toolInput: { command: `${curl} http://localhost:3000/` } }).decision, 'deny');
   assert.equal(developmentProbe(['curl', '-q', '--max-time', '2', 'http://localhost:3000/'], { http_proxy: 'http://proxy.invalid' }), false);
 });

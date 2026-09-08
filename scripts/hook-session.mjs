@@ -7,7 +7,7 @@ import { formatMode, replyBadgeInstruction } from './lib/mode.mjs';
 import { rootFromHookInput } from './lib/paths.mjs';
 import { initializeState, readState, updateState } from './lib/state.mjs';
 import { recordOwnerPromptEvidence, notificationLikePrompt } from './lib/hook-evidence.mjs';
-import { codexModelSource, speakerLabels } from './lib/speakers.mjs';
+import { claudeModelSource, codexModelSource, speakerLabels } from './lib/speakers.mjs';
 
 async function readInput() {
   const chunks = [];
@@ -17,10 +17,10 @@ async function readInput() {
 
 export function renderSessionContext(route, participants, config, labels = speakerLabels(null, config.models?.codex?.model)) {
   const label = formatMode(route, participants);
-  const badge = `${replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always')} Labels: ${labels.claude} / ${labels.codex}; never invent models. Paste each complete Codex relayBlock before Claude's view; show Phase 2 corrections separately. Stop checks full answers and labels.`;
+  const badge = `${replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always')} Labels: ${labels.claude} / ${labels.codex}; never invent models. Owner-facing layout: mode badge first, Claude's own summary under its model-aware label, then the Codex relay pasted unchanged, then Decided, Action required, TODO (items tagged Claude or Codex); omit empty sections. Use ordinary paragraphs, no block quotes or routine none flags. Preserve material risks and disagreements; Decided contains only actual agreement. Stop verifies the newest cycle summary and label, with full-answer fallback for legacy records. Full phases remain available on request. In single-participant modes omit the absent partner's section.`;
   if (route === 'normal' && participants === 'both') {
     const joint = config.collaboration.jointByDefault ? 'on' : 'off';
-    return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Strict Phase 1 independent reading, then linked Phase 2 on the canonical Codex SDK thread. Never relay private reasoning or tool logs; only verbatim owner-visible context. Owner-only mode grants are single-use. Questions authorize answers only. Codex alone edits files; Claude project writes are denied without a structured owner-named executor exception. Report lifecycle status, verify thread.started, and delegate Git delivery to fabex-operational.`;
+    return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Strict Phase 1 independent reading, then linked Phase 2 on the canonical Codex SDK thread. Never relay private reasoning or tool logs; only verbatim owner-visible context. Owner-only mode grants are single-use. Questions authorize answers only. Codex alone authors source; Claude project writes are denied without a structured owner-named executor exception. Report lifecycle status, verify thread.started. Claude may deliver reviewed authorized Git changes directly under host permissions; fabex-operational is optional. Repeat bounded controller waits of at most 120 seconds (exit 3 means still working); never treat a wait timeout as completion.`;
   }
   if (route === 'normal' && participants === 'claude') {
     return `Fabex mode: ${label}. ${badge} Questions authorize answers only. Do not consult Codex or place raw Claude-only questions/answers in its checkpoint. For implementation, ask the owner to type /fabex:work; no AI may switch participants. Claude project writes are allowlist-controlled unless a structured owner-named executor exception is active. Delegate the full Git delivery lane to fabex-operational.`;
@@ -89,9 +89,9 @@ export async function main() {
       result = reverted.ok ? reverted : await readState(root, process.env);
     }
     const codexModel = await codexModelSource(effective.config, process.env);
-    const claudeModel = result.state?.claudeModel?.sessionId === input.session_id ? result.state.claudeModel.id : null;
+    const claudeModel = await claudeModelSource(result.state?.claudeModel?.sessionId === input.session_id ? result.state.claudeModel : null, process.env);
     let context = result.ok
-      ? renderSessionContext(result.state.route, result.state.participants, effective.config, speakerLabels(claudeModel, codexModel.id))
+      ? renderSessionContext(result.state.route, result.state.participants, effective.config, speakerLabels(claudeModel.id, codexModel.id, claudeModel.source))
       : result.health === 'migration-deferred'
         ? 'Fabex state migration is deferred while the already-loaded controller finishes its active operation. Use controller wait or non-mutating host monitoring; do not mutate state or bypass the migration gate.'
         : `Fabex state: ${result.health}. Route: recovery-read-only; use /fabex:recover.`;

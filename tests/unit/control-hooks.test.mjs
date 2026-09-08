@@ -79,7 +79,7 @@ test('session contexts describe SDK queue continuity and mechanical read-only di
   assert.match(work, /canonical Codex SDK thread/);
   assert.match(work, /Claude project writes are denied/);
   assert.match(work, /thread\.started/);
-  assert.ok(Buffer.byteLength(work, 'utf8') <= 900);
+  assert.ok(Buffer.byteLength(work, 'utf8') <= 2000);
   const discussion = renderSessionContext('discussion', 'both', config);
   assert.match(discussion, /read-only sandbox/);
   const claude = renderSessionContext('discussion', 'claude', config);
@@ -164,7 +164,7 @@ test('controls resolve subdirectories to owning workstream and diagnose pinned S
   assert.equal(checkpoint.code, 0, checkpoint.stderr);
   assert.deepEqual((await readState(project, env)).state.partner.thread.checkpoint.acceptedDecisions, ['from child']);
   const diagnosed = JSON.parse((await controlRun(project, env, 'diagnose')).stdout);
-  assert.equal(diagnosed.plugin.version, '1.8.3');
+  assert.equal(diagnosed.plugin.version, '1.9.1');
   assert.equal(diagnosed.codex.transport, 'official TypeScript SDK');
   assert.equal(diagnosed.codex.installed, true);
   assert.equal(diagnosed.codex.dependency, '0.153.4');

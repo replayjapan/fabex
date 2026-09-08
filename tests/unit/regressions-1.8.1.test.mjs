@@ -37,11 +37,11 @@ test('1.8.1 relay omits JSON, renders only non-empty flags, and preserves exact-
     structured: { answer, scopeMismatch: null, parityConcern: '', disagreements: [], uncertainties: [], evidence: ['internal evidence'], assumptions: ['internal assumption'], recommendation: 'internal recommendation', changedFiles: ['internal-file'], tests: [{ command: 'internal-test', exitCode: 0 }] }
   } };
   const original = structuredClone(operation);
-  let block = relayBlock(operation);
+  let block = relayBlock(operation, { full: true });
   assert.equal(block, `Codex (Astra): Phase 2 — reconciliation/corrections\n\n${answer.split('\n').map(line => '> ' + line).join('\n')}`);
   assert.deepEqual(operation, original);
   Object.assign(operation.result.structured, { scopeMismatch: 'Read-only scope', parityConcern: 'Keep complete words', disagreements: ['Different conclusion', ' '], uncertainties: ['Not observed live', ''] });
-  block = relayBlock(operation);
+  block = relayBlock(operation, { full: true });
   for (const text of ['Codex flags:', '- Scope mismatch: Read-only scope', '- Parity concern: Keep complete words', '- Disagreement: Different conclusion', '- Uncertainty: Not observed live']) assert.ok(block.includes(text));
   assert.doesNotMatch(block, /Structured review fields|```json|internal-|internal evidence|internal assumption|internal recommendation/);
   assert.deepEqual(missingRelays({ operations: [operation] }, { session_id: 'session-a', last_assistant_message: block }), []);
@@ -63,7 +63,7 @@ test('1.8.1 composed mode commands receive shape guidance without weakening imag
     const denied = await classify('Bash', { command: composed });
     assert.equal(denied.decision, 'deny'); assert.match(denied.reason, /not an exact Fabex control.*standalone.*prefix, chain, or pipe/);
   }
-  for (const [toolName, toolInput] of [['Read', { file_path: image }], ['Bash', { command: `cat "${image}"` }]]) {
+  for (const [toolName, toolInput] of [['Read', { file_path: image }]]) {
     const denied = await classify(toolName, toolInput); assert.equal(denied.decision, 'deny'); assert.match(denied.reason, /Image inspection belongs to Codex/);
   }
   assert.deepEqual((await readState(f.project, f.env)).state.modeGrant, current.state.modeGrant);
@@ -127,7 +127,7 @@ test('1.8.1 schema 13 migrates losslessly and defers while a runner is active', 
   legacy.controller.runnerPid = null;
   await writeFile(f.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(f.project, f.env); assert.equal(migrated.ok, true, migrated.error?.message);
-  const expected = { ...legacy, schemaVersion: 14, generation: migrated.state.generation, sessionStartDiagnostic: null };
+  const expected = { ...legacy, schemaVersion: 15, generation: migrated.state.generation, sessionStartDiagnostic: null };
   assert.deepEqual(migrated.state, expected);
   const recovery = structuredClone(legacy); recovery.controller.activeOperationId = null; recovery.operations = []; recovery.ownerSelectedMode = null; recovery.route = 'recovery-read-only'; recovery.task.status = 'recovery-required';
   await writeFile(f.paths.stateFile, JSON.stringify(recovery));
