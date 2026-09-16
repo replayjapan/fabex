@@ -60,8 +60,13 @@ startup reserve a per-workstream private slot in the Claude PreToolUse hook.
 Overlapping recognized host commands are denied with `heavy wait` guidance;
 repeat `control.mjs heavy wait --timeout 120` on exit 3 and retry automatically
 when ready, without another owner message. This is serialized admission, not a
-FIFO process launcher. Foreground completion/failure hooks release the slot;
-background tasks retain it until host task completion is observed. Never batch
+FIFO process launcher. Since 1.9.3, admission requests a host `updatedInput`
+wrapper around the admitted command, preserving cwd, environment and inherited
+stdio. It runs Bash in an owned process group; this is not a transparent wrapper
+for unexported interactive shell functions or detached daemons. Host permissions
+still apply. Identity/group inspection failures retain the record; status shows
+pending/unavailable wrapper acknowledgement rather than claiming interception.
+Completion hooks remain a fallback for the exact host tool/task. Never batch
 heavy commands in parallel, and use conservative worker counts where supported.
 The plugin's own test files run serially.
 
@@ -71,11 +76,39 @@ this is observed/instructed, **not native pre-execution enforcement**. Unrecogni
 wrappers, child workers, other workstreams and unrelated apps are outside this
 admission boundary. Host background-task event shapes need live verification.
 
+`heavy release <id>` clears bookkeeping only after the recorded job process is
+gone and its group is empty. It sends no signals. Unknown legacy records need
+an explicit owner message `recover heavy <exact-id>`; the main/operational
+executor then runs that control in work mode. Recovery records the authorization
+digest in checkpoint accepted decisions and a bounded private audit. Approval to
+implement a repair is not approval to clear an unidentified reservation.
+Alternatively, after explicit owner approval the main/operational executor may
+record the existing executor exception with scope `recover-heavy:<exact-id>` and
+the owner's reason, run recovery, then reconcile that exception. This follows
+the existing authorization-record trust model; it does not prove owner intent
+from arbitrary prose or require the owner to retype a long identifier.
+
+The SDK uses a launcher for its pinned native binary on supported macOS/Linux
+package layouts. It records that CLI's own group, not a parent-tree guess. Normal
+command completion clears its reservation. On interruption, only a verified
+dead process and empty group clear unfinished entries. Unsupported layouts retain
+the original SDK launch path with unknown identity. Detached subprocesses that
+leave that group are outside this evidence boundary; do not launch heavy daemons
+through foreground commands. Native host acceptance remains required.
+
+Both executor wait commands consume the shared 20-step continuation budget.
+Exit 3 means one slice elapsed; exit 4 means stop polling and inspect the blocker.
+Never turn exit 4 into another retry loop. Required review/relay is not waived:
+read a completed result or use the existing explicit cancellation/recovery path
+for genuinely stalled work. The bounded passive wake watcher uses valid
+120-second slices and does not spend executor retry budget.
+
 `control.mjs mem` is read-only, using only query probes (`memory_pressure -Q`,
 pressure-level sysctl, vm_stat, swapusage and bounded ps fields). Before admission,
 a sample no older than ten seconds denies critical pressure and warns at warn or
 unknown. Missing probes are explicitly unknown, not a low-memory estimate from
-free percentage. Before/after samples retain at most 32 entries; status, diagnose
+free percentage. Probes run outside private locks with a two-second total deadline;
+failure warns as unknown without failing the hook. Before/after samples retain at most 32 entries; status, diagnose
 and dev status expose the latest sample, and status/diagnose report runner and
 descendant RSS when available. These are precautions, not proven RAM savings or
 a guarantee against crashes. Unknown pressure currently warns rather than blocks.
@@ -97,6 +130,11 @@ heavy-job leases are reported after six hours but are not silently erased while
 their process might still be alive; confirm completion through the host first.
 See [1.9.2 acceptance](docs/acceptance-1.9.2.md) for automated evidence and the
 remaining real-host scheduling, resource and memory checks.
+See [1.9.3 recovery acceptance](docs/acceptance-1.9.3.md) before claiming the repair
+is live. Private locks publish immutable PID/start identity and reclaim only a
+verified dead owner. Generation-specific recovery claims protect replacement
+locks and remain as small private audit files; unknown legacy lock owners are
+not evicted. Heavy status/diagnose expose a saved lock-recovery warning.
 
 ### 1.9.0: routine development without command-by-command setup
 

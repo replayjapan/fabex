@@ -28,6 +28,10 @@ export function operationIdFromHookInput(input) {
   }
   return null;
 }
+export function wakeMessage(operation) {
+  const phase = operation.phase === 'independent' ? 'Phase 1' : operation.phase === 'reconcile' ? 'Phase 2' : 'turn';
+  return operation.status === 'completed' ? `Fabex: Codex finished ${phase}; read the result.` : `Fabex: Codex ${phase} ${operation.status}; inspect the result before recovery.`;
+}
 
 export async function main() {
   let root = null;
@@ -39,11 +43,13 @@ export async function main() {
     root = await rootFromHookInput(input, process.env);
     claimed = await claimWakeWatcher(root, operationId, process.pid, process.env);
     if (!claimed) { process.stdout.write('{}\n'); return; }
-    const waited = await waitForOperation(root, operationId, 580, process.env);
-    if (!waited.timedOut) {
-      const phase = waited.operation.phase ?? 'partner';
-      process.stderr.write(`Fabex ${phase} operation ${operationId} is ${waited.operation.status}. Read the bounded result or continue recovery.\n`);
-      process.exitCode = 2;
+    // Passive, bounded notification watcher, not an executor retry loop.
+    for (const seconds of [120, 120, 120, 120, 90]) {
+      const waited = await waitForOperation(root, operationId, seconds, process.env);
+      if (!waited.timedOut) {
+        process.stderr.write(`${wakeMessage(waited.operation)}\nResult: controller result --operation-id ${operationId}\n`);
+        process.exitCode = 2; break;
+      }
     }
   } catch {}
   finally { if (claimed && root) await releaseWakeWatcher(root, process.pid, process.env).catch(() => {}); }

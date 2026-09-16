@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.9.3 — 2026-09-16
+
+### Why
+
+A missing completion hook left a heavy reservation with no release path. Private
+locks lacked owner evidence, probes held those locks too long, repeated waits
+escaped the continuation budget, and common heavy-command shapes were missed.
+The wake hook also requested a duration the bounded controller rejected.
+
+### What it gave us
+
+Job-specific wrapper identities, evidence-based release and explicit owner-named
+recovery replace inferred death on restart, command-name scans or turn endings.
+Interrupted work stays visible until evidence supports recovery.
+
+### Tradeoffs
+
+No queue bypass, arbitrary process termination, permission change or crash-safety
+promise. Unknown process inspection retains reservations. Wrapper transparency,
+host background events and interrupted SDK groups need live acceptance. Heavy
+daemons that detach outside a managed group require their own lifecycle tracking.
+Unknown legacy locks are retained. Polling exhaustion does not waive review.
+
+### Changes
+
+- Wrap admitted host commands without auto-approving host permissions; record
+  actual child/group identity, completion and bounded recovery evidence.
+- Launch the pinned SDK binary in a tracked group where its package layout is
+  supported; never substitute a parent PID on interruption.
+- Reclaim verified-dead private locks with immutable generation claims; protect
+  live/replacement locks and retain unknown owners.
+- Move memory probes outside locks and enforce a two-second total deadline.
+- Charge executor waits to the existing budget; expand workspace/runner/script
+  recognition and name rejected parallel wrappers.
+- Distinguish recorded-by-digest, recorded-latest and substituted-recorded-original;
+  use factual wake progress text and valid bounded watcher slices.
+- Keep schema 16, network default, model labels and collaboration controls.
+- Add regression coverage and a combined acceptance checklist. Fixture passes
+  do not establish real-host wrapper/reload/interruption acceptance.
+
 ## 1.9.2 — 2026-09-16
 
 ### Why

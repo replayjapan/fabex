@@ -121,7 +121,7 @@ test('1.9.2 recorded digest and latest insert originals, ambiguous and absent re
   assert.equal((await resolveRecordedPrompt(root, { ownerMessage: text.replace(/\r\n /, '\n') }, state, env)).text, text);
   assert.equal((await resolveRecordedPrompt(root, { ownerMessage: text.replace('verify', 'verfy') }, state, env)).text, text);
   const substituted = await submitOperation(root, submissionEnvelope(text.replace('verify', 'verfy')), env, { spawnRunner: false });
-  assert.equal(substituted.messageResolution, 'substituted recorded original');
+  assert.equal(substituted.messageResolution, 'substituted-recorded-original');
   await assert.rejects(submitOperation(root, submissionEnvelope('Completely unrelated instruction that has no match.'), env, { spawnRunner: false }), /does not match/);
   await assert.rejects(resolveRecordedPrompt(root, { ownerMessageRef: 'latest' }, state, env), /missing or ambiguous/);
   await recordOwnerPromptEvidence(root, { prompt: 'A fresh owner task', session_id: 's' }, env);
@@ -168,7 +168,10 @@ test('1.9.2 real hook subprocesses reserve, deny overlap, clear failure and retr
     assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
   };
   const input = { hook_event_name: 'PreToolUse', tool_name: 'Bash', session_id: 's', tool_use_id: 'first', tool_input: { command: 'pnpm test' } };
-  assert.notEqual(run('hook-route-guard.mjs', input).hookSpecificOutput?.permissionDecision, 'deny');
+  const admitted = run('hook-route-guard.mjs', input).hookSpecificOutput;
+  assert.notEqual(admitted?.permissionDecision, 'deny');
+  assert.match(admitted.updatedInput.command, /heavy run --id/);
+  assert.match(admitted.updatedInput.command, /pnpm test/);
   assert.equal((await heavyStatus(root, env)).jobs.length, 1);
   assert.match(run('hook-route-guard.mjs', { ...input, tool_use_id: 'second' }).hookSpecificOutput.permissionDecisionReason, /heavy wait/);
   run('hook-heavy.mjs', { ...input, hook_event_name: 'PostToolUseFailure', error: 'fixture command failed' });

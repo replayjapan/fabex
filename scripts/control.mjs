@@ -16,7 +16,7 @@ import { cleanupWorkingCopy } from './lib/cleanup.mjs';
 import { devControl, parseDevArgs } from './lib/dev-server.mjs';
 import { detectDevelopment, developmentInvocation } from './lib/development.mjs';
 import { sampleMemory, processMemory } from './lib/memory.mjs';
-import { heavyStatus, waitHeavy } from './lib/heavy.mjs';
+import { heavyStatus, waitHeavy, runHeavy, releaseHeavy, recoverHeavy } from './lib/heavy.mjs';
 import { resourceList, retainResource, releaseResource } from './lib/resources.mjs';
 import { recentOwnerPromptEvidence } from './lib/hook-evidence.mjs';
 
@@ -236,6 +236,7 @@ async function config(root) {
 }
 
 async function recover(root, args) {
+  if (args[0] === 'heavy' && args.length === 2) { process.stdout.write(JSON.stringify({ released: await recoverHeavy(root, args[1]), evidence: 'owner-named', signalsSent: 0 }) + '\n'); return; }
   const action = args[0];
   if (action === 'clear-dead-lock' && args.length === 1) {
     const result = await clearDeadLock(root, process.env);
@@ -409,7 +410,18 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
   }
   if (command === 'heavy' && (args.length === 1 && ['status', 'wait'].includes(args[0]) || args.length === 3 && args[0] === 'wait' && args[1] === '--timeout' && /^\d+$/.test(args[2]))) {
     const result = args[0] === 'status' ? await heavyStatus(root) : await waitHeavy(root, Number(args[2] ?? 120));
-    process.stdout.write(JSON.stringify(result) + '\n'); if (result.ready === false) process.exitCode = 3; return;
+    process.stdout.write(JSON.stringify(result) + '\n'); if (result.ready === false) process.exitCode = result.budgetExhausted ? 4 : 3; return;
+  }
+  if (command === 'heavy' && ['run', 'release'].includes(args[0])) {
+    const { state } = await currentState(root);
+    if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('heavy execution/release requires owner-selected work mode');
+    if (args[0] === 'release' && args.length === 2) { process.stdout.write(JSON.stringify({ released: await releaseHeavy(root, args[1]), evidence: 'verified-process-and-group-ended', signalsSent: 0 }) + '\n'); return; }
+    if (args[0] === 'run' && args.length === 5 && args[1] === '--id' && args[3] === '--') {
+      const result = await runHeavy(root, args[2], args[4]);
+      if (result.retained) process.stderr.write('Fabex: completion identity/group evidence unavailable; reservation retained for inspection.\n');
+      process.exitCode = result.exitCode; return;
+    }
+    throw new ValidationError('heavy run --id <id> -- <single command argument> | heavy release <id>');
   }
   if (command === 'resources') {
     if (args.length === 1 && args[0] === 'list') { process.stdout.write(JSON.stringify(await resourceList(root)) + '\n'); return; }

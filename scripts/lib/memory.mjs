@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const exec = promisify(execFile);
-const run = async (file, args) => (await exec(file, args, { timeout: 2000, maxBuffer: 64 * 1024, env: { ...process.env, LC_ALL: 'C' } })).stdout;
+const run = async (file, args, options = {}) => (await exec(file, args, { timeout: 2000, maxBuffer: 64 * 1024, env: { ...process.env, LC_ALL: 'C' }, ...options })).stdout;
 
 export function parseMemory({ pressure = '', vm = '', swap = '', level = '' }, at = Date.now()) {
   const free = /free percentage:\s*(\d+)%/i.exec(pressure);
@@ -15,16 +15,23 @@ export function parseMemory({ pressure = '', vm = '', swap = '', level = '' }, a
   return { at: new Date(at).toISOString(), level: status, freePercent: free ? Number(free[1]) : null,
     swapUsage: swap.trim().slice(0, 256) || null, pageSize: Number(/page size of (\d+)/.exec(vm)?.[1]) || null, pages };
 }
-export async function sampleMemory({ execute = run, platform = process.platform, now = Date.now } = {}) {
+export async function sampleMemory({ execute = run, platform = process.platform, now = Date.now, timeoutMs = 2000 } = {}) {
   if (platform !== 'darwin') return { ...parseMemory({}, now()), warning: 'macOS memory probes unavailable on this platform' };
   const values = {}, errors = [];
+  const abort = new AbortController();
+  let timer;
+  const expired = new Promise((_, reject) => { timer = setTimeout(() => { abort.abort(); reject(new Error('probe deadline')); }, Math.min(2000, timeoutMs)); });
   // Query-only options: never -l, -p or -S (these generate pressure).
-  for (const [key, file, args] of [
+  try { for (const [key, file, args] of [
     ['level', '/usr/sbin/sysctl', ['-n', 'kern.memorystatus_vm_pressure_level']],
     ['pressure', '/usr/bin/memory_pressure', ['-Q']],
     ['vm', '/usr/bin/vm_stat', []], ['swap', '/usr/sbin/sysctl', ['vm.swapusage']]
-  ]) { try { values[key] = await execute(file, args); } catch { errors.push(key); } }
-  return { ...parseMemory(values, now()), ...(errors.length ? { warning: 'Unavailable probes: ' + errors.join(', ') } : {}) };
+  ]) {
+    try { values[key] = await Promise.race([execute(file, args, { signal: abort.signal }), expired]); }
+    catch { errors.push(key); if (abort.signal.aborted) break; }
+  } } finally { clearTimeout(timer); }
+  if (errors.length) values.level = '';
+  return { ...parseMemory(values, now()), ...(errors.length ? { warning: 'Memory probe incomplete or timed out; pressure unknown: ' + errors.join(', ') } : {}) };
 }
 export function memoryDecision(sample) {
   if (sample.level === 'critical') return { allowed: false, reason: `Critical memory pressure; free ${sample.freePercent ?? 'unknown'}%; ${sample.swapUsage ?? 'swap unknown'}. Wait and recheck; do not start another heavy job.` };

@@ -5,10 +5,12 @@ import { rootFromControlCwd } from './lib/paths.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 import { cancelOperation, claimNextOperation, claimRunner, operationStatus, releaseRunner, releaseRunnerIfIdle, runOperation, submitOperation } from './lib/sdk-controller.mjs';
 import { relayBlock } from './lib/review.mjs';
+import { consumeWaitBudget } from './lib/wait-budget.mjs';
+import { sdkLaunchOptions } from './lib/sdk-process.mjs';
 
-async function codexFactory(options) {
+async function codexFactory(options, context) {
   const { Codex } = await import('@openai/codex-sdk');
-  return new Codex(options);
+  return new Codex(sdkLaunchOptions(options, context));
 }
 
 function option(args, name) {
@@ -118,6 +120,12 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     if (args.length !== 4 || args[0] !== '--operation-id' || args[2] !== '--timeout') throw new ValidationError('wait requires exactly --operation-id <uuid> --timeout <seconds>');
     const id = assertUuid(args[1], 'operation id');
     if (!/^\d+$/.test(args[3]) || Number(args[3]) < 1 || Number(args[3]) > 120) throw new ValidationError('wait timeout must be an integer from 1 to 120 seconds');
+    const budget = await consumeWaitBudget(root, env);
+    if (budget.exhausted) {
+      const operation = boundedStatus(await operationStatus(root, id, env));
+      process.stdout.write(JSON.stringify({ ...operation, budgetExhausted: true, instruction: 'Stop polling. The completion wake remains active; required reconciliation and relay are not waived. Inspect a genuine stalled-operation blocker before recovery.' }) + '\n');
+      process.exitCode = terminal(operation.status) ? 0 : 4; return;
+    }
     const waited = await waitForOperation(root, id, Number(args[3]), env);
     process.stdout.write(`${JSON.stringify(waited.operation, null, 2)}\n`);
     if (waited.timedOut) process.exitCode = 3;

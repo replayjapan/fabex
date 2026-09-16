@@ -7,6 +7,7 @@ import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, rej
 import { loadEffectiveConfig, sourceVersion } from './config.mjs';
 import { modeGrantMatches, recentOwnerPromptEvidence, textDigest, recordAuthorizedPrompt, resolveRecordedPrompt } from './hook-evidence.mjs';
 import { heavyStatus, beginHeavy, finishHeavy, heavyShape } from './heavy.mjs';
+import { recoverSdkJobs } from './sdk-process.mjs';
 import { readState, updateState } from './state.mjs';
 import { ValidationError } from './validation.mjs';
 import { attachmentShape, selectedModeAttachments, validateAttachments, validateSubmissionAttachments } from './attachments.mjs';
@@ -524,7 +525,7 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
     const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', updated.paths.canonicalRoot], { detached: true, stdio: 'ignore', env });
     child.unref?.();
   }
-  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified, attachments: selection.statuses, ...(resolved.substituted ? { messageResolution: 'substituted recorded original' } : {}) };
+  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified, attachments: selection.statuses, ...(resolved.resolution ? { messageResolution: resolved.resolution } : {}) };
 }
 
 const CHECKPOINT_ARRAY_FIELDS = new Set(Object.keys(CHECKPOINT_ARRAY_LIMITS));
@@ -821,9 +822,9 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const attachments = validateAttachments(operation.request.attachments ?? [], before.paths.canonicalRoot, config, { sessionId: operation.result.relay?.sessionId ?? '', env });
     const input = attachments.length ? [{ type: 'text', text: prompt }, ...attachments.map((path) => ({ type: 'local_image', path }))] : prompt;
     const jobs = await heavyStatus(root, env);
-    const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork within the checkpoint budget; a review-cycle completion is not task completion.`;
+    const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. Exit 4 from wait means the shared continuation budget is exhausted: stop polling, inspect the blocker, preserve required review/relay. Never bypass an occupied queue. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork within the checkpoint budget; a review-cycle completion is not task completion.`;
     const initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling;
-    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } });
+    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
@@ -849,7 +850,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
         if (event.type === 'item.started' && heavyShape(event.item.command)) await beginHeavy(root, { id: jobId, command: event.item.command, executor: 'codex', observed: true }, env);
         if (event.type === 'item.completed') {
           const tracked = await heavyStatus(root, env);
-          if (tracked.jobs.some(job => job.id === jobId)) await finishHeavy(root, jobId, env);
+          if (tracked.jobs.some(job => job.id === jobId)) await finishHeavy(root, jobId, env, { evidence: 'sdk-command-completed', exitCode: event.item.exit_code ?? null });
         }
       }
       const response = finalResponseFromEvent(event);
@@ -881,7 +882,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const mismatch = error?.code === 'thread-mismatch';
     await finishOperation(root, operation.id, 'failed', { error: error?.message ?? String(error), threadId: expectedId, requiresRecovery: Boolean(missing || mismatch), attachmentDelivered }, env);
     throw error;
-  }
+  } finally { await recoverSdkJobs(root, operation.id, env).catch(() => {}); }
 }
 
 export async function cancelOperation(root, operationId, env = process.env) {

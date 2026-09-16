@@ -10,7 +10,7 @@ import { attachmentShape, validateAttachments } from './lib/attachments.mjs';
 import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 import { developmentProbe } from './lib/development.mjs';
-import { beginHeavy, heavyShape } from './lib/heavy.mjs';
+import { beginHeavy, heavyShape, wrappedHeavyInput } from './lib/heavy.mjs';
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
@@ -157,6 +157,8 @@ export function parseControlCommand(command) {
   const args = tokens.slice(2);
   if (args.length === 1 && ['mem', 'prompts'].includes(args[0])) return { kind: args[0] };
   if (args[0] === 'heavy' && args.length === 2 && ['status', 'wait'].includes(args[1])) return { kind: `heavy-${args[1]}` };
+  if (args[0] === 'heavy' && args[1] === 'release' && args.length === 3 && args[2].length <= 300) return { kind: 'heavy-release' };
+  if (args[0] === 'recover' && args[1] === 'heavy' && args.length === 3 && args[2].length <= 300) return { kind: 'heavy-recover' };
   if (args[0] === 'heavy' && args[1] === 'wait' && args.length === 4 && args[2] === '--timeout' && /^\d+$/.test(args[3]) && Number(args[3]) >= 1 && Number(args[3]) <= 120) return { kind: 'heavy-wait' };
   if (args[0] === 'resources' && args[1] === 'list' && args.length === 2) return { kind: 'resources-list' };
   if (args[0] === 'resources' && /^[A-Za-z0-9._:-]{1,160}$/.test(args[2] ?? '') && (args[1] === 'release' && args.length === 3 || args[1] === 'retain' && args.length === 5 && args[3] === '--note' && args[4].trim())) return { kind: `resources-${args[1]}` };
@@ -614,6 +616,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const controller = toolName === 'Bash' ? parseControllerCommand(toolInput.command, { participants: state.participants }) : null;
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
   if (['mem', 'prompts', 'resources-list', 'heavy-status', 'heavy-wait'].includes(control?.kind)) return defer();
+  if (['heavy-release', 'heavy-recover'].includes(control?.kind)) return state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt && (!(executor.agentId || executor.agentType) || isOperationalExecutor(executor)) ? defer() : deny('heavy recovery requires owner-selected work mode and main or operational executor');
   if (control?.kind === 'resources-release' && (executor.agentId || executor.agentType) && !isOperationalExecutor(executor)) return deny('resource shutdown requires the main or verified operational executor');
   if (['resources-retain', 'resources-release', 'checkpoint-continuation'].includes(control?.kind)) return state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt ? defer() : deny('resource and continuation changes require owner-selected work mode');
   if (control?.kind?.startsWith('dev-')) {
@@ -748,16 +751,17 @@ export async function main() {
       })
       : classifyUnhealthyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, health: stateResult.health });
     if (output.decision !== 'deny' && stateResult.ok && stateResult.state.route === 'normal' && input.tool_name === 'Bash' && heavyShape(input.tool_input?.command)) {
-      const admission = await beginHeavy(root, { id: input.tool_use_id ? `host:${input.session_id ?? ''}:${input.tool_use_id}` : '', command: input.tool_input.command, executor: input.agent_type ?? 'claude-main' });
+      const id = input.tool_use_id ? `host:${input.session_id ?? ''}:${input.tool_use_id}` : '';
+      const admission = await beginHeavy(root, { id, command: input.tool_input.command, executor: input.agent_type ?? 'claude-main', wrapperRequested: true, cwd: input.cwd ?? root });
       if (!admission.allowed) output = deny(admission.reason);
-      else if (admission.warning) output.warning = admission.warning;
+      else { output.updatedInput = wrappedHeavyInput(input.tool_input, id, CONTROL_PATH); if (admission.warning) output.warning = admission.warning; }
     }
   } catch {
     output = deny('route guard input or internal failure; use diagnose and recover');
   }
   process.stdout.write(output.decision === 'deny'
     ? `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: output.reason } })}\n`
-    : output.warning ? `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: output.warning } })}\n` : '{}\n');
+    : output.warning || output.updatedInput ? `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...(output.warning ? { additionalContext: output.warning } : {}), ...(output.updatedInput ? { updatedInput: output.updatedInput } : {}) } })}\n` : '{}\n');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

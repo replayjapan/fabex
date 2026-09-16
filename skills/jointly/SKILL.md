@@ -89,6 +89,20 @@ hooks reserve recognized commands atomically; Codex command events are recorded,
 not a native pre-execution guard. Other apps, workstreams and child workers still
 consume RAM. Unknown memory is a warning, never proof of safety.
 
+1.9.3: both executor wait commands consume the continuation budget. Exit 4 means
+stop polling, inspect the active job and report the actual blocker; do not loop
+on exit 4 or waive unfinished review/relay. The passive wake watcher remains
+bounded. A finished/cancelled turn is not proof its child jobs ended.
+Host heavy commands request an owned wrapper without bypassing host permissions.
+Inspect wrapper status. Use `heavy release <id>` only with verified process/group
+completion; unknown legacy records require an owner-typed `recover heavy <id>`
+before running that recovery control. This clears bookkeeping, never processes.
+An explicitly owner-approved, named `recover-heavy:<id>` executor exception is
+also supported; record the approval faithfully, never infer it from a general
+implementation request, and reconcile the exception after recovery.
+Never bypass the queue via another executor. A repair's implementation approval
+does not authorize clearing an unidentified record. Preserve needed previews.
+
 At checkpoints inspect `resources list`; release unused task-owned resources via
 `resources release <id>` or their native host controls, or use
 `resources retain <id> --note <reason>` for required previews. Confirm host task
@@ -99,8 +113,9 @@ native cleanup; closing a page is not proof the tooling process exited.
 Set `checkpoint open-work <item>` only for required, authorized, feasible steps.
 Use `checkpoint replace open-work` with a JSON array on stdin to replace it, and
 `checkpoint clear open-work` when done. Record genuine `owner-action-required` or
-`blocker` reasons and clear resolved ones. New owner prompts reset a 20-cycle/Stop-
-nudge budget and disarm old work; revalidate scope, never resume from stale TODOs.
+`blocker` reasons and clear resolved ones. New owner prompts reset a 20-step budget
+(cycles, Stop nudges and executor waits) and disarm old work; revalidate scope,
+never resume from stale TODOs.
 Continue on the recorded owner digest through both phases without another message
 until done, interrupted, genuinely blocked or budget-exhausted. A timeout is not
 completion. Report the exact rejection and remaining work if continuation fails.

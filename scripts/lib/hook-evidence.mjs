@@ -109,7 +109,8 @@ export async function resolveRecordedPrompt(root, envelope, state, env = process
     if (!candidates.length) return { text: envelope.ownerMessage, substituted: false };
   }
   if (candidates.length !== 1) throw new Error('recorded owner message missing or ambiguous; use its specific digest from control prompts, never reconstruct repeatedly');
-  return { text: candidates[0].text, substituted: envelope.ownerMessage !== candidates[0].text, digest: candidates[0].digest };
+  const resolution = envelope.ownerMessageDigest ? 'recorded-by-digest' : envelope.ownerMessageRef === 'latest' ? 'recorded-latest' : 'substituted-recorded-original';
+  return { text: candidates[0].text, substituted: resolution === 'substituted-recorded-original', resolution, digest: candidates[0].digest };
 }
 
 async function mutate(root, purpose, change, env) {

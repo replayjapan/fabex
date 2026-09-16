@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { rootFromHookInput } from './lib/paths.mjs';
 import { heavyStatus, finishHeavy, backgroundHeavy } from './lib/heavy.mjs';
 import { registerHostResource, completeHostResource } from './lib/resources.mjs';
+import { verifiedGone } from './lib/process-evidence.mjs';
 
 export async function recordToolCompletion(root, input, env = process.env, options = {}) {
   const id = input.tool_use_id ? `host:${input.session_id ?? ''}:${input.tool_use_id}` : null;
@@ -19,12 +20,14 @@ export async function recordToolCompletion(root, input, env = process.env, optio
   }
   if (input.tool_name === 'Bash' && input.tool_input?.run_in_background && input.hook_event_name === 'PostToolUse') return; // no proven task identity; retain reservation
   const status = await heavyStatus(root, env);
-  if (id && status.jobs.some(job => job.id === id)) await finishHeavy(root, id, env, options);
+  const completed = id && status.jobs.find(job => job.id === id);
+  if (completed && (!completed.identity || await verifiedGone(completed.identity, options))) await finishHeavy(root, id, env, { ...options, evidence: input.hook_event_name ?? 'host-completed' });
   const completedTask = input.tool_input?.task_id;
   if (input.hook_event_name === 'PostToolUse' && completedTask &&
     !response.error && !response.is_error && response.success !== false &&
     (input.tool_name === 'TaskStop' && (response.success === true || response.status === 'stopped' || response.task?.status === 'stopped') || input.tool_name === 'TaskOutput' && ['completed', 'failed', 'stopped'].includes(response.status ?? response.task?.status))) {
-    if (status.jobs.some(job => job.hostTaskId === completedTask)) await finishHeavy(root, completedTask, env, options);
+    const job = status.jobs.find(job => job.hostTaskId === completedTask);
+    if (job && (!job.identity || await verifiedGone(job.identity, options))) await finishHeavy(root, completedTask, env, { ...options, evidence: 'host-task-completed' });
     await completeHostResource(root, completedTask, env);
   }
 }
