@@ -5,7 +5,14 @@ description: Enter normal Claude conversation mode without automatic Codex consu
 
 # Work Claude
 
-Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+1.9.2: Run heavy operational jobs sequentially, inspect `control.mjs mem` and
+`heavy status`, and repeat `heavy wait` on exit 3 before retrying. Never ask the
+owner to send a message just to resume a waiting check. Inspect `resources list`,
+release unused owned tasks through verified controls and retain requested previews
+with a note. This does not grant Claude source authorship or invoke Codex. Do not
+copy raw Claude-only Q&A into the shared checkpoint or recorded-message forwarding.
+
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label, at most five sentences leading with outcome and failures; details on request; Action required only for a genuine owner decision or action, never a request to say continue; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
 
 This skill is owner-invoked. `UserPromptExpansion` captures trailing command text byte-for-byte in private grant state without template interpolation. Use its grant exactly once with `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode normal --participants claude --grant <provided-id>`. The command consumes the grant only after success; with text it prints `OWNER MESSAGE (verbatim)` after the mode changes, and only then may Claude answer it. If an older Codex operation is active, wait for the named operation to stop and rerun the exact mode command; the paused grant and text remain valid. With no text it changes mode only. If no grant is present, do not change mode. Show the mode message and configured badge.
 

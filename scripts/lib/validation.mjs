@@ -3,7 +3,7 @@ import { isValidMode, PARTICIPANTS } from './mode.mjs';
 import { attachmentShape } from './attachments.mjs';
 import { validReview } from './review.mjs';
 
-export const STATE_SCHEMA_VERSION = 15;
+export const STATE_SCHEMA_VERSION = 16;
 export const ROUTES = new Set(['normal', 'discussion', 'ask-once', 'recovery-read-only']);
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK_STATUSES = new Set([null, 'active', 'completed', 'partner-unavailable', 'recovery-required']);
@@ -45,12 +45,14 @@ function validFingerprint(value) {
 }
 
 function validateCheckpoint(checkpoint, projectRoot, errors) {
-  const keys = ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'repoFingerprintCapturedAt', 'updatedAt', 'fieldUpdatedAt'];
+  const keys = ['objective', 'currentTask', 'constraints', 'acceptedDecisions', 'relevantFiles', 'implementationStatus', 'testStatus', 'unresolvedProblems', 'nextAction', 'repoFingerprint', 'repoFingerprintCapturedAt', 'updatedAt', 'fieldUpdatedAt', 'openWork', 'ownerActionRequired', 'blocker', 'continuation'];
   if (!hasExactKeys(checkpoint, keys)) { errors.push('partner checkpoint shape is invalid'); return; }
-  for (const key of ['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction']) {
+  for (const key of ['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction', 'ownerActionRequired', 'blocker']) {
     if (!boundedNullableString(checkpoint[key], 8192)) errors.push(`checkpoint ${key} is invalid`);
   }
   for (const [field, limit] of Object.entries(CHECKPOINT_ARRAY_LIMITS)) if (!boundedStrings(checkpoint[field], limit.count, limit.bytes)) errors.push(`checkpoint ${field} is invalid`);
+  const c = checkpoint.continuation;
+  if (!hasExactKeys(c, ['used', 'limit', 'ownerDigest', 'armed']) || typeof c.armed !== 'boolean' || !Number.isInteger(c.used) || c.used < 0 || c.used > 20 || c.limit !== 20 || c.ownerDigest !== null && !/^[a-f0-9]{64}$/.test(c.ownerDigest)) errors.push('checkpoint continuation is invalid');
   if (!validFingerprint(checkpoint.repoFingerprint)) errors.push('checkpoint repoFingerprint is invalid');
   if (!nullableIsoString(checkpoint.repoFingerprintCapturedAt)) errors.push('checkpoint repoFingerprintCapturedAt is invalid');
   if (!nullableIsoString(checkpoint.updatedAt)) errors.push('checkpoint updatedAt is invalid');

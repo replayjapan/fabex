@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.9.2 — 2026-09-16
+
+### Why
+
+The owner reported premature handoffs, repeated exact-message reconstruction and
+RAM incidents during overlapping heavy work. Completion of a partner cycle did
+not establish completion of the authorized task; mode-command text was missing
+from reusable prompt evidence. Reports were also too long.
+
+### What it gave us
+
+Recorded-message references and duplicate-safe submission retries remove the
+retyping chore. Bounded checkpoint continuation keeps authorized work moving.
+Heavy-command admission, memory sampling and owned-resource accounting introduce
+RAM precautions without asking the owner to restart every batch.
+
+### Tradeoffs
+
+Host hooks serialize recognized heavy commands per workstream, not arbitrary
+child workers or unrelated apps. SDK commands are observed and instructed, not
+mechanically intercepted before execution. Unknown pressure warns; missing host
+completion evidence retains a reservation rather than guessing the process died.
+Expired leases are diagnostic, not automatic eviction. Background host tasks and
+the owned server are tracked; other browser/MCP processes need native cleanup.
+No measured savings or crash-prevention claim is made. Prompt text now has
+explicit private bounded retention; Claude-only raw Q&A remains excluded.
+
+### Changes
+
+- Add atomic heavy-job reservations, completion hooks, repeated bounded wait,
+  query-only macOS pressure/swap/RSS reporting and bounded before/after samples.
+- Add resource list/retain/release with ownership verification and checkpoint
+  warnings; never stop requested previews or unrelated processes automatically.
+- Add open work, genuine action/blocker fields and a 20-cycle/Stop-nudge budget;
+  new owner prompts disarm stale work until scope is revalidated.
+- Record consumed mode-command task text and forward original messages by digest
+  or unambiguous latest reference; unique small mismatches substitute originals.
+- Keep reports to outcomes and next steps with a five-sentence Claude guideline.
+- Run plugin test files serially; migrate checkpoints losslessly to schema 16,
+  preserving the live-runner migration gate and all collaboration controls.
+
+
 ## 1.9.1 — 2026-09-08
 
 ### Why

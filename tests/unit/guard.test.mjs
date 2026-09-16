@@ -91,7 +91,7 @@ test('control parser permits current checkpoint, mode, diagnostic, and recovery 
   assert.equal(parseControlCommand(`node ${control} recover retry --operation-id ${id}`), null);
 });
 
-test('1.9.1 GitHub push and gh permit main or verified operational executor only', async (t) => {
+test('1.9.2 GitHub push and gh permit main or verified operational executor only', async (t) => {
   const ctx = await fixture(t);
   for (const command of ['git push origin main', 'git send-pack origin', 'git lfs push origin main', 'gh pr create']) assert.ok(protectedGithubOperation(command), command);
   assert.equal((await classify(ctx, 'Bash', { command: 'git push origin main' })).decision, 'defer');

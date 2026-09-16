@@ -15,8 +15,12 @@ import { claudeModelSource, codexModelSource, speakerLabels } from './lib/speake
 import { cleanupWorkingCopy } from './lib/cleanup.mjs';
 import { devControl, parseDevArgs } from './lib/dev-server.mjs';
 import { detectDevelopment, developmentInvocation } from './lib/development.mjs';
+import { sampleMemory, processMemory } from './lib/memory.mjs';
+import { heavyStatus, waitHeavy } from './lib/heavy.mjs';
+import { resourceList, retainResource, releaseResource } from './lib/resources.mjs';
+import { recentOwnerPromptEvidence } from './lib/hook-evidence.mjs';
 
-const USAGE = 'Usage: control.mjs status [--all|--brief] | config | diagnose | dev start|stop|restart|status|logs [--lines 1..400] | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
+const USAGE = 'Usage: control.mjs mem | prompts | heavy status|wait [--timeout 1..120] | resources list|retain <id> --note <reason>|release <id> | status [--all|--brief] | config | diagnose | dev start|stop|restart|status|logs [--lines 1..400] | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
 const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
 
 async function currentState(root) {
@@ -87,6 +91,8 @@ async function status(root, view = 'default') {
   const selected = view === 'all' ? result.state.operations : result.state.operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status) || terminal.includes(operation));
   const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle, usage, result: operationResult }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle, usage, reviewStructured: Boolean(operationResult.structured), relayStatus: operationResult.relay?.status ?? null, resultWarning: operationResult.warning, attachments: operationResult.attachments }));
   const output = {
+    memory: { ...(await heavyStatus(root)), processes: await processMemory(result.state.controller.runnerPid) },
+    resources: await resourceList(root),
     health: result.health,
     ...(result.lock ? { lock: result.lock } : {}),
     route: result.state.route,
@@ -130,7 +136,8 @@ const FIELD_NAMES = new Map([
   ['objective', 'objective'], ['current-task', 'currentTask'], ['constraint', 'constraints'],
   ['decision', 'acceptedDecisions'], ['relevant-file', 'relevantFiles'],
   ['implementation-status', 'implementationStatus'], ['test-status', 'testStatus'],
-  ['unresolved-problem', 'unresolvedProblems'], ['next-action', 'nextAction']
+  ['unresolved-problem', 'unresolvedProblems'], ['next-action', 'nextAction'],
+  ['open-work', 'openWork'], ['owner-action-required', 'ownerActionRequired'], ['blocker', 'blocker']
 ]);
 
 async function stdinJson(limit = MAX_RECOVERY_SEED_BYTES) {
@@ -158,6 +165,13 @@ async function checkpoint(root, args) {
   }
   const current = await currentState(root);
   const value = current.state.partner.thread.checkpoint;
+  if (args[0] === 'clear' && args.length === 2 && ['open-work', 'owner-action-required', 'blocker'].includes(args[1])) {
+    if (current.state.route !== 'normal') throw new ValidationError('continuation updates require work mode');
+    const field = FIELD_NAMES.get(args[1]);
+    if (field === 'openWork') await replaceCheckpointArray(root, field, [], process.env);
+    else await snapshotCheckpoint(root, { [field]: null }, process.env);
+    process.stdout.write(JSON.stringify({ cleared: field }) + '\n'); return;
+  }
   if (args[0] === 'capacity' && args.length === 1) {
     process.stdout.write(`${JSON.stringify(checkpointCapacity(value, root), null, 2)}\n`);
     return;
@@ -179,7 +193,7 @@ async function checkpoint(root, args) {
   if (args[0] === 'snapshot' && args.length === 1) {
     const snapshot = await stdinJson();
     const updated = await snapshotCheckpoint(root, snapshot, process.env);
-    process.stdout.write(`${JSON.stringify({ recorded: true, fields: Object.keys(snapshot), ...checkpointCapacity(updated, root).seed })}\n`);
+    process.stdout.write(`${JSON.stringify({ recorded: true, fields: Object.keys(snapshot), ...checkpointCapacity(updated, root).seed, resourceWarnings: (await resourceList(root)).warnings })}\n`);
     return;
   }
   if (args.length !== 2 || !FIELD_NAMES.has(args[0])) throw new ValidationError('checkpoint requires <field> <bounded-value>');
@@ -347,6 +361,8 @@ async function diagnose(root) {
   const claude = await claudeModelSource(state.state.claudeModel, process.env);
   process.stdout.write(`${JSON.stringify({
     plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown', loadedRoot: PLUGIN_ROOT, beta: true, installed, warnings: installWarnings },
+    memory: { ...(await heavyStatus(root)), processes: await processMemory(state.state.controller.runnerPid) },
+    resources: await resourceList(root),
     node: process.version,
     platform: { value: platform(), support: platform() === 'darwin' ? 'macOS supported' : platform() === 'win32' ? 'Windows experimental' : 'not documented as supported' },
     hooks: { configPresentAndValidJson: hooksValid },
@@ -382,6 +398,31 @@ async function diagnose(root) {
 export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
   const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
+  if (command === 'mem' && args.length === 0) {
+    const { readPrivate, sidecar } = await import('./lib/private-store.mjs');
+    const state = await readPrivate(await sidecar(root, 'state.json', process.env), null, 8 * 1024 * 1024);
+    process.stdout.write(JSON.stringify({ ...await sampleMemory(), processes: await processMemory(state?.controller?.runnerPid) }) + '\n'); return;
+  }
+  if (command === 'prompts' && args.length === 0) {
+    const entries = await recentOwnerPromptEvidence(root);
+    process.stdout.write(JSON.stringify(entries.map(({ digest, bytes, capturedAt, text, sessionId }) => ({ digest, bytes, capturedAt, sessionId, preview: text?.slice(0, 60) ?? null, available: typeof text === 'string' }))) + '\n'); return;
+  }
+  if (command === 'heavy' && (args.length === 1 && ['status', 'wait'].includes(args[0]) || args.length === 3 && args[0] === 'wait' && args[1] === '--timeout' && /^\d+$/.test(args[2]))) {
+    const result = args[0] === 'status' ? await heavyStatus(root) : await waitHeavy(root, Number(args[2] ?? 120));
+    process.stdout.write(JSON.stringify(result) + '\n'); if (result.ready === false) process.exitCode = 3; return;
+  }
+  if (command === 'resources') {
+    if (args.length === 1 && args[0] === 'list') { process.stdout.write(JSON.stringify(await resourceList(root)) + '\n'); return; }
+    const authorize = async () => {
+      const { state } = await currentState(root);
+      if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('resource changes require owner-selected work mode');
+    };
+    await authorize();
+    const result = args[0] === 'retain' && args.length === 4 && args[2] === '--note' ? await retainResource(root, args[1], args[3])
+      : args[0] === 'release' && args.length === 2 ? await releaseResource(root, args[1], { authorize }) : null;
+    if (!result) throw new ValidationError('resources list | retain <id> --note <reason> | release <id>');
+    process.stdout.write(JSON.stringify(result) + '\n'); return;
+  }
   if (command === 'dev') {
     parseDevArgs(args);
     const effective = await loadEffectiveConfig(root, process.env);
@@ -396,7 +437,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
       if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('dev lifecycle requires healthy owner-selected work mode with no pending transition');
     };
     const result = await devControl(root, server, args, { authorize });
-    process.stdout.write(`${JSON.stringify({ ...result, notes: ['start', 'restart'].includes(args[0]) ? ['Review the selected script, lifecycle hooks, development target and effects before execution; detection is not a safety verdict.'] : [], warnings: effective.warnings.filter(item => item.includes('devServer')) })}\n`);
+    process.stdout.write(`${JSON.stringify({ ...result, ...(args[0] === 'status' ? { memory: (await heavyStatus(root)).latestSample } : {}), notes: ['start', 'restart'].includes(args[0]) ? ['Review the selected script, lifecycle hooks, development target and effects before execution; detection is not a safety verdict.'] : [], warnings: effective.warnings.filter(item => item.includes('devServer')) })}\n`);
     return;
   }
   if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }

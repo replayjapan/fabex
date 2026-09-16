@@ -5,9 +5,10 @@ export const CHECKPOINT_ARRAY_LIMITS = Object.freeze({
   constraints: { count: 24, bytes: 4096 },
   acceptedDecisions: { count: 24, bytes: 4096 },
   relevantFiles: { count: 64, bytes: 1024 },
-  unresolvedProblems: { count: 24, bytes: 4096 }
+  unresolvedProblems: { count: 24, bytes: 4096 },
+  openWork: { count: 24, bytes: 1024 }
 });
-export const CHECKPOINT_TEXT_FIELDS = Object.freeze(['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction']);
+export const CHECKPOINT_TEXT_FIELDS = Object.freeze(['objective', 'currentTask', 'implementationStatus', 'testStatus', 'nextAction', 'ownerActionRequired', 'blocker']);
 export const CHECKPOINT_MUTABLE_FIELDS = Object.freeze([...CHECKPOINT_TEXT_FIELDS, ...Object.keys(CHECKPOINT_ARRAY_LIMITS)]);
 
 export function emptyFieldUpdatedAt() {
@@ -25,6 +26,8 @@ export function emptyCheckpoint() {
     testStatus: null,
     unresolvedProblems: [],
     nextAction: null,
+    openWork: [], ownerActionRequired: null, blocker: null,
+    continuation: { used: 0, limit: 20, ownerDigest: null, armed: false },
     repoFingerprint: { branch: null, head: null, dirty: null },
     repoFingerprintCapturedAt: null,
     updatedAt: null,

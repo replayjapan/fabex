@@ -5,7 +5,7 @@ description: Use for every owner cycle in both-participant modes; preserve Codex
 
 # Jointly
 
-Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label, at most five sentences leading with outcome and failures; details on request; Action required only for a genuine owner decision or action, never a request to say continue; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
 
 Phone uploads (1.8.0): when the host supplies an upload file reference for the current owner message, forward that exact path in the independent Phase 1 `attachments` array without opening or describing the image. Do not put the host note in `ownerMessage`; preserve the owner's bare text and digest. Do not scan uploads, guess the newest file, or reuse another message's photo. The controller permits only the hook-recorded session's directory under `CLAUDE_CONFIG_DIR/uploads` (default Claude config directory when unset), not sibling sessions. Images are limited to six and 16 MiB each; unsupported formats must be converted through an authorized workflow, never silently omitted. If validation fails, stop visibly and report the error; never retry the same request as text-only. Before running a mode command, forward each current host upload reference as a repeated --attach argument alongside the owner grant; never start Phase 1 first and add the missing image in Phase 2. Host-note forwarding is coordination, not an automatic hook capture or proof of current-message attachment provenance.
 
@@ -21,7 +21,7 @@ Never relay private reasoning or tool logs; always relay owner-visible replies v
 
 For a mode command, the owner can explicitly select an image with a separate trailing line `attach: /absolute/approved/image.png`. These lines and explicit mode --attach arguments become attachments; ordinary path mentions do not. The full owner text, including those lines, remains verbatim. Invalid selections keep the grant and text unused and produce a visible error; fix the selected file and retry the same mode command. Fable must not inspect the file to forward its path. Host-provided inline images and disguised file content remain platform limitations.
 
-Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label, at most five sentences leading with outcome and failures; details on request; Action required only for a genuine owner decision or action, never a request to say continue; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
 
 Both phase JSON envelopes optionally accept `attachments`, an array of at most six absolute png/jpg/jpeg/webp/gif file paths, each at most 16 MiB. Paths must resolve inside the workstream/repository or configured externalWriteRoots. Use only owner-approved images; do not annotate or insert your current opinion in Phase 1 images. Fable forwards approved paths without reviewing their images. Keep files stable until execution. Attachment metadata paths are erased on terminal state, not from verbatim owner text or SDK history. No image bytes enter Fabex state. No attachment means text-only behavior is unchanged.
 
@@ -46,7 +46,7 @@ From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`.
 
 Phase 1 is strict JSON with the fields below plus optional `attachments` and UUID `requestId`. Prefer `previousReplyStatus: "recorded"` so the controller inserts the complete session-bound Stop reply, or explicitly reports it unavailable. Do not reproduce a long reply by hand. Keep `requestId` and the entire serialized submission unchanged on a retry; use a new ID for a new owner message. `previousReply` means Claude's previous owner-visible reply, which the owner has already seen—not Claude's current analysis. Use `previousReplyStatus: "none"` only when none exists.
 
-The prompt hook ignores task/system/reminder/local-command notification payloads and retains a private ring of eight recent owner-prompt digests. This permits queued legitimate owner messages without relaying or storing their text. Never submit a notification as `ownerMessage`.
+The prompt hook ignores task/system/reminder/local-command notifications. It retains up to eight private owner records with bounded original text (except Claude-only Q&A). Use `control.mjs prompts` to identify the specific digest, then `ownerMessageStatus: "recorded"` and `ownerMessageDigest` instead of retyping. `ownerMessageRef: "latest"` is valid only for one unambiguous candidate newer than the last cycle. Never submit a notification as owner authority. Small supplied-text differences select a unique recorded original, never altered wording. The consumed mode grant's task text is reusable; no universal one-message/one-cycle limit exists. Reuse a requestId only for technical retries of the same submission, not for a new continuation cycle.
 
 ```json
 {"phase":"independent","ownerMessage":"owner words verbatim","previousReplyStatus":"provided","previousReply":"previous owner-visible reply verbatim"}
@@ -77,6 +77,34 @@ The controller verifies the first `thread.started` event and requires its `threa
 The `PostToolUse` wake hook starts at most one watcher per project and wakes Claude at a terminal phase when supported. Each async hook is a process, so `wait` remains the deterministic fallback and process/RAM accumulation remains a dogfood gate.
 
 ## Implement lane
+
+### 1.9.2 task continuity and RAM precautions
+
+Before each heavy check, build, install, migration or server startup, inspect
+`control.mjs heavy status` and `control.mjs mem`. Do not batch heavy jobs in
+parallel tool calls or shell backgrounds; use conservative worker counts. When
+occupied or critical, run `control.mjs heavy wait --timeout 120`, repeat exit 3,
+then retry automatically without asking the owner to send another message. Host
+hooks reserve recognized commands atomically; Codex command events are recorded,
+not a native pre-execution guard. Other apps, workstreams and child workers still
+consume RAM. Unknown memory is a warning, never proof of safety.
+
+At checkpoints inspect `resources list`; release unused task-owned resources via
+`resources release <id>` or their native host controls, or use
+`resources retain <id> --note <reason>` for required previews. Confirm host task
+completion. Never kill by port or guessed PID, and never erase an old lease merely
+because time passed. Browser/MCP contexts outside tracked host tasks require their
+native cleanup; closing a page is not proof the tooling process exited.
+
+Set `checkpoint open-work <item>` only for required, authorized, feasible steps.
+Use `checkpoint replace open-work` with a JSON array on stdin to replace it, and
+`checkpoint clear open-work` when done. Record genuine `owner-action-required` or
+`blocker` reasons and clear resolved ones. New owner prompts reset a 20-cycle/Stop-
+nudge budget and disarm old work; revalidate scope, never resume from stale TODOs.
+Continue on the recorded owner digest through both phases without another message
+until done, interrupted, genuinely blocked or budget-exhausted. A timeout is not
+completion. Report the exact rejection and remaining work if continuation fails.
+No mode changes, approval invention, or prompt reconstruction loops.
 
 1. Submit strict Phase 1 without Claude's current view.
 2. Read the stored independent result, compare it with Claude's review, and adjust the plan when evidence warrants it.

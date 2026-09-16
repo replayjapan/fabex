@@ -58,6 +58,9 @@
     ],
     "PostToolUse": [
       {
+        "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-heavy.mjs"] }]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -70,6 +73,8 @@
         ]
       }
     ],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-heavy.mjs"] }] }],
+    "PermissionDenied": [{ "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook-heavy.mjs"] }] }],
     "Stop": [
       {
         "hooks": [

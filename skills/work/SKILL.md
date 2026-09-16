@@ -5,7 +5,14 @@ description: Enter normal joint work mode, where Claude and Codex use Fabex rout
 
 # Work
 
-Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+1.9.2: Follow the RAM and bounded-continuation section in `/fabex:jointly`.
+Use recorded owner-message digests; mode-command task text is reusable. Heavy
+jobs wait and retry automatically, not in parallel batches. Inspect memory and
+owned resources; retain requested previews with a note. Set only authorized,
+feasible open-work and keep both phases running until completion, a genuine
+blocker or the continuation budget. A new owner message disarms old task work.
+
+Owner-facing reply: mode badge first; Claude-authored summary with model-aware label, at most five sentences leading with outcome and failures; details on request; Action required only for a genuine owner decision or action, never a request to say continue; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
 
 This skill is owner-invoked. `UserPromptExpansion` captures command arguments byte-for-byte in private grant state and supplies a single-use grant ID; the Fabex template does not interpolate that text. If no grant is present, do not change mode. Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs config`, then `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs mode normal --participants both --grant <provided-id>` from the resolved workstream root and show the mode message. The atomic mode command consumes the grant only after success. With no trailing text it changes mode only. With text it prints a Phase 1 operation ID: wait for it, read its result (which returns the retained owner message), then submit Phase 2 normally. If an older Codex operation is active, wait for the named active operation; Fabex then applies the transition and creates the reserved Phase 1 automatically. Apply the configured reply badge. Both means every owner cycle uses independent Phase 1 followed by linked Phase 2 on the canonical verified Codex SDK thread; implementation phases use `workspace-write`, and mode changes never replace the thread ID.
 

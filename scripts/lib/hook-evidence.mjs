@@ -3,10 +3,11 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs
 import { join } from 'node:path';
 import { projectPaths } from './paths.mjs';
 import { readState, updateState } from './state.mjs';
+import { changePrivate, readPrivate } from './private-store.mjs';
 
 export const MODE_GRANT_TTL_MS = 60_000;
 export const OWNER_PROMPT_RING_LIMIT = 8;
-const OWNER_PROMPT_RING_BYTES = 16 * 1024;
+const OWNER_PROMPT_RING_BYTES = 2 * 1024 * 1024;
 const NOTIFICATION_PROMPT_RE = /<task-notification>|\[SYSTEM NOTIFICATION|<system-reminder>|<local-command-caveat>/i;
 
 const MODE_SKILLS = new Map([
@@ -44,7 +45,8 @@ function validRingEntry(value) {
   return value && typeof value === 'object' && /^[a-f0-9]{64}$/.test(value.digest ?? '')
     && Number.isSafeInteger(value.bytes) && value.bytes >= 0
     && typeof value.capturedAt === 'string' && !Number.isNaN(Date.parse(value.capturedAt))
-    && typeof value.sessionId === 'string' && value.sessionId.length <= 256;
+    && typeof value.sessionId === 'string' && value.sessionId.length <= 256
+    && (value.text === undefined || typeof value.text === 'string' && Buffer.byteLength(value.text) <= 192 * 1024 && textDigest(value.text) === value.digest && Buffer.byteLength(value.text) === value.bytes);
 }
 
 async function promptRingPath(root, env) {
@@ -57,25 +59,57 @@ export async function recentOwnerPromptEvidence(root, env = process.env) {
   try {
     const info = await stat(file);
     if (!info.isFile() || info.size > OWNER_PROMPT_RING_BYTES) return [];
-    const parsed = JSON.parse(await readFile(file, 'utf8'));
+    const parsed = await readPrivate(file, { schemaVersion: 1, entries: [] }, OWNER_PROMPT_RING_BYTES);
     if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.entries)) return [];
     return parsed.entries.filter(validRingEntry).slice(-OWNER_PROMPT_RING_LIMIT);
   } catch { return []; }
 }
 
 async function appendOwnerPromptEvidence(root, evidence, env) {
-  const { directory, file } = await promptRingPath(root, env);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700);
-  const entries = [...await recentOwnerPromptEvidence(root, env), evidence].slice(-OWNER_PROMPT_RING_LIMIT);
-  const value = `${JSON.stringify({ schemaVersion: 1, entries })}\n`;
-  if (Buffer.byteLength(value, 'utf8') > OWNER_PROMPT_RING_BYTES) throw new Error('owner prompt evidence ring exceeds its private storage limit');
-  const temporary = `${file}.tmp.${process.pid}.${randomUUID()}`;
-  try {
-    await writeFile(temporary, value, { flag: 'wx', mode: 0o600 });
-    await chmod(temporary, 0o600);
-    await rename(temporary, file);
-  } finally { await unlink(temporary).catch(() => {}); }
+  return changePrivate(root, 'owner-prompt-digests.json', { schemaVersion: 1, entries: [] }, data => {
+    data.entries = [...data.entries.filter(validRingEntry).filter(entry => entry.digest !== evidence.digest || entry.sessionId !== evidence.sessionId), evidence].slice(-OWNER_PROMPT_RING_LIMIT);
+    while (Buffer.byteLength(JSON.stringify(data)) > OWNER_PROMPT_RING_BYTES - 1 && data.entries.length > 1) data.entries.shift();
+  }, env, OWNER_PROMPT_RING_BYTES);
+}
+
+export async function recordAuthorizedPrompt(root, text, sessionId, env = process.env, capturedAt, retainText = true) {
+  const evidence = digestEvidence(text, sessionId, capturedAt);
+  await appendOwnerPromptEvidence(root, { ...evidence, ...(retainText && evidence.bytes <= 192 * 1024 ? { text } : {}) }, env);
+  return evidence;
+}
+
+export function normalizedPrompt(text) { return text.replace(/\r\n?/g, '\n').trimEnd(); }
+export function closePrompt(a, b, limit = 5) {
+  // Banded edit distance: bounded CPU even for a long owner message.
+  if (Math.abs(a.length - b.length) > limit) return false;
+  let previous = new Map(Array.from({ length: Math.min(b.length, limit) + 1 }, (_, i) => [i, i]));
+  for (let i = 1; i <= a.length; i++) {
+    const current = new Map();
+    for (let j = Math.max(0, i - limit); j <= Math.min(b.length, i + limit); j++) current.set(j, j === 0 ? i : Math.min((previous.get(j) ?? Infinity) + 1, (current.get(j - 1) ?? Infinity) + 1, (previous.get(j - 1) ?? Infinity) + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    if (Math.min(...current.values()) > limit) return false;
+    previous = current;
+  }
+  return (previous.get(b.length) ?? Infinity) <= limit;
+}
+
+export async function resolveRecordedPrompt(root, envelope, state, env = process.env) {
+  const all = await recentOwnerPromptEvidence(root, env);
+  const sessionId = state.contextEvidence.ownerPrompt?.sessionId;
+  const entries = all.filter(entry => typeof entry.text === 'string' && (!sessionId || entry.sessionId === sessionId));
+  let candidates;
+  if (envelope.ownerMessageDigest) candidates = entries.filter(entry => entry.digest === envelope.ownerMessageDigest);
+  else if (envelope.ownerMessageRef === 'latest') {
+    const last = Math.max(0, ...state.operations.filter(op => op.request.phase !== 'reconcile').map(op => Date.parse(op.lifecycle.queuedAt)));
+    candidates = entries.filter(entry => Date.parse(entry.capturedAt) > last);
+  } else {
+    if (all.some(entry => entry.digest === textDigest(envelope.ownerMessage))) return { text: envelope.ownerMessage, substituted: false };
+    if (!envelope.ownerMessage.trim()) return { text: envelope.ownerMessage, substituted: false }; // preserve image-only captions
+    candidates = entries.filter(entry => normalizedPrompt(entry.text) === normalizedPrompt(envelope.ownerMessage));
+    if (!candidates.length) candidates = entries.filter(entry => closePrompt(entry.text, envelope.ownerMessage));
+    if (!candidates.length) return { text: envelope.ownerMessage, substituted: false };
+  }
+  if (candidates.length !== 1) throw new Error('recorded owner message missing or ambiguous; use its specific digest from control prompts, never reconstruct repeatedly');
+  return { text: candidates[0].text, substituted: envelope.ownerMessage !== candidates[0].text, digest: candidates[0].digest };
 }
 
 async function mutate(root, purpose, change, env) {
@@ -118,12 +152,15 @@ export function modeGrantMatches(grant, { id = null, sessionId = null, route, pa
     && (sessionId === null || grant.sessionId === sessionId) && (grant.pausedAt !== null || Date.parse(grant.expiresAt) >= now));
 }
 
-export async function recordOwnerPromptEvidence(root, input, env = process.env, { updateCanonicalState = true } = {}) {
+export async function recordOwnerPromptEvidence(root, input, env = process.env, { updateCanonicalState = true, retainText = true } = {}) {
   const prompt = input?.prompt;
   if (typeof prompt !== 'string' || notificationLikePrompt(prompt) || modeTargetForSkill(prompt.trim().split(/\s+/, 1)[0])) return null;
   const evidence = digestEvidence(prompt, input.session_id);
-  await appendOwnerPromptEvidence(root, evidence, env);
-  if (updateCanonicalState) await mutate(root, 'hook-owner-prompt-digest', (state) => { state.contextEvidence.ownerPrompt = evidence; }, env);
+  await recordAuthorizedPrompt(root, prompt, input.session_id, env, evidence.capturedAt, retainText);
+  if (updateCanonicalState) await mutate(root, 'hook-owner-prompt-digest', (state) => {
+    state.contextEvidence.ownerPrompt = evidence;
+    state.partner.thread.checkpoint.continuation = { used: 0, limit: 20, ownerDigest: evidence.digest, armed: false };
+  }, env);
   return evidence;
 }
 

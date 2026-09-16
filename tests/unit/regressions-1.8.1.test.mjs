@@ -127,7 +127,7 @@ test('1.8.1 schema 13 migrates losslessly and defers while a runner is active', 
   legacy.controller.runnerPid = null;
   await writeFile(f.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(f.project, f.env); assert.equal(migrated.ok, true, migrated.error?.message);
-  const expected = { ...legacy, schemaVersion: 15, generation: migrated.state.generation, sessionStartDiagnostic: null };
+  const expected = { ...legacy, schemaVersion: 16, generation: migrated.state.generation, sessionStartDiagnostic: null };
   assert.deepEqual(migrated.state, expected);
   const recovery = structuredClone(legacy); recovery.controller.activeOperationId = null; recovery.operations = []; recovery.ownerSelectedMode = null; recovery.route = 'recovery-read-only'; recovery.task.status = 'recovery-required';
   await writeFile(f.paths.stateFile, JSON.stringify(recovery));

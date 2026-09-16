@@ -167,7 +167,7 @@ test('1.6 item 8: schema 7 migrates losslessly through schema 11', async (t) => 
   legacy.partner.thread.threadId = 'preserved-schema-7'; legacy.partner.thread.checkpoint.acceptedDecisions = ['preserved decision'];
   await writeFile(initialized.paths.stateFile, JSON.stringify(legacy));
   const loaded = await readState(project, env);
-  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 15);
+  assert.equal(loaded.ok, true); assert.equal(loaded.state.schemaVersion, 16);
   assert.equal(loaded.state.partner.thread.threadId, 'preserved-schema-7');
   assert.deepEqual(loaded.state.partner.thread.checkpoint.acceptedDecisions, ['preserved decision']);
 });
@@ -209,7 +209,7 @@ test('1.6 live fix 1: schema migration defers while a live runner owns an active
   live.controller.runnerPid = 2147483646;
   await writeFile(initialized.paths.stateFile, JSON.stringify(live));
   const migrated = await readState(project, env);
-  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 15);
+  assert.equal(migrated.ok, true); assert.equal(migrated.state.schemaVersion, 16);
   assert.equal(migrated.state.operations[0].id, submitted.operationId);
 });
 
@@ -225,7 +225,8 @@ test('1.6 live fix 2: notification prompts are skipped and a bounded digest ring
   assert.deepEqual(ring.map((entry) => entry.digest), [textDigest('first owner prompt'), textDigest('second owner prompt')]);
   const accepted = await submitOperation(project, submissionEnvelope('first owner prompt'), env, { spawnRunner: false });
   assert.equal(accepted.status, 'queued');
-  assert.doesNotMatch(JSON.stringify(ring), /first owner prompt|second owner prompt|notification/);
+  assert.doesNotMatch(JSON.stringify(ring), /notification/);
+  assert.deepEqual(ring.map(entry => entry.text), ['first owner prompt', 'second owner prompt']);
 });
 
 test('1.6 live fix 3 revised in 1.9: routine test execution defers to reviewed work scope', async (t) => {

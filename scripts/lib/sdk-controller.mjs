@@ -5,7 +5,8 @@ import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, rejectPayloadLikeText, threadTitle } from './checkpoint.mjs';
 import { loadEffectiveConfig, sourceVersion } from './config.mjs';
-import { modeGrantMatches, recentOwnerPromptEvidence, textDigest } from './hook-evidence.mjs';
+import { modeGrantMatches, recentOwnerPromptEvidence, textDigest, recordAuthorizedPrompt, resolveRecordedPrompt } from './hook-evidence.mjs';
+import { heavyStatus, beginHeavy, finishHeavy, heavyShape } from './heavy.mjs';
 import { readState, updateState } from './state.mjs';
 import { ValidationError } from './validation.mjs';
 import { attachmentShape, selectedModeAttachments, validateAttachments, validateSubmissionAttachments } from './attachments.mjs';
@@ -71,8 +72,8 @@ async function mutate(root, purpose, fn, env) {
   while (true) {
     const current = await readState(root, env, { lockWaitMs: Math.max(0, deadline - Date.now()) });
     if (!current.ok) throw current.error ?? new Error(`partner state unavailable: ${current.health}`);
-    const updated = await updateState(root, (state) => {
-      fn(state);
+    const updated = await updateState(root, async (state) => {
+      await fn(state);
       state.generation += 1;
       return state;
     }, { expectedGeneration: current.state.generation, purpose, lockWaitMs: Math.max(0, deadline - Date.now()) }, env);
@@ -150,6 +151,11 @@ export function normalizeSubmissionEnvelope(value, participants) {
   if (typeof value === 'string' && value.trim().startsWith('{')) {
     let object;
     try { object = JSON.parse(value); } catch { throw new Error('submission requires valid JSON without trailing text'); }
+    if (Object.hasOwn(object, 'ownerMessageStatus') || Object.hasOwn(object, 'ownerMessageRef') || Object.hasOwn(object, 'ownerMessageDigest')) {
+      const { ownerMessageStatus, ownerMessageDigest, ownerMessageRef, ...body } = object;
+      if (Object.hasOwn(body, 'ownerMessage') || ownerMessageStatus !== 'recorded' || !((/^[a-f0-9]{64}$/.test(ownerMessageDigest ?? '') && ownerMessageRef === undefined) || (ownerMessageRef === 'latest' && ownerMessageDigest === undefined))) throw new Error('recorded message requires exactly one specific digest or latest reference');
+      return { ...normalizeSubmissionEnvelope(JSON.stringify({ ...body, ownerMessage: '[recorded owner message]' }), participants), ownerMessageStatus, ownerMessageDigest, ownerMessageRef };
+    }
     if (Object.hasOwn(object, 'requestId')) {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(object.requestId ?? '')) throw new Error('requestId must be a UUID');
       const { requestId, ...body } = object;
@@ -339,7 +345,7 @@ function modeAttachments(grant, root, config, env) {
   catch (error) { throw new ValidationError(`Mode attachment validation failed; grant and owner text retained: ${error.message}`); }
 }
 
-function completeModeTransitionInState(state, now = new Date().toISOString(), config = null, env = process.env) {
+async function completeModeTransitionInState(state, now = new Date().toISOString(), config = null, env = process.env) {
   const grant = state.modeGrant;
   if (!grant) return null;
   const attachments = modeAttachments(grant, state.project.canonicalRoot, config, env);
@@ -348,6 +354,11 @@ function completeModeTransitionInState(state, now = new Date().toISOString(), co
   cancelQueuedForModeTransition(state, now);
   applyModeSelection(state, grant, now);
   const operationId = enqueueGrantMessage(state, grant, now, attachments);
+  if (grant.ownerMessage !== null || attachments.length) {
+    const evidence = await recordAuthorizedPrompt(state.project.canonicalRoot, grant.ownerMessage ?? '', grant.sessionId, env, now, grant.participants !== 'claude');
+    state.contextEvidence.ownerPrompt = evidence;
+    state.partner.thread.checkpoint.continuation = { used: 0, limit: 20, ownerDigest: evidence.digest, armed: false };
+  } else state.partner.thread.checkpoint.continuation = { used: 0, limit: 20, ownerDigest: null, armed: false };
   const ownerMessage = grant.participants === 'claude' ? grant.ownerMessage : null;
   state.modeGrant = null;
   if (!operationId) {
@@ -369,7 +380,7 @@ export async function applyOwnerModeTransition(root, { grantId, route, participa
   let outcome = null;
   let runnerToCancel = null;
   const config = (await loadEffectiveConfig(root, env)).config;
-  const state = await mutate(root, `owner-mode-${route}-${participants}`, (draft) => {
+  const state = await mutate(root, `owner-mode-${route}-${participants}`, async (draft) => {
     const grant = draft.modeGrant;
     if (!modeGrantMatches(grant, { id: grantId, route, participants })) throw new ValidationError('mode grant was consumed, expired, or changed');
     grant.attachments = attachmentShape([...new Set([...(grant.attachments ?? []), ...attachmentShape(attachments)])]);
@@ -394,7 +405,7 @@ export async function applyOwnerModeTransition(root, { grantId, route, participa
       outcome = { status: 'pending', from, to: { route, participants }, operationId: grant.operationId, activeOperationId: active.id, ownerMessage: null };
       return;
     }
-    const completed = completeModeTransitionInState(draft, new Date().toISOString(), config, env);
+    const completed = await completeModeTransitionInState(draft, new Date().toISOString(), config, env);
     outcome = { status: 'applied', from, to: { route, participants }, operationId: completed.operationId, ownerMessage: completed.ownerMessage };
   }, env);
   if (runnerToCancel && isProcessAlive(runnerToCancel)) process.kill(runnerToCancel, 'SIGUSR1');
@@ -403,6 +414,7 @@ export async function applyOwnerModeTransition(root, { grantId, route, participa
 }
 
 export async function attachmentSessionId(root, envelope, state, env = process.env) {
+  if (envelope.ownerMessageStatus === 'recorded') envelope = { ...envelope, ownerMessage: (await resolveRecordedPrompt(root, envelope, state, env)).text };
   if (envelope.phase === 'reconcile') {
     const parent = state.operations.find((op) => op.id === envelope.parentOperationId && op.request.phase === 'independent' && op.status === 'completed' && op.request.ownerMessageDigest === textDigest(envelope.ownerMessage));
     return parent?.result.relay?.sessionId ?? '';
@@ -433,13 +445,16 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
   if (current.state.route === 'recovery-read-only') throw new Error('partner operation denied in recovery-read-only');
   if (!current.state.ownerSelectedMode) throw new Error('partner operation denied: prior owner-selected mode is unknown; type a Fabex mode command');
   if (current.state.participants === 'claude') throw new Error('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
-  const envelope = normalizeSubmissionEnvelope(message, current.state.participants);
+  let envelope = normalizeSubmissionEnvelope(message, current.state.participants);
   const submissionDigest = textDigest(message);
   const previous = envelope.requestId && current.state.operations.find((operation) => operation.id === envelope.requestId);
   if (previous) {
     if (previous.request.submissionDigest !== submissionDigest) throw new Error('requestId already belongs to a different submission');
     return { operationId: previous.id, phase: previous.request.phase, status: previous.status, duplicate: true, attachments: previous.result.attachments };
   }
+  const resolved = await resolveRecordedPrompt(root, envelope, current.state, env);
+  envelope = { ...envelope, ownerMessage: resolved.text };
+  if (envelope.phase === 'single') envelope.message = `OWNER MESSAGE (verbatim):\n${resolved.text}`;
   const config = (await loadEffectiveConfig(current.paths.canonicalRoot, env)).config;
   const uploadSessionId = await attachmentSessionId(root, envelope, current.state, env);
   const selection = validateSubmissionAttachments(envelope.attachments ?? [], current.paths.canonicalRoot, config, { sessionId: uploadSessionId, env });
@@ -509,10 +524,14 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
     const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', updated.paths.canonicalRoot], { detached: true, stdio: 'ignore', env });
     child.unref?.();
   }
-  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified, attachments: selection.statuses };
+  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified, attachments: selection.statuses, ...(resolved.substituted ? { messageResolution: 'substituted recorded original' } : {}) };
 }
 
 const CHECKPOINT_ARRAY_FIELDS = new Set(Object.keys(CHECKPOINT_ARRAY_LIMITS));
+function authorizeContinuationFields(state, fields) {
+  if (fields.some(field => ['openWork', 'ownerActionRequired', 'blocker'].includes(field)) &&
+    (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt)) throw new ValidationError('continuation updates require owner-selected work mode');
+}
 const CHECKPOINT_TEXT_FIELD_SET = new Set(CHECKPOINT_TEXT_FIELDS);
 
 function stampCheckpoint(checkpoint, fields, now = new Date().toISOString()) {
@@ -546,8 +565,10 @@ export async function updateCheckpoint(root, field, value, env = process.env) {
   stampCheckpoint(candidate, [field]);
   validateCheckpointCandidate(candidate, current.paths.canonicalRoot);
   const state = await mutate(root, 'checkpoint-update', (draft) => {
+    authorizeContinuationFields(draft, [field]);
     if (CHECKPOINT_ARRAY_FIELDS.has(field)) draft.partner.thread.checkpoint[field] = [...draft.partner.thread.checkpoint[field], bounded];
     else draft.partner.thread.checkpoint[field] = bounded;
+    if (field === 'openWork') draft.partner.thread.checkpoint.continuation.armed = true;
     stampCheckpoint(draft.partner.thread.checkpoint, [field]);
     validateCheckpointCandidate(draft.partner.thread.checkpoint, draft.project.canonicalRoot);
   }, env);
@@ -562,8 +583,10 @@ export async function replaceCheckpointArray(root, field, values, env = process.
   }
   const normalized = values.map((value) => value.trim());
   return mutate(root, 'checkpoint-replace', (state) => {
+    authorizeContinuationFields(state, [field]);
     const checkpoint = state.partner.thread.checkpoint;
     checkpoint[field] = normalized;
+    if (field === 'openWork') checkpoint.continuation.armed = true;
     stampCheckpoint(checkpoint, [field]);
     validateCheckpointCandidate(checkpoint, state.project.canonicalRoot);
   }, env).then((state) => state.partner.thread.checkpoint);
@@ -572,6 +595,7 @@ export async function replaceCheckpointArray(root, field, values, env = process.
 export async function compactCheckpointArray(root, field, keepLast, env = process.env) {
   if (!CHECKPOINT_ARRAY_FIELDS.has(field) || !Number.isSafeInteger(keepLast) || keepLast < 0) throw new Error('checkpoint compact requires an array field and non-negative --keep-last');
   return mutate(root, 'checkpoint-compact', (state) => {
+    authorizeContinuationFields(state, [field]);
     const checkpoint = state.partner.thread.checkpoint;
     checkpoint[field] = keepLast === 0 ? [] : checkpoint[field].slice(-keepLast);
     stampCheckpoint(checkpoint, [field]);
@@ -586,6 +610,7 @@ export async function snapshotCheckpoint(root, values, env = process.env) {
     if (typeof value === 'string') rejectPayloadLikeText(value);
   }
   return mutate(root, 'checkpoint-snapshot', (state) => {
+    authorizeContinuationFields(state, Object.keys(values));
     const checkpoint = state.partner.thread.checkpoint;
     for (const [field, value] of Object.entries(values)) checkpoint[field] = typeof value === 'string' ? value.trim() || null : null;
     stampCheckpoint(checkpoint, Object.keys(values));
@@ -653,7 +678,7 @@ async function recordLifecycle(root, operationId, update, env) {
 
 async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null, requiresRecovery = false, usage = null, structured = null, warning = null, relay = null, attachmentDelivered = false } = {}, env) {
   const config = (await loadEffectiveConfig(root, env)).config;
-  return mutate(root, `sdk-operation-${status}`, (state) => {
+  return mutate(root, `sdk-operation-${status}`, async (state) => {
     const operation = state.operations.find((item) => item.id === operationId);
     if (!operation || operation.status !== 'working') throw new Error('active operation record is missing');
     operation.status = status;
@@ -706,6 +731,8 @@ async function finishOperation(root, operationId, status, { finalResponse = null
       : status === 'completed' && isJointlyComplete ? 'completed'
         : status === 'completed' ? 'completed' : status === 'failed' ? 'unavailable' : 'pending';
     if (status === 'completed' && isJointlyComplete) {
+      const budget = state.partner.thread.checkpoint.continuation;
+      if (budget.ownerDigest === operation.request.ownerMessageDigest) budget.used = Math.min(budget.limit, budget.used + 1);
       const parent = state.operations.find((item) => item.id === operation.request.parentOperationId);
       if (parent) {
         parent.request.ownerMessage = null;
@@ -716,7 +743,7 @@ async function finishOperation(root, operationId, status, { finalResponse = null
     if (status !== 'failed' && state.modeGrant?.pausedAt && state.controller.activeOperationId === null) {
       if (state.modeGrant.participants === 'claude' && state.modeGrant.ownerMessage) applyModeSelection(state, state.modeGrant, new Date().toISOString());
       else {
-        try { completeModeTransitionInState(state, new Date().toISOString(), config, env); }
+        try { await completeModeTransitionInState(state, new Date().toISOString(), config, env); }
         catch (transitionError) {
           // Retain the unused paused grant and verbatim text, not a half-applied
           // transition. Attachment validation runs before any transition effects.
@@ -793,7 +820,9 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const prompt = turnPrompt(operation, operation.request.phase === 'independent' ? null : seed);
     const attachments = validateAttachments(operation.request.attachments ?? [], before.paths.canonicalRoot, config, { sessionId: operation.result.relay?.sessionId ?? '', env });
     const input = attachments.length ? [{ type: 'text', text: prompt }, ...attachments.map((path) => ({ type: 'local_image', path }))] : prompt;
-    const initialInstructions = seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions();
+    const jobs = await heavyStatus(root, env);
+    const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork within the checkpoint budget; a review-cycle completion is not task completion.`;
+    const initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling;
     const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
@@ -813,6 +842,14 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
             if (state.partner.thread.threadId && state.partner.thread.threadId !== verifiedId) throw new ThreadMismatchError(state.partner.thread.threadId, verifiedId);
             state.partner.thread.threadId = verifiedId;
           }, env);
+        }
+      }
+      if (event.item?.type === 'command_execution' && ['item.started', 'item.completed'].includes(event.type)) {
+        const jobId = `sdk:${operation.id}:${event.item.id}`;
+        if (event.type === 'item.started' && heavyShape(event.item.command)) await beginHeavy(root, { id: jobId, command: event.item.command, executor: 'codex', observed: true }, env);
+        if (event.type === 'item.completed') {
+          const tracked = await heavyStatus(root, env);
+          if (tracked.jobs.some(job => job.id === jobId)) await finishHeavy(root, jobId, env);
         }
       }
       const response = finalResponseFromEvent(event);

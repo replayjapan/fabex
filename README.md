@@ -1,10 +1,108 @@
 # Fabex — Beta
 
+## 1.9.2: bounded continuation and RAM precautions
+
+Routine updates lead with outcomes, important failures and the next step. Claude's
+summary is at most five sentences (instructional guidance, not a mechanical cap).
+Keep detailed logs in the record or a requested Details section. Omit Action
+required unless the owner genuinely must decide or act; never ask for a message
+merely to restart authorized, feasible work. Both review phases, separately
+authored summaries, verbatim relay, owner-only modes and source authorship remain.
+
+### Forward the recorded message, without retyping
+
+`control.mjs prompts` lists bounded previews and digest references. Prefer a
+specific digest in the independent submission envelope:
+
+```json
+{
+  "phase": "independent",
+  "ownerMessageStatus": "recorded",
+  "ownerMessageDigest": "<64-character digest from prompts>",
+  "previousReplyStatus": "recorded",
+  "requestId": "<stable UUID for this submission and its technical retries>"
+}
+```
+
+Alternatively, `ownerMessageRef: "latest"` replaces the digest only when exactly
+one candidate is newer than the last cycle. A specific digest supports authorized
+continuation of an older recorded task. No candidate or ambiguous selection fails
+visibly. Supplied text may match after line-ending/trailing-whitespace normalization
+or at most five edits; Fabex substitutes the unique recorded original and reports
+that substitution, never forwards changed instructions. Retrying the same requestId
+and envelope cannot queue duplicate work; it is not a blanket exactly-once guarantee
+for external effects. Notifications are never owner authorization. Consumed mode
+grants record their trailing task text, making that path continuable too.
+
+The private prompt ring retains at most eight records and 2 MiB, with text only
+up to 192 KiB per prompt; oversized prompts retain digest evidence only and remain subject to
+the existing 192 KiB submission limit; no truncated message is forwarded. Entries are atomically written with mode 0600
+outside the workstream. Claude-only messages do not retain raw text for forwarding.
+
+### Continue the authorized task, not every old TODO
+
+In work mode set `checkpoint open-work <item>` (append), replace the list with
+`checkpoint replace open-work` with a JSON array on stdin, or clear it with
+`checkpoint clear open-work`. Only record required, authorized and feasible work.
+Set `checkpoint owner-action-required <reason>` or `checkpoint blocker <reason>`
+for a genuine stop, and clear those fields when resolved. Each new owner prompt
+resets a 20-cycle/Stop-nudge budget and disarms old work: revalidate scope before
+setting open-work again. Stop requests continued work while the list is armed and
+unblocked, but permits a visible budget-exhaustion report. A checkpoint is not an
+authorization grant; no task is resumed merely because a new question arrives.
+The host can still interrupt or limit continuation. Schema 16 migrates older
+checkpoints losslessly only after the live-runner migration gate permits it.
+
+### Coordinate heavy commands and inspect memory
+
+Recognized package checks, test runners, installs, migrations and owned-server
+startup reserve a per-workstream private slot in the Claude PreToolUse hook.
+Overlapping recognized host commands are denied with `heavy wait` guidance;
+repeat `control.mjs heavy wait --timeout 120` on exit 3 and retry automatically
+when ready, without another owner message. This is serialized admission, not a
+FIFO process launcher. Foreground completion/failure hooks release the slot;
+background tasks retain it until host task completion is observed. Never batch
+heavy commands in parallel, and use conservative worker counts where supported.
+The plugin's own test files run serially.
+
+Codex command events record actual SDK commands and their completion. The runner
+instructs Codex to inspect `heavy status` and `mem` and wait before heavy work;
+this is observed/instructed, **not native pre-execution enforcement**. Unrecognized
+wrappers, child workers, other workstreams and unrelated apps are outside this
+admission boundary. Host background-task event shapes need live verification.
+
+`control.mjs mem` is read-only, using only query probes (`memory_pressure -Q`,
+pressure-level sysctl, vm_stat, swapusage and bounded ps fields). Before admission,
+a sample no older than ten seconds denies critical pressure and warns at warn or
+unknown. Missing probes are explicitly unknown, not a low-memory estimate from
+free percentage. Before/after samples retain at most 32 entries; status, diagnose
+and dev status expose the latest sample, and status/diagnose report runner and
+descendant RSS when available. These are precautions, not proven RAM savings or
+a guarantee against crashes. Unknown pressure currently warns rather than blocks.
+
+### Account for task-owned resources
+
+`resources list` shows the existing owned server and observed background host
+tasks, including recognizable forwarders/browser jobs. `resources retain <id>
+--note <reason>` records a needed preview; `resources release <id>` uses the
+existing identity-verified server shutdown or directs the executor to the host's
+task control. Host-task IDs are never converted into guessed PIDs. Unknown IDs,
+reused PIDs and unrelated processes are not killed. Release unused owned resources
+or record why they remain at each checkpoint. Snapshot warns about unexplained
+resources; nothing is automatically killed at a phase boundary.
+
+Native browser/MCP contexts not represented by a host task are not automatically
+discovered or stopped: use their native controls and verify cleanup. Expired
+heavy-job leases are reported after six hours but are not silently erased while
+their process might still be alive; confirm completion through the host first.
+See [1.9.2 acceptance](docs/acceptance-1.9.2.md) for automated evidence and the
+remaining real-host scheduling, resource and memory checks.
+
 ### 1.9.0: routine development without command-by-command setup
 
 Within owner-authorized work, review actual targets and effects, then perform necessary dependency installs, generated lockfile updates, reviewed development migrations, scoped fixtures, diagnostics, local HTTP checks and server management. No handwritten command exceptions or repeated owner approvals are required for those routine steps. Do not send the owner to a terminal to compensate for Fabex restrictions.
 
-Codex authors project source; Claude coordinates and may perform reviewed operational work through an authorized host executor. Generated development artifacts and database effects are not automatically source authorship. Only the operational agent performs Git delivery. Never use scripts or MCP to evade these roles. Destructive resets, production changes and unrelated privileged access remain outside scope.
+Codex authors project source; Claude coordinates and may perform reviewed operational work through an authorized host executor. Generated development artifacts and database effects are not automatically source authorship. Since 1.9.1, Claude may deliver reviewed authorized Git changes directly under host permissions or use the optional operational agent. Never use scripts or MCP to evade these roles. Destructive resets, production changes and unrelated privileged access remain outside scope.
 
 The 1.5.0 normal Bash/MCP allowlists and exception-driven repairs exceeded the requested workflow. 1.9.0 removes that general work gate, retaining targeted source-writing, destructive-effect, privilege, deployment and unverified-process-termination checks. A deny list is mechanically looser: it cannot prove arbitrary program effects or identify every production target. Executor review is mandatory, not a new per-command approval ritual. Host permissions remain authoritative.
 
@@ -180,7 +278,7 @@ The controller stores Codex's Phase 1 answer as the independent reading. Only th
 
 The controller retrieves the stored independent answer itself; callers cannot substitute it. It verifies the same owner-message digest and rejects missing, failed, cancelled, mismatched, or already-used parents. Later owner cycles may queue, but a completed Phase 1 creates a barrier until its Phase 2 completes or is explicitly abandoned. This preserves owner-cycle FIFO ordering.
 
-`UserPromptSubmit` records a digest, byte count, time, and session for owner prompts, including empty image captions. Notification-shaped inputs containing task, system, reminder, or local-command markers are ignored, including by ask-mode auto-return. A missing ask return destination fails closed to discussion/both and requires an owner mode command. An eight-entry private digest-only sidecar accommodates queued owner prompts. Ambiguous session evidence is denied rather than guessed.
+`UserPromptSubmit` records a digest, byte count, time, and session for owner prompts, including empty image captions. Notification-shaped inputs containing task, system, reminder, or local-command markers are ignored, including by ask-mode auto-return. A missing ask return destination fails closed to discussion/both and requires an owner mode command. Since 1.9.2 the bounded private prompt sidecar also retains eligible original text for reference-based forwarding, except Claude-only messages. Ambiguous session evidence is denied rather than guessed.
 
 Stop records the final owner-visible Fable reply and its digest. Schema 13 retains **one complete reply of at most 32 KiB**, session-bound and replaced by the next accepted Stop; it never reads transcripts, reasoning or tool logs. Oversized, absent, interrupted or Claude-only replies remain unavailable, never truncated and called complete. `previousReplyStatus: "recorded"` lets the controller insert the matching stored reply; `provided` with exact `previousReply` remains supported. Recorded text stays out of the 48 KiB recovery seed and status output. Missing evidence produces an explicit unavailable phase header and `claudeReplyVerified: "unavailable"`. Private state and pending operations are local retention; clearing state removes them, not the separate SDK history.
 
@@ -349,7 +447,7 @@ Task status is non-sticky: submission and successful completion are `active`; an
 
 ## Privacy and retention
 
-Per-workstream state is stored under the plugin data directory with restrictive permissions. A mode command temporarily retains its trailing owner text until the transition succeeds; a completed independent turn retains that owner message until Phase 2 completes or the cycle is abandoned. Other terminal prompts and all terminal attachment paths are erased. Fabex retains the structured checkpoint, bounded structured reviews, and normally at most 24 terminal records. Linked phases are pruned together, with additional byte-budget pruning; unrelayed answers and unfinished cycles are protected, so retention may exceed 24 but never the hard 1 MiB state limit. New writes fail visibly if that limit is reached. Context hooks retain SHA-256 digests, byte counts, timestamps, and session identifiers—not message copies. Relay acknowledgements retain only session, label, and status beside the already-stored answer. The owner-prompt sidecar retains at most eight such digest records and no prompt text. Fabex does not store image bytes, a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
+Per-workstream state is stored under the plugin data directory with restrictive permissions. A mode command temporarily retains its trailing owner text until the transition succeeds; a completed independent turn retains that owner message until Phase 2 completes or the cycle is abandoned. Other terminal prompts and all terminal attachment paths are erased. Fabex retains the structured checkpoint, bounded structured reviews, and normally at most 24 terminal records. Linked phases are pruned together, with additional byte-budget pruning; unrelayed answers and unfinished cycles are protected, so retention may exceed 24 but never the hard 1 MiB state limit. New writes fail visibly if that limit is reached. Context state retains SHA-256 digests, byte counts, timestamps and session identifiers; the private 1.9.2 owner-prompt sidecar also retains eligible original text for forwarding. Relay acknowledgements retain only session, label, and status beside the already-stored answer. The owner-prompt sidecar retains at most eight records and 2 MiB, with at most 192 KiB of raw text per eligible message, private mode 0600 and no raw Claude-only Q&A. Fabex does not store image bytes, a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
 
 The SDK and Codex CLI persist the canonical thread under Codex's own storage and may retain data under their policies. Claude Code and host applications may retain their own data independently.
 

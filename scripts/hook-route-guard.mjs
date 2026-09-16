@@ -10,6 +10,7 @@ import { attachmentShape, validateAttachments } from './lib/attachments.mjs';
 import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 import { developmentProbe } from './lib/development.mjs';
+import { beginHeavy, heavyShape } from './lib/heavy.mjs';
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
@@ -18,6 +19,7 @@ const BARE_SKILLS = new Set(['ask', 'askClaude', 'askCodex', 'discussion', 'disc
 const CONTROL_PATH = resolve(PLUGIN_ROOT, 'scripts', 'control.mjs');
 const CONTROLLER_PATH = resolve(PLUGIN_ROOT, 'scripts', 'controller.mjs');
 const SAFE_UNHEALTHY = new Set(['help', 'checkpoint-help', 'status', 'config', 'diagnose', 'controller-help', 'controller-status', 'controller-result', 'controller-cancel', 'controller-wait', 'clear-dead-lock', 'recover-inspect', 'recover-abandon', 'recover-replace-missing-thread', 'recover-resolve-transaction', 'mode-normal', 'mode-discussion', 'mode-ask-once']);
+for (const kind of ['mem', 'prompts', 'heavy-status', 'heavy-wait', 'resources-list']) SAFE_UNHEALTHY.add(kind);
 const OPERATIONAL_AGENT = 'fabex-operational';
 // Plugin-defined agents are reported by the hook harness with their plugin-scoped type.
 // Reject the bare agent name so an identity outside that contract cannot gain push authority.
@@ -144,7 +146,7 @@ export function parseControlCommand(command) {
   if (typeof command === 'string' && command.includes('\n')) {
     const lines = command.split('\n');
     if (lines.at(-1) === '') lines.pop();
-    const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+checkpoint\s+(replace\s+(constraint|decision|relevant-file|unresolved-problem)|snapshot)\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
+    const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+checkpoint\s+(replace\s+(constraint|decision|relevant-file|unresolved-problem|open-work)|snapshot)\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
     if (header && resolve(header[1] ?? header[2] ?? header[3]) === CONTROL_PATH && lines.at(-1) === header[6]) {
       const body = lines.slice(1, -1).join('\n');
       if (Buffer.byteLength(body, 'utf8') <= 48 * 1024) return { kind: header[4] === 'snapshot' ? 'checkpoint-snapshot' : 'checkpoint-replace' };
@@ -153,6 +155,11 @@ export function parseControlCommand(command) {
   const tokens = simpleTokens(command);
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
+  if (args.length === 1 && ['mem', 'prompts'].includes(args[0])) return { kind: args[0] };
+  if (args[0] === 'heavy' && args.length === 2 && ['status', 'wait'].includes(args[1])) return { kind: `heavy-${args[1]}` };
+  if (args[0] === 'heavy' && args[1] === 'wait' && args.length === 4 && args[2] === '--timeout' && /^\d+$/.test(args[3]) && Number(args[3]) >= 1 && Number(args[3]) <= 120) return { kind: 'heavy-wait' };
+  if (args[0] === 'resources' && args[1] === 'list' && args.length === 2) return { kind: 'resources-list' };
+  if (args[0] === 'resources' && /^[A-Za-z0-9._:-]{1,160}$/.test(args[2] ?? '') && (args[1] === 'release' && args.length === 3 || args[1] === 'retain' && args.length === 5 && args[3] === '--note' && args[4].trim())) return { kind: `resources-${args[1]}` };
   if (args[0] === 'dev' && args.length === 2 && ['start', 'stop', 'restart', 'status', 'logs'].includes(args[1])) return { kind: `dev-${args[1]}` };
   if (args[0] === 'dev' && args[1] === 'logs' && args.length === 4 && args[2] === '--lines' && /^[1-9]\d{0,2}$/.test(args[3]) && Number(args[3]) <= 400) return { kind: 'dev-logs' };
   if (args.length === 0 || args.length === 1 && args[0] === '--help') return { kind: 'help' };
@@ -161,7 +168,8 @@ export function parseControlCommand(command) {
   if (args[0] === 'cleanup' && args.length === 3 && args[1] === '--path' && isAbsolute(args[2]) && /^fabex-next(?:-\d+\.\d+\.\d+)?$/.test(basename(args[2]))) return { kind: 'cleanup' };
   if (args[0] === 'checkpoint' && (args.length === 1 || args.length === 2 && args[1] === '--help')) return { kind: 'checkpoint-help' };
   if (args[0] === 'checkpoint' && ['capacity', 'export'].includes(args[1]) && args.length === 2) return { kind: `checkpoint-${args[1]}` };
-  const fields = new Set(['objective', 'current-task', 'constraint', 'decision', 'relevant-file', 'implementation-status', 'test-status', 'unresolved-problem', 'next-action']);
+  const fields = new Set(['objective', 'current-task', 'constraint', 'decision', 'relevant-file', 'implementation-status', 'test-status', 'unresolved-problem', 'next-action', 'open-work', 'owner-action-required', 'blocker']);
+  if (args[0] === 'checkpoint' && args[1] === 'clear' && ['open-work', 'owner-action-required', 'blocker'].includes(args[2]) && args.length === 3) return { kind: 'checkpoint-continuation' };
   if (args[0] === 'checkpoint' && fields.has(args[1]) && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 8192 && args.length === 3) return { kind: 'checkpoint' };
   if (args[0] === 'checkpoint' && args[1] === 'compact' && ['constraint', 'decision', 'relevant-file', 'unresolved-problem'].includes(args[2]) && args[3] === '--keep-last' && /^\d+$/.test(args[4] ?? '') && args.length === 5) return { kind: 'checkpoint-compact' };
   if (args[0] === 'executor-exception' && args[1] === 'authorize' && args.length === 8 && args[2] === '--executor' && args[4] === '--scope' && args[6] === '--reason' && args[3] && args[5] && args[7]) return { kind: 'executor-exception-authorize' };
@@ -605,6 +613,9 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
   const controller = toolName === 'Bash' ? parseControllerCommand(toolInput.command, { participants: state.participants }) : null;
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
+  if (['mem', 'prompts', 'resources-list', 'heavy-status', 'heavy-wait'].includes(control?.kind)) return defer();
+  if (control?.kind === 'resources-release' && (executor.agentId || executor.agentType) && !isOperationalExecutor(executor)) return deny('resource shutdown requires the main or verified operational executor');
+  if (['resources-retain', 'resources-release', 'checkpoint-continuation'].includes(control?.kind)) return state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt ? defer() : deny('resource and continuation changes require owner-selected work mode');
   if (control?.kind?.startsWith('dev-')) {
     const mutation = ['dev-start', 'dev-stop', 'dev-restart'].includes(control.kind);
     if (!['normal', 'discussion', 'ask-once'].includes(state.route)) return deny('dev controls require healthy work, discussion, or ask mode');
@@ -736,12 +747,17 @@ export async function main() {
         invocationCwd: input.cwd
       })
       : classifyUnhealthyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, health: stateResult.health });
+    if (output.decision !== 'deny' && stateResult.ok && stateResult.state.route === 'normal' && input.tool_name === 'Bash' && heavyShape(input.tool_input?.command)) {
+      const admission = await beginHeavy(root, { id: input.tool_use_id ? `host:${input.session_id ?? ''}:${input.tool_use_id}` : '', command: input.tool_input.command, executor: input.agent_type ?? 'claude-main' });
+      if (!admission.allowed) output = deny(admission.reason);
+      else if (admission.warning) output.warning = admission.warning;
+    }
   } catch {
     output = deny('route guard input or internal failure; use diagnose and recover');
   }
   process.stdout.write(output.decision === 'deny'
     ? `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: output.reason } })}\n`
-    : '{}\n');
+    : output.warning ? `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: output.warning } })}\n` : '{}\n');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

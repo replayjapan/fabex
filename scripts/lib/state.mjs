@@ -131,7 +131,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -168,6 +168,10 @@ async function loadValidated(paths) {
     }
     const checkpoint = state.partner?.thread?.checkpoint;
     if (checkpoint) {
+      checkpoint.openWork ??= [];
+      checkpoint.ownerActionRequired ??= null;
+      checkpoint.blocker ??= null;
+      checkpoint.continuation ??= { used: 0, limit: 20, ownerDigest: null, armed: false };
       checkpoint.updatedAt ??= null;
       checkpoint.fieldUpdatedAt = { ...emptyFieldUpdatedAt(), ...(checkpoint.fieldUpdatedAt ?? {}) };
       checkpoint.repoFingerprintCapturedAt ??= checkpoint.repoFingerprint?.head ? (state.partner?.thread?.metadata?.lastUsedAt ?? checkpoint.updatedAt ?? null) : null;
