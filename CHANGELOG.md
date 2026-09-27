@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.10.8
+
+- Recognize the current SDK “no rollout found” resume failure as well as the
+  older missing-session message. Recovery verifies the failed ID still matches
+  the current thread and no operation is working before replacing it; preserve
+  the checkpoint and archive the old thread within the same planned milestone.
+- Permit the exact owner-granted settings dialog and its selected setting change
+  in healthy recovery state without enabling code edits or starting a Codex turn.
+- Register resumed pre-upgrade chats when the owner opens settings, and report
+  settings expansion failures as settings failures rather than mode failures.
+
 ## 1.10.7
 
 - Ignore helper-agent messages and sub-agent hand-back deliveries as owner prompts.

@@ -84,6 +84,8 @@ was updated. See Claude Code's [update guide](https://code.claude.com/docs/en/di
 
 ### What's new?
 
+- **1.10.8:** settings stays usable during thread recovery; recovery recognizes the current missing-thread error and preserves the planned milestone. [Details](CHANGELOG.md)
+
 - **1.10.7:** helper reports are excluded from owner instructions; update steps now explain auto-update and version checks. [Details](CHANGELOG.md)
 
 - **1.10.6:** Coding selects the code editor; Docs Both shares text documents without granting source-editing authority. Codex document-only enforcement has a native sandbox limitation, described below. [Details](CHANGELOG.md)
@@ -694,7 +696,7 @@ SDK developer instructions are deliberately route-neutral because a resumed Code
 
 The owner-selected mode is persisted separately from temporary recovery-read-only state. Abandon, confirmed missing-thread replacement, lock/transaction recovery, restart, and orphan recovery restore that proven selection and never touch the mode grant. If older or corrupt state cannot prove it, Fabex fails closed to discussion/both and rejects partner work until an owner mode command establishes a selection. Recovery output names the preserved route.
 
-If the SDK returns the verified text `Session not found for thread_id: <id>`, Fabex enters recovery-read-only. Only the explicit `recover replace-missing-thread --operation-id <uuid>` path clears that confirmed-missing ID; the next owner turn creates one structured-checkpoint-seeded replacement. Other failures do not silently replace the thread.
+If the SDK reports `Session not found for thread_id: <id>` or `no rollout found for thread id <id>`, Fabex enters recovery-read-only. Only the explicit `recover replace-missing-thread --operation-id <uuid>` path clears that confirmed-missing ID after checking that it still matches the current thread and no operation is working. The next owner turn creates one structured-checkpoint-seeded replacement in the same milestone; the old thread record is preserved. Other failures do not silently replace the thread. The owner's settings dialog remains available during this recovery, without enabling ordinary edits. Creating a new plan milestone is not a recovery step.
 
 ## Structured checkpoint and recovery budget
 

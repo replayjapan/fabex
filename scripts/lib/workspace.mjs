@@ -134,7 +134,13 @@ export async function issueWorkspaceGrant(root, input, env = process.env, { cata
   if (input.expansion_type !== 'slash_command' || input.command_source !== 'plugin' || !input.session_id) throw new Error('Settings changes require an owner-typed slash command.');
   const grant = { id: randomUUID(), command, args, sessionId: input.session_id, expiresAt: Date.now() + 300000 };
   const config = (await loadEffectiveConfig(root, env)).config;
-  const before = await readState(root, env);
+  let before = await readState(root, env);
+  if (before.ok && !before.state.workspace.sessions[input.session_id]) {
+    // A resumed pre-upgrade chat may not have run the new SessionStart hook yet.
+    // Only the verified owner slash command above can register it here.
+    await registerSession(root, { session_id: input.session_id }, env);
+    before = await readState(root, env);
+  }
   const resolvedModel = before.ok ? resolveSettings(config, before.state, input.session_id).values['partners.codex.model'] : null;
   const defaultModel = await codexModelSource({ ...config, models: { ...config.models, codex: { ...config.models.codex, model: resolvedModel } } }, env);
   const claude = await claudeModelSource(before.state?.claudeModel?.sessionId === input.session_id ? before.state.claudeModel : null, env);
@@ -154,6 +160,12 @@ export async function issueWorkspaceGrant(root, input, env = process.env, { cata
     state.workspace.grants[grant.id] = grant;
   }, env);
   return grant;
+}
+export function matchesWorkspaceQuestion(state, sessionId, questions) {
+  return Object.values(state.workspace?.grants ?? {}).some(grant => grant.command === 'settings' && grant.questions
+    && grant.sessionId === sessionId && grant.expiresAt >= Date.now() && !grant.selection
+    && state.workspace.sessions[sessionId]?.milestoneId === grant.milestoneId
+    && isDeepStrictEqual(questions, grant.questions));
 }
 export async function recordWorkspaceQuestion(root, input, env = process.env) {
   if (input.hook_event_name !== 'PreToolUse' || input.tool_name !== 'AskUserQuestion' || input.agent_id || input.agent_type || !input.session_id || !input.tool_use_id) return;
@@ -228,6 +240,7 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
     const w = state.workspace, current = w.grants[grantId];
     if (!current || current.expiresAt < Date.now() || cycleBusy(state)) throw new Error('settings grant expired or cycle started; retry safely');
     if (!isDeepStrictEqual(current, grant)) throw new Error('settings grant changed; retry safely');
+    if (state.route === 'recovery-read-only' && grant.command !== 'settings') throw new Error('Recover the current thread before changing milestones; a milestone is not a recovery action.');
     const session = w.sessions[grant.sessionId]; if (!session) throw new Error('session not registered; submit a normal owner message first');
     if (grant.milestoneId && session.milestoneId !== grant.milestoneId) throw new Error('The selected milestone changed; open settings again.');
     // Serialize grant verification and the idempotent config replacement. If a

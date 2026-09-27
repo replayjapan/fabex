@@ -13,7 +13,7 @@ Start with `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs status`. For a record
 
 - `recover inspect --operation-id <uuid>` to inspect it;
 - `recover abandon --operation-id <uuid>` to record that Fabex will not retry it.
-- `recover replace-missing-thread --operation-id <uuid>` only when that failed operation contains the exact verified SDK missing-session text.
+- `recover replace-missing-thread --operation-id <uuid>` only when the failed operation reports a recognized missing-session or no-rollout error for the current canonical thread. The command rechecks identity and refuses active work; it preserves the checkpoint and archives the old thread within the same milestone.
 
 For a lock whose owner PID is confirmed dead, use `recover clear-dead-lock`. Never clear a live or unverifiable lock.
 
@@ -24,3 +24,9 @@ For a validated orphaned transaction, choose explicitly between `recover resolve
 Direct or off-books SDK recovery is not implicit. A confirmed missing persisted thread may be cleared only through the exact recovery command; the next real owner message creates a structured-checkpoint-seeded replacement. Ambiguous failures remain recovery-read-only. Never infer external effects.
 
 Recovery actions clear sticky task labels: abandon and confirmed replacement return task status to `active` when queued work remains, otherwise `null`.
+
+A missing Codex conversation is not a reason to create a new plan milestone.
+Do not use `/fabex:milestone` as a recovery shortcut. In healthy recovery state,
+the owner can open `/fabex:settings`, answer its exact recorded questions, and
+apply that one granted settings change. This does not leave recovery mode or
+permit code edits or new Codex turns. Corrupt/locked state still needs diagnosis.

@@ -49,12 +49,15 @@ export async function modeGrantDecision(input, root, env = process.env) {
 }
 
 export async function main() {
+  let input;
   try {
-    const input = await readInput();
+    input = await readInput();
     const root = await rootFromHookInput(input, process.env);
     process.stdout.write(`${JSON.stringify(await modeGrantDecision(input, root, process.env))}\n`);
   } catch {
-    process.stdout.write(`${JSON.stringify({ decision: 'block', reason: 'Fabex could not verify this mode command; mode remains unchanged.' })}\n`);
+    const settings = typeof input?.command_name === 'string' && /^(?:\/)?(?:fabex:)?settings$/.test(input.command_name);
+    const reason = settings ? 'Fabex could not open settings. No setting or mode was changed. Run /fabex:diagnose to check project state and hook health.' : 'Fabex could not verify this mode command; mode remains unchanged.';
+    process.stdout.write(`${JSON.stringify({ decision: 'block', reason })}\n`);
   }
 }
 

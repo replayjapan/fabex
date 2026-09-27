@@ -124,9 +124,19 @@ export function verifyThreadStarted(expectedThreadId, event) {
   return returned;
 }
 
+export function missingSessionThreadId(error) {
+  const text = typeof error === 'string' ? error : [error?.message, error?.cause?.message].filter(item => typeof item === 'string').join('\n');
+  const ids = new Set();
+  for (const line of text.split(/\r?\n/)) {
+    const match = MISSING_SESSION_RE.exec(line)
+      ?? /^(?:Error: )?(?:thread\/resume: )?(?:thread\/resume failed: )?no rollout found for thread id ([A-Za-z0-9._:-]+)(?: \(code -32600\))?$/.exec(line);
+    if (match) ids.add(match[1]);
+  }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
 export function isMissingSessionError(error) {
-  const text = [error?.message, error?.cause?.message, error?.finalResponse].filter((item) => typeof item === 'string').join('\n');
-  return MISSING_SESSION_RE.test(text);
+  return missingSessionThreadId(error) !== null;
 }
 
 export function sandboxForRoute(route) {

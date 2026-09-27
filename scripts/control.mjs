@@ -8,7 +8,7 @@ import { CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, checkpointWarnings, MA
 import { loadEffectiveConfig } from './lib/config.mjs';
 import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
 import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
-import { applyOwnerModeTransition, compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
+import { applyOwnerModeTransition, missingSessionThreadId, compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
 import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 import { claudeModelSource, codexModelSource, speakerLabels } from './lib/speakers.mjs';
@@ -271,10 +271,23 @@ async function recover(root, args) {
     return;
   }
   if (action === 'replace-missing-thread') {
-    if (operation.status !== 'failed' || !/^Session not found for thread_id: [A-Za-z0-9._:-]+$/m.test(operation.result.error ?? '')) throw new ValidationError('thread replacement requires the exact SDK missing-session failure text');
+    const verify = state => {
+      const failed = state.operations.find(item => item.id === id);
+      const missingId = missingSessionThreadId(failed?.result.error);
+      if (failed?.status !== 'failed' || !missingId) throw new ValidationError('thread replacement requires a recognized SDK missing-session failure');
+      if (missingId !== state.partner.thread.threadId || failed.externalId && failed.externalId !== missingId) throw new ValidationError('missing-session failure does not match the current canonical thread; nothing changed');
+      if (state.controller.activeOperationId || state.operations.some(item => item.status === 'working')) throw new ValidationError('thread replacement waits for active partner work to stop');
+    };
+    verify(current.state);
     let restored = null;
     await mutate(root, 'replace-confirmed-missing-thread', (state) => {
+      verify(state);
+      const milestone = state.workspace.milestones[state.workspace.activeMilestoneId];
+      if (!milestone.parts.some(part => part.threadId === state.partner.thread.threadId)) milestone.parts.push({ ...structuredClone(state.partner.thread), archivedAt: new Date().toISOString() });
       state.partner.thread.threadId = null;
+      Object.assign(state.partner.thread.metadata, { turnCount: 0, lastUsedAt: null, lastRecordedTurn: null, lastCompaction: null });
+      state.partner.thread.checkpoint.continuation.armed = false;
+      milestone.thread = structuredClone(state.partner.thread);
       state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : 'not-started';
       restored = restoreOwnerSelectedMode(state);
       state.task.status = state.operations.some((item) => item.status === 'queued') ? 'active' : null;

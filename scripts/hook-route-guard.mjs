@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { authorshipPolicy, isDocumentationTarget } from './lib/authorship.mjs';
-import { recordWorkspaceQuestion } from './lib/workspace.mjs';
+import { recordWorkspaceQuestion, matchesWorkspaceQuestion } from './lib/workspace.mjs';
 import { resolveSettings, executionPlan, ROLE_NAMES } from './lib/workspace-settings.mjs';
 import { basename, dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { realpathSync, lstatSync } from 'node:fs';
@@ -668,9 +668,10 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     if (envelope.ownerSessionId && envelope.ownerSessionId !== executor.sessionId) return deny('ownerSessionId must match this host session');
   }
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
+  if (toolName === 'AskUserQuestion' && state.route === 'recovery-read-only') return main && matchesWorkspaceQuestion(state, executor.sessionId, toolInput.questions) ? defer() : deny('recovery settings dialog requires this session’s exact owner-issued questions');
   if (control?.kind === 'workspace-apply') {
     const grant = state.workspace?.grants[control.grantId];
-    return main && grant && grant.sessionId === executor.sessionId && grant.expiresAt >= Date.now() && state.route !== 'recovery-read-only' ? defer() : deny('settings changes require this session\'s owner-issued grant');
+    return main && grant && grant.sessionId === executor.sessionId && grant.expiresAt >= Date.now() && (state.route !== 'recovery-read-only' || grant.command === 'settings') ? defer() : deny('settings changes require this session\'s owner-issued grant');
   }
   if (control?.kind === 'workspace-view') return defer();
   const activeSession = executor.sessionId === state.workspace?.activeSessionId;
