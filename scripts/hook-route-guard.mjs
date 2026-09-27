@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { recordWorkspaceQuestion } from './lib/workspace.mjs';
 import { resolveSettings, executionPlan, ROLE_NAMES } from './lib/workspace-settings.mjs';
 import { basename, dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { realpathSync, lstatSync } from 'node:fs';
@@ -156,6 +157,7 @@ export function parseControlCommand(command) {
   const tokens = simpleTokens(command);
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
+  if (args[0] === 'settings' && (args.length === 2 && args[1] === '--json' || args.length === 4 && args[1] === '--session' && args[2] && args[3] === '--json')) return { kind: 'workspace-view', sessionId: args[1] === '--session' ? args[2] : undefined };
   if (args.length === 1 && ['settings', 'milestone'].includes(args[0])) return { kind: 'workspace-view' };
   if (args.length === 3 && ['settings', 'milestone'].includes(args[0]) && args[1] === '--session' && args[2]) return { kind: 'workspace-view', sessionId: args[2] };
   if (args.length === 2 && args[0] === 'role' && ROLE_NAMES.includes(args[1])) return { kind: 'task-role' };
@@ -309,6 +311,22 @@ function readOnlyTagArgs(args) {
   return ['--list', '-l'].includes(args[0]) && (args.length === 1 || args.length === 2 && !args[1].startsWith('-'));
 }
 
+export function readOnlySed(args) {
+  const scripts = []; let positional = false;
+  for (let n = 0; n < args.length; n++) {
+    const arg = args[n];
+    if (!positional && ['-n', '-E', '-r', '-En', '-nE'].includes(arg)) continue;
+    if (!positional && arg === '-e') { if (!args[n + 1]) return false; scripts.push(args[++n]); continue; }
+    if (arg.startsWith('-')) return false;
+    if (!scripts.length) scripts.push(arg);
+    positional = true;
+  }
+  return scripts.length > 0 && scripts.every(script => !/[\r\n]/.test(script) && script.split(';').every(part => {
+    const body = part.trim().replace(/^(?:\d+|\$)(?:,(?:\d+|\$))?\s*/, '');
+    return /^[pdq=]$/.test(body) || /^s([^\w\s\\])(?:\\.|(?!\1)[^\\])*\1(?:\\.|(?!\1)[^\\])*\1[gIp0-9]*$/.test(body);
+  }));
+}
+
 function allowedBashCommand(command, config, root) {
   const tokens = simpleTokens(command);
   if (!tokens) return false;
@@ -321,7 +339,7 @@ function allowedBashCommand(command, config, root) {
   const extras = new Set((config?.guard?.allowedCommands ?? []).map((value) => executableName(value)));
   if (extras.has(executable)) return true;
   if (commandPatternMatches(tokens, config, root)) return true;
-  if (executable === 'sed') return args.includes('-n') && !args.some((arg) => arg === '-i' || arg.startsWith('-i'));
+  if (executable === 'sed') return readOnlySed(args);
   if (executable === 'env') return args.length === 0;
   if (executable === 'find') return !args.some((arg) => ['-delete', '-exec', '-execdir', '-ok', '-okdir'].includes(arg));
   if (BASE_READ_COMMANDS.has(executable)) return true;
@@ -445,13 +463,7 @@ function allowedDiscussionReads(command, config, root) {
     const args = tokens.slice(commandIndex(tokens) + 1);
     if (executable === 'rg' && args.some(arg => /^(?:--pre|--hostname-bin)(?:=|$)/.test(arg))) return false;
     if (executable === 'file' && args.some(arg => arg === '-C' || arg === '--compile')) return false;
-    if (executable === 'sed') {
-      // The -n flag alone does not prevent sed w/e commands from mutating.
-      const rest = [...args];
-      if (rest.shift() !== '-n') return false;
-      if (rest[0] === '-e') rest.shift();
-      return /^\d+(?:,\d+)?p$/.test(rest.shift() ?? '') && rest.every(arg => !arg.startsWith('-'));
-    }
+    if (executable === 'sed') return readOnlySed(args);
     if (['sort', 'uniq', 'cut', 'tr', 'column'].includes(executable)) {
       if (executable === 'sort' && args.some(arg => /^-o|^--output(?:=|$)/.test(arg))) return false;
       // uniq's second file operand is an output, unlike sort/cut inputs.
@@ -490,12 +502,16 @@ export function workCommandDenial(command, root, cwd = root, config = null) {
   for (const [rule, pattern] of destructive) if (pattern.test(command)) return rule;
   if (/\b(?:git|gh)\b/.test(command) && /\$\(|`/.test(command)) return 'unparseable Git delivery substitution';
   if (/(?:^|[;&|]\s*)ps\s+(?:e|auxe|eww|-axo\s+(?:command|args|environment))(?:\s|$)/.test(command)) return 'unbounded process environment disclosure';
-  if (/\b(?:xargs|find)\b[\s\S]*\b(?:rm|mv|cp|tee|touch|chmod|sed|perl)\b/.test(command)) return 'project source authorship (indirect file command)';
+  if (/\b(?:xargs|find)\b[\s\S]*\b(?:rm|mv|cp|tee|touch|chmod|sed|perl)\b/.test(command) && !allowedDiscussionReads(command, config, root)) return 'project source authorship (indirect file command)';
   if (/(?:^|[\s;&|])(?:--fix|--write|--update|--update-snapshot)(?:\s|$)/.test(command)) return 'project source authorship (rewrite flag)';
   if (/\bfind\b[\s\S]*\s-delete\b/.test(command)) return 'project source authorship (find delete)';
   if (/\bgit\b[\s\S]*--output(?:=|\s)/.test(command)) return 'project source authorship (git output)';
   if (/\benv\s+(?:[\w]+=[^\s]+\s+)*(?:touch|rm|cp|mv|tee|sed|perl)\b/.test(command)) return 'project source authorship (env file command)';
   if (/\b(?:node|python\d*|ruby|perl)\s+(?:-e|-c)\b/.test(command) && /\b(?:writeFile\w*|appendFile\w*|unlink\w*|rename\w*|write_text|write_bytes|rmtree)\b/.test(command)) return 'project source authorship (inline writer)';
+  for (const segment of safeCommandSegments(command) ?? []) {
+    const words = simpleTokens(segment);
+    if (words && executableName(words[commandIndex(words)]) === 'sed' && !readOnlySed(words.slice(commandIndex(words) + 1))) return 'unverified sed effects (in-place, file writes, execution or unsupported script)';
+  }
   const cdPrefix = /^\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*&&/.exec(command);
   if (cdPrefix) cwd = resolve(cwd, cdPrefix[1].replace(/^['"]|['"]$/g, ''));
   const canonical = target => {
@@ -792,6 +808,7 @@ export async function main() {
         invocationCwd: input.cwd
       })
       : classifyUnhealthyToolUse({ toolName: input.tool_name, toolInput: input.tool_input, health: stateResult.health });
+    if (output.decision !== 'deny' && stateResult.ok && input.tool_name === 'AskUserQuestion') await recordWorkspaceQuestion(root, input);
     if (output.decision !== 'deny' && stateResult.ok && stateResult.state.route === 'normal' && input.tool_name === 'Bash' && heavyShape(input.tool_input?.command)) {
       const id = input.tool_use_id ? `host:${input.session_id ?? ''}:${input.tool_use_id}` : '';
       const admission = await beginHeavy(root, { id, command: input.tool_input.command, executor: input.agent_type ?? 'claude-main', wrapperRequested: true, cwd: input.cwd ?? root });

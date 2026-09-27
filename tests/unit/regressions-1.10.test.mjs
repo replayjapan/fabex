@@ -28,7 +28,7 @@ test('1.10 session overrides remain isolated and grants are consumed', async t =
   const state = (await readState(root, env)).state;
   assert.equal(resolveSettings({}, state, 'chat-a').values['roles.implementation.executor'], 'claude');
   assert.equal(resolveSettings({}, state, 'chat-b').values['roles.implementation.executor'], 'codex');
-  const cli=await exec(process.execPath,[new URL('../../scripts/control.mjs',import.meta.url).pathname,'settings','--session','chat-a'],{cwd:root,env});
+  const cli=await exec(process.execPath,[new URL('../../scripts/control.mjs',import.meta.url).pathname,'settings','--session','chat-a','--json'],{cwd:root,env});
   assert.equal(JSON.parse(cli.stdout).values['roles.implementation.executor'],'claude');
   await assert.rejects(applyWorkspaceGrant(root, g.id, env), /grant/);
   await assert.rejects(issueWorkspaceGrant(root, { command_name: 'fabex:settings', command_args: 'summaries=false' }, env), /owner-typed/);

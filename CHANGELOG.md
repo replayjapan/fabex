@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.10.2 — 2026-09-27
+
+- Add human settings choices, a short tracking alias, persistent milestone overrides and explicit scope selection.
+- Discover the independently installed tracker without a workstation path; verify package identity and report ambiguous installations.
+- Record exact host dialog answers before consuming single-use settings grants; unsupported or cancelled answers cannot apply changes.
+- Show installation and optional Claude allowance setup help in settings; retain JSON diagnostics and silence when tracking is off.
+- Allow verified read-only find/grep-to-sed formatting while retaining write and execution denials.
+- Live host dialog compatibility and a fresh-machine plugin install still require activation checks; explicit scoped commands remain available.
+
 ## 1.10.1 — 2026-09-27
 
 ### Why

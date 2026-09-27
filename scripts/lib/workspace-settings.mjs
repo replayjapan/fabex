@@ -33,7 +33,7 @@ export function validateSettings(values) {
 export function resolveSettings(config, state, sessionId = state.workspace?.activeSessionId) {
   const values = { ...SETTING_DEFAULTS, 'partners.codex.model': config?.models?.codex?.model ?? null, 'partners.codex.effort': config?.models?.codex?.reasoningEffort ?? null };
   const sources = Object.fromEntries(Object.keys(values).map(key => [key, 'plugin/legacy-config']));
-  for (const [layer, name] of [[config?.settings, null], [state.workspace?.sessions?.[sessionId]?.settings, 'session']]) {
+  for (const [layer, name] of [[config?.settings, null], [state.workspace?.milestones?.[state.workspace?.sessions?.[sessionId]?.milestoneId ?? state.workspace?.activeMilestoneId]?.settings, 'milestone'], [state.workspace?.sessions?.[sessionId]?.settings, 'session']]) {
     for (const [key, value] of Object.entries(layer ?? {})) {
       if (value === 'inherit' && key === 'usageTracker.mode') continue;
       values[key] = value; sources[key] = name ?? config.settingSources?.[key] ?? 'project';
@@ -58,6 +58,7 @@ export function validateWorkspace(w) {
   }
   for (const [id, m] of Object.entries(w.milestones)) {
     if (id !== 'legacy' && !/^[a-f0-9-]{36}$/.test(id)) throw new Error('invalid milestone id');
+    if (m.settings !== undefined) validateSettings(m.settings);
     if (m.id !== id || typeof m.name !== 'string' || m.name.length > 200 || typeof m.handoff !== 'string' || typeof m.summary !== 'string' || !Array.isArray(m.parts)) throw new Error('invalid milestone record');
   }
   for (const session of Object.values(w.sessions)) for (const [id, profile] of Object.entries(session.profiles ?? {})) {
@@ -65,5 +66,8 @@ export function validateWorkspace(w) {
     validateSettings(profile.settings);
   }
   for (const grant of Object.values(w.grants)) if (!['settings', 'milestone'].includes(grant.command) || typeof grant.sessionId !== 'string' || typeof grant.args !== 'string' || !Number.isFinite(grant.expiresAt)) throw new Error('invalid owner settings grant');
+  for (const grant of Object.values(w.grants)) {
+    if (grant.options !== undefined && (!Array.isArray(grant.options) || !grant.options.length || grant.options.length > 6 || !grant.options.every(v => /^tracking=(on|off|inherit) scope=(project|milestone)$/.test(v)) || grant.questionToolId !== null && (typeof grant.questionToolId !== 'string' || grant.questionToolId.length > 200) || !Array.isArray(grant.questions) || grant.questions.length < 1 || grant.questions.length > 2 || grant.selection !== null && !grant.options.includes(grant.selection))) throw new Error('invalid owner settings choices');
+  }
   for (const seal of Object.values(w.seals)) if (seal.reading !== null && (typeof seal.reading !== 'string' || Buffer.byteLength(seal.reading) > 16000 || !/^[a-f0-9]{64}$/.test(seal.digest))) throw new Error('invalid independent seal');
 }

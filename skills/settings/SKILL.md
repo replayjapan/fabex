@@ -4,17 +4,35 @@ description: View project defaults and current-session model, role, milestone an
 disable-model-invocation: true
 ---
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs settings --session <ownerSessionId-from-context>` to show effective
-values and their sources. Viewing needs no grant. The spelling in Claude Code is
-`/fabex:settings`; never claim a different spelling is installed.
+Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs settings --session <ownerSessionId-from-context>`
+and show its human view, including tracking status, scopes, installation help and
+other common choices. Use `--json` only when requested. Owner spelling is
+`/fabex:settings`. Viewing alone never applies a setting.
 
-An owner-typed command with arguments mints a grant containing those exact
-arguments. Run the `settings apply --grant <id>` command supplied by the hook;
-do not reconstruct or expand the request. Arguments are whitespace-separated
-`key=value` assignments plus `scope=session` (default) or `scope=project`.
-For example `roles.implementation.executor=claude scope=session`.
-Use `key=inherit` to remove an override. Saving project defaults must be explicit.
-Quote values containing spaces, for example `usageTracker.path="/absolute/path with spaces/track"`.
+An owner-typed bare `/fabex:settings` or `/fabex:settings tracking=on|off|inherit`
+issues a five-minute, single-use selection grant. The expansion hook supplies the
+exact `AskUserQuestion` questions. Offer them unchanged when that host tool is
+available. Apply only after the PostToolUse hook confirms the owner's answer was
+recorded, using its `settings apply --grant <id>` command. Never invent a response,
+select an option yourself, or apply after cancellation. Unknown host payloads fail
+closed. Without a dialog, show the printed explicit commands for the owner to type.
+Questions alone do not authorize mutations outside their recorded choices.
+
+An explicit owner command such as `/fabex:settings tracking=on scope=milestone`
+applies directly through the exact grant command supplied by the expansion hook.
+Do not reconstruct or expand arguments. `tracking` aliases `usageTracker.mode`.
+After applying, view settings again and report the selected scope, effective state
+and any installation or allowance setup help. Do not claim fresh readings from a toggle.
+Project defaults apply across milestones; milestone overrides survive new chats
+and thread rollovers. Precedence is project, milestone, then session. Use
+`tracking=inherit` with an explicit scope to remove its override. Other settings
+still default to session scope; saving project defaults must be explicit.
+
+Fabex locates the independent tracker automatically. Multiple installations need
+an explicit choice; show the provided path commands and do not guess. A
+`usageTracker.path` override remains available. Quote paths containing spaces.
+Installation or collector setup requires an owner instruction, not a settings
+view. Missing Claude allowance readings do not prove the collector is absent.
 
 The current main Claude model is host-managed. A requested preference is not
 proof it is applied; verify host `/model` and effort support. Codex partner

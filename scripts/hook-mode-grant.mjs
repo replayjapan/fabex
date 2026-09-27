@@ -28,7 +28,8 @@ async function readInput() {
 
 export async function modeGrantDecision(input, root, env = process.env) {
   const settingsGrant = await issueWorkspaceGrant(root, input, env);
-  if (settingsGrant) return { hookSpecificOutput: { hookEventName: 'UserPromptExpansion', additionalContext: settingsGrant.viewing ? `View effective settings with control.mjs settings --session ${JSON.stringify(input.session_id)}; no mutation authorized.` : `Owner-issued settings grant. Run node ${PLUGIN_ROOT}/scripts/control.mjs settings apply --grant ${settingsGrant.id}. It applies only the captured owner arguments; no retyping or additional changes.` } };
+  if (settingsGrant?.questions) return { hookSpecificOutput: { hookEventName: 'UserPromptExpansion', additionalContext: `View control.mjs settings --session ${JSON.stringify(input.session_id)}. Then offer AskUserQuestion with exactly ${JSON.stringify({ questions: settingsGrant.questions })}. The host PostToolUse hook must record the owner's answer before settings apply --grant ${settingsGrant.id} can run. Never choose for the owner. If the dialog is unavailable or cancelled, show the explicit scoped commands; do not apply. This grant expires in five minutes and authorizes one offered change only.` } };
+  if (settingsGrant) return { hookSpecificOutput: { hookEventName: 'UserPromptExpansion', additionalContext: settingsGrant.viewing ? `View effective settings with control.mjs settings --session ${JSON.stringify(input.session_id)}${input.command_args?.trim() === '--json' ? ' --json' : ''}; no mutation authorized.` : `Owner-issued settings grant. Run node ${PLUGIN_ROOT}/scripts/control.mjs settings apply --grant ${settingsGrant.id}. It applies only the captured owner arguments; no retyping or additional changes.` } };
   const target = modeTargetForSkill(input?.command_name);
   if (!target) return {};
   if (input.expansion_type !== 'slash_command' || input.command_source !== 'plugin') {

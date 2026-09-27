@@ -20,6 +20,7 @@ import { heavyStatus, waitHeavy, runHeavy, releaseHeavy, recoverHeavy } from './
 import { resourceList, retainResource, releaseResource } from './lib/resources.mjs';
 import { recentOwnerPromptEvidence } from './lib/hook-evidence.mjs';
 import { workspaceStatus, applyWorkspaceGrant, contextGauge, milestoneHandoff, selectTaskRole } from './lib/workspace.mjs';
+import { settingsView } from './lib/settings-view.mjs';
 import { usageControl } from './lib/usage-integration.mjs';
 
 const USAGE = 'Usage: control.mjs mem | prompts | heavy status|wait [--timeout 1..120] | resources list|retain <id> --note <reason>|release <id> | status [--all|--brief] | config | diagnose | dev start|stop|restart|status|logs [--lines 1..400] | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
@@ -407,14 +408,18 @@ async function diagnose(root) {
 export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
   const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
-  if (['settings', 'milestone'].includes(command) && args.length === 2 && args[0] === '--session' && args[1]) {
+  if (command === 'milestone' && args.length === 2 && args[0] === '--session' && args[1]) {
     process.stdout.write(JSON.stringify(await workspaceStatus(root, process.env, args[1]), null, 2) + '\n'); return;
   }
   if (command === 'role' && args.length === 1) { process.stdout.write(JSON.stringify(await selectTaskRole(root, args[0]), null, 2) + '\n'); return; }
   if (command === 'settings') {
-    const result = args.length === 0 ? await workspaceStatus(root) : args.length === 3 && args[0] === 'apply' && args[1] === '--grant' ? await applyWorkspaceGrant(root, assertUuid(args[2])) : null;
-    if (!result) throw new ValidationError('settings accepts no arguments or apply --grant <owner-issued-id>');
-    process.stdout.write(JSON.stringify(result, null, 2) + '\n'); return;
+    if (args.length === 3 && args[0] === 'apply' && args[1] === '--grant') {
+      process.stdout.write(JSON.stringify(await applyWorkspaceGrant(root, assertUuid(args[2])), null, 2) + '\n'); return;
+    }
+    const viewArgs = args.filter(arg => arg !== '--json');
+    if (!(viewArgs.length === 0 || viewArgs.length === 2 && viewArgs[0] === '--session' && viewArgs[1])) throw new ValidationError('settings accepts [--session id] [--json] or apply --grant <owner-issued-id>');
+    const result = await workspaceStatus(root, process.env, viewArgs[1]);
+    process.stdout.write(args.includes('--json') ? JSON.stringify(result, null, 2) + '\n' : await settingsView(result)); return;
   }
   if (command === 'milestone' && args.length === 0) { process.stdout.write(JSON.stringify(await workspaceStatus(root), null, 2) + '\n'); return; }
   if (command === 'milestone' && ['handoff', 'rotate'].includes(args[0]) && args[1] === '--review' && (args[0] === 'handoff' ? args.length === 4 : args.length === 3)) {

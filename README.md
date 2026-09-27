@@ -56,6 +56,8 @@ is below.
 
 ### What's new?
 
+- **1.10.2:** discoverable tracking controls, automatic tracker discovery and milestone preferences. [Details](CHANGELOG.md)
+
 - **1.10.1:** readable guides, safer chat renames, fuller context accounting and
   clearer recovery controls. [Details](CHANGELOG.md#1101--2026-09-27)
 - **1.10.0:** milestone threads, session settings and optional usage tracking.
@@ -69,6 +71,40 @@ installing it does not enable tracking automatically.
 
 By **rePlay, LLC**, under the [MIT License](LICENSE). Private chat records, usage
 data and credentials do not belong in this public repository.
+
+### Settings you can change
+
+Open `/fabex:settings` to see current values, available choices and installation
+help. You do not need to remember internal setting names. The short
+`/fabex:settings tracking=on` offers **Project** or **Current milestone** before
+saving. Host dialogs are used where supported; printed commands work elsewhere:
+
+- Project tracking: `/fabex:settings tracking=on scope=project`
+- Milestone tracking: `/fabex:settings tracking=on scope=milestone`
+- Disable milestone tracking: `/fabex:settings tracking=off scope=milestone`
+- Inherit the project choice: `/fabex:settings tracking=inherit scope=milestone`
+- Partner model/effort and task roles: open `/fabex:settings` for current values and commands.
+- New-chat milestone policy: `/fabex:settings milestones.newChatMeansNewMilestone=true scope=project`
+
+Milestone choices survive new chats and Codex thread rollovers. New milestones
+inherit the project default. Existing chat overrides still take precedence; the
+settings view shows their effect. `/fabex:settings --json` exposes the full detail.
+
+### Weekly usage tracking
+
+AI Usage Tracker is an independent Claude Code plugin containing the Weekly
+Tracker skill and a standalone tool. Install it once for use across projects:
+
+```text
+/plugin marketplace add replayjapan/ai-usage-tracker
+/plugin install ai-usage-tracker@ai-usage-tracker
+```
+
+Restart Claude Code, then run `/fabex:settings tracking=on`. Fabex finds a valid
+installation automatically. Multiple installations require a choice; no folder
+path is needed for the usual single installation. Settings also explains the
+optional one-time collector setup for Claude allowance readings. Installing the
+plugin does not enable tracking, and Off stays silent in ordinary replies.
 
 ---
 
@@ -121,7 +157,9 @@ are additive. Schema 17 migrates private state losslessly after an old runner en
 
 `/fabex:settings` displays defaults, overrides and each value's source. Owner-typed
 arguments such as `roles.implementation.executor=claude scope=session` grant a
-single settings change; agents cannot mint it. `scope=project` explicitly saves a
+single settings change; agents cannot mint it. Bare settings and an unscoped
+tracking alias issue bounded choice grants: only a matching host dialog answer
+can select one of the recorded options. They do not authorize changes on opening. `scope=project` explicitly saves a
 project default in `.fabex/config.json`; `key=inherit scope=session` removes that
 override. Flat validated keys live under `settings` in machine/project config.
 Session choices persist privately and do not change another chat. Changes wait for
@@ -170,8 +208,11 @@ the SDK must not read Claude's current private assessment through other paths.
 
 ### Optional AI Usage Tracker
 
-`usageTracker.mode` is off by default, with session `on/off/inherit`; the installed
-launcher is selected explicitly through `usageTracker.path`. Off means no tracker
+`usageTracker.mode` is off by default. The friendly `tracking` alias supports
+project, milestone and session scopes; an unscoped alias offers a scope choice.
+Launcher discovery checks AI_USAGE_TRACKER, the installed Claude plugin registry,
+resolved user skills and PATH, deduplicates real paths and refuses ambiguity.
+`usageTracker.path` is an optional explicit override. Off means no tracker
 calls or report sections. On uses `control.mjs usage snapshot --event
 start|checkpoint|progress|end [--checkpoint id]`; Claude records once for both
 providers. `usage report` uses Fabex's bundled read-only database adapter, without

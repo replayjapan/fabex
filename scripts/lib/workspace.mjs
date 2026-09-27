@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from 'node:util';
+import { discoverTracker } from './tracker-discovery.mjs';
+import { settingsQuestions } from './settings-view.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { open, readFile, mkdir, writeFile, rename, realpath, lstat, readdir } from 'node:fs/promises';
 import { fullTitle, indexedGauge } from './transcript-index.mjs';
@@ -132,14 +135,54 @@ export async function issueWorkspaceGrant(root, input, env = process.env) {
   const command = input.command_name?.replace(/^\//, '').replace(/^fabex:/, '');
   if (!['settings', 'milestone'].includes(command)) return null;
   const args = (input.command_args ?? '').trim();
-  if (!args) return { viewing: true };
+  if (!args && (command !== 'settings' || input.expansion_type !== 'slash_command' || input.command_source !== 'plugin')) return { viewing: true };
+  if (args === '--json' && command === 'settings') return { viewing: true };
   if (input.expansion_type !== 'slash_command' || input.command_source !== 'plugin' || !input.session_id) throw new Error('Settings changes require an owner-typed slash command.');
   const grant = { id: randomUUID(), command, args, sessionId: input.session_id, expiresAt: Date.now() + 300000 };
   await mutate(root, 'workspace-owner-grant', state => {
+    const session = state.workspace.sessions[input.session_id];
+    if (!session) throw new Error('Session not registered; submit a normal owner message first.');
+    grant.milestoneId = session.milestoneId;
+    if (command === 'settings' && (!args || /^tracking=(on|off|inherit)$/.test(args))) {
+      Object.assign(grant, settingsQuestions(args, root, state.workspace.milestones[session.milestoneId].name));
+      grant.selection = null;
+      grant.questionToolId = null;
+      for (const [id, previous] of Object.entries(state.workspace.grants)) if (previous.questions && previous.sessionId === grant.sessionId) delete state.workspace.grants[id];
+    }
     for (const [id, value] of Object.entries(state.workspace.grants)) if (value.expiresAt < Date.now()) delete state.workspace.grants[id];
     state.workspace.grants[grant.id] = grant;
   }, env);
   return grant;
+}
+export async function recordWorkspaceQuestion(root, input, env = process.env) {
+  if (input.hook_event_name !== 'PreToolUse' || input.tool_name !== 'AskUserQuestion' || input.agent_id || input.agent_type || !input.session_id || !input.tool_use_id) return;
+  const current = await readState(root, env);
+  const matches = grant => grant.questions && grant.sessionId === input.session_id && grant.expiresAt >= Date.now() && !grant.selection && isDeepStrictEqual(input.tool_input?.questions, grant.questions);
+  if (!current.ok || !Object.values(current.state.workspace.grants).some(matches)) return;
+  await mutate(root, 'workspace-owner-question', state => {
+    for (const grant of Object.values(state.workspace.grants)) if (matches(grant) && state.workspace.sessions[grant.sessionId]?.milestoneId === grant.milestoneId) grant.questionToolId = input.tool_use_id;
+  }, env);
+}
+export async function recordWorkspaceSelection(root, input, env = process.env) {
+  if (input.hook_event_name !== 'PostToolUse' || input.tool_name !== 'AskUserQuestion' || input.agent_id || input.agent_type || !input.session_id || !input.tool_use_id) return null;
+  let response = input.tool_response;
+  if (typeof response === 'string') { try { response = JSON.parse(response); } catch { return null; } }
+  if (!response?.answers || response.is_error || response.error) return null;
+  let selected = null;
+  await mutate(root, 'workspace-owner-selection', state => {
+    for (const grant of Object.values(state.workspace.grants)) {
+      if (!grant.questions || grant.questionToolId !== input.tool_use_id || grant.sessionId !== input.session_id || grant.expiresAt < Date.now() || grant.selection || !isDeepStrictEqual(input.tool_input?.questions, grant.questions)) continue;
+      if (state.workspace.sessions[grant.sessionId]?.milestoneId !== grant.milestoneId) continue;
+      const labels = grant.questions.map(q => response.answers[q.question]);
+      if (labels.some((label, i) => typeof label !== 'string' || !grant.questions[i].options.some(o => o.label === label))) continue;
+      const scope = labels[0] === 'Project' ? 'project' : 'milestone';
+      const mode = grant.args ? grant.args.split('=')[1] : ({ On: 'on', Off: 'off', Inherit: 'inherit' })[labels[1]];
+      const pick = `tracking=${mode} scope=${scope}`;
+      if (!grant.options.includes(pick)) continue;
+      grant.selection = pick; selected = { grantId: grant.id, selection: pick };
+    }
+  }, env);
+  return selected;
 }
 export function parseSettingsArgs(text) {
   const result = { scope: 'session', updates: {}, resets: [] };
@@ -154,9 +197,9 @@ export function parseSettingsArgs(text) {
   if (quote || escaped) throw new Error('unterminated quoted settings value');
   if (token) tokens.push(token);
   for (const token of tokens) {
-    const index = token.indexOf('='); if (index < 1) throw new Error('Use key=value scope=session|project; value=inherit removes an override.');
-    const key = token.slice(0, index), raw = token.slice(index + 1);
-    if (key === 'scope') { if (!['session', 'project'].includes(raw)) throw new Error('scope must be session or project'); result.scope = raw; continue; }
+    const index = token.indexOf('='); if (index < 1) throw new Error('Use key=value scope=session|milestone|project; value=inherit removes an override.');
+    const original = token.slice(0, index), key = original === 'tracking' ? 'usageTracker.mode' : original, raw = token.slice(index + 1);
+    if (key === 'scope') { if (!['session', 'milestone', 'project'].includes(raw)) throw new Error('scope must be session, milestone or project'); result.scope = raw; continue; }
     if (!Object.hasOwn(SETTING_DEFAULTS, key)) throw new Error(`unknown setting ${key}`);
     let value; try { value = JSON.parse(raw); } catch { value = raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1) : raw; }
     if (raw === 'inherit') result.resets.push(key); else { validateSettings({ [key]: value }); result.updates[key] = value; }
@@ -169,11 +212,14 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
   const grant = before.state.workspace.grants[grantId];
   if (!grant || grant.expiresAt < Date.now()) throw new Error('owner settings grant missing or expired');
   if (cycleBusy(before.state)) throw new Error('Apply settings between completed review cycles.');
-  const parsed = grant.command === 'settings' ? parseSettingsArgs(grant.args) : null;
+  if (grant.options && (!grant.selection || !grant.options.includes(grant.selection))) throw new Error('Choose an offered setting in the owner dialog, or type an explicit scoped settings command.');
+  const parsed = grant.command === 'settings' ? parseSettingsArgs(grant.selection ?? grant.args) : null;
   const state = await mutate(root, 'workspace-apply-owner-grant', async state => {
     const w = state.workspace, current = w.grants[grantId];
     if (!current || current.expiresAt < Date.now() || cycleBusy(state)) throw new Error('settings grant expired or cycle started; retry safely');
+    if (!isDeepStrictEqual(current, grant)) throw new Error('settings grant changed; retry safely');
     const session = w.sessions[grant.sessionId]; if (!session) throw new Error('session not registered; submit a normal owner message first');
+    if (grant.milestoneId && session.milestoneId !== grant.milestoneId) throw new Error('The selected milestone changed; open settings again.');
     // Serialize grant verification and the idempotent config replacement. If a
     // crash follows replacement, retrying the still-present grant sets the same values.
     if (parsed?.scope === 'project') {
@@ -186,7 +232,10 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
     const temp = file + '.' + randomUUID(); await writeFile(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' }); await rename(temp, file);
     }
     if (parsed) {
-      if (parsed.scope === 'session') { Object.assign(session.settings, parsed.updates); for (const key of parsed.resets) delete session.settings[key]; }
+      if (parsed.scope === 'session' || parsed.scope === 'milestone') {
+        const target = parsed.scope === 'session' ? session.settings : (w.milestones[session.milestoneId].settings ??= {});
+        Object.assign(target, parsed.updates); for (const key of parsed.resets) delete target[key];
+      }
     } else {
       const name = grant.args.trim(); if (!name || name.length > 200) throw new Error('milestone name must be 1..200 characters');
       if (/^restore-part=\d+$/.test(name)) {
@@ -232,7 +281,10 @@ export function assertSealed(state, operation) {
 export async function workspaceStatus(root, env = process.env, sessionId) {
   const current = await readState(root, env); if (!current.ok) throw new Error(current.health);
   const config = (await loadEffectiveConfig(root, env)).config;
-  return { ...resolveSettings(config, current.state, sessionId), execution: executionPlan(config, current.state, sessionId), observations: current.state.workspace.observations ?? {}, activeMilestoneId: current.state.workspace.activeMilestoneId, milestones: Object.values(current.state.workspace.milestones).map(({ id, name, summary, handoff, thread, parts }) => ({ id, name, summary, handoff, archivedParts: parts.map((part, index) => ({ index, threadId: part.threadId, archivedAt: part.archivedAt })), threadId: id === current.state.workspace.activeMilestoneId ? current.state.partner.thread.threadId : thread?.threadId ?? null })), sessions: current.state.workspace.sessions };
+  const resolved = resolveSettings(config, current.state, sessionId);
+  const milestoneId = current.state.workspace.sessions[resolved.sessionId]?.milestoneId ?? current.state.workspace.activeMilestoneId;
+  const milestone = current.state.workspace.milestones[milestoneId];
+  return { ...resolved, project: root, milestone: { id: milestoneId, name: milestone.name }, tracking: { installation: await discoverTracker(resolved.values, env), project: config.settings?.['usageTracker.mode'] ?? 'off', milestone: milestone.settings?.['usageTracker.mode'] ?? 'inherit', session: current.state.workspace.sessions[resolved.sessionId]?.settings?.['usageTracker.mode'] ?? 'inherit', effective: resolved.values['usageTracker.mode'], source: resolved.sources['usageTracker.mode'] }, execution: executionPlan(config, current.state, sessionId), observations: current.state.workspace.observations ?? {}, activeMilestoneId: current.state.workspace.activeMilestoneId, milestones: Object.values(current.state.workspace.milestones).map(({ id, name, summary, handoff, thread, parts }) => ({ id, name, summary, handoff, archivedParts: parts.map((part, index) => ({ index, threadId: part.threadId, archivedAt: part.archivedAt })), threadId: id === current.state.workspace.activeMilestoneId ? current.state.partner.thread.threadId : thread?.threadId ?? null })), sessions: current.state.workspace.sessions };
 }
 export async function selectTaskRole(root, role, env = process.env) {
   if (!ROLE_NAMES.includes(role)) throw new Error(`role must be ${ROLE_NAMES.join(', ')}`);

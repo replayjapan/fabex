@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { recordWorkspaceSelection } from './lib/workspace.mjs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rootFromHookInput } from './lib/paths.mjs';
@@ -35,7 +36,13 @@ export async function main() {
   try {
     const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    await recordToolCompletion(await rootFromHookInput(input, process.env), input);
+    const root = await rootFromHookInput(input, process.env);
+    if (input.tool_name === 'AskUserQuestion') {
+      const selected = await recordWorkspaceSelection(root, input);
+      process.stdout.write(JSON.stringify(selected ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `Owner selection recorded: ${selected.selection}. Apply once with control.mjs settings apply --grant ${selected.grantId}, between completed review cycles.` } } : {}) + '\n');
+      return;
+    }
+    await recordToolCompletion(root, input);
     process.stdout.write('{}\n');
   } catch { process.stdout.write(JSON.stringify({ systemMessage: 'Fabex could not acknowledge resource completion; inspect heavy status/resources before more heavy work.' }) + '\n'); }
 }
