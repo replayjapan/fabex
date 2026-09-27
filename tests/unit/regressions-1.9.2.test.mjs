@@ -254,7 +254,7 @@ test('1.9.2 schema-15 migration preserves old fields and defers byte-for-byte fo
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(root, env);
   assert.equal(migrated.ok, true, migrated.error?.message);
-  assert.equal(migrated.state.schemaVersion, 16);
+  assert.equal(migrated.state.schemaVersion, 17);
   const next = migrated.state.partner.thread.checkpoint;
   for (const [key, value] of Object.entries(cp)) if (key !== 'fieldUpdatedAt') assert.deepEqual(next[key], value);
   assert.deepEqual(next.openWork, []); assert.equal(next.continuation.armed, false);

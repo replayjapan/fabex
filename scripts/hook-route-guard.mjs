@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { resolveSettings, executionPlan, ROLE_NAMES } from './lib/workspace-settings.mjs';
 import { basename, dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { realpathSync, lstatSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -155,6 +156,13 @@ export function parseControlCommand(command) {
   const tokens = simpleTokens(command);
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
+  if (args.length === 1 && ['settings', 'milestone'].includes(args[0])) return { kind: 'workspace-view' };
+  if (args.length === 3 && ['settings', 'milestone'].includes(args[0]) && args[1] === '--session' && args[2]) return { kind: 'workspace-view', sessionId: args[2] };
+  if (args.length === 2 && args[0] === 'role' && ROLE_NAMES.includes(args[1])) return { kind: 'task-role' };
+  if (args[0] === 'milestone' && ['handoff', 'rotate'].includes(args[1]) && args[2] === '--review' && UUID_RE.test(args[3] ?? '') && (args[1] === 'handoff' ? args.length === 5 && Buffer.byteLength(args[4]) <= 8000 : args.length === 4)) return { kind: 'milestone-checkpoint' };
+  if (args.length === 4 && args[0] === 'settings' && args[1] === 'apply' && args[2] === '--grant' && UUID_RE.test(args[3])) return { kind: 'workspace-apply', grantId: args[3] };
+  if (args[0] === 'usage' && args.length === 2 && args[1] === 'report') return { kind: 'usage-report' };
+  if (args[0] === 'usage' && [4, 6].includes(args.length) && args[1] === 'snapshot' && args[2] === '--event' && ['start', 'checkpoint', 'progress', 'end'].includes(args[3]) && (args.length === 4 || args[4] === '--checkpoint' && /^[A-Za-z0-9._-]{1,80}$/.test(args[5]))) return { kind: 'usage-snapshot' };
   if (args.length === 1 && ['mem', 'prompts'].includes(args[0])) return { kind: args[0] };
   if (args[0] === 'heavy' && args.length === 2 && ['status', 'wait'].includes(args[1])) return { kind: `heavy-${args[1]}` };
   if (args[0] === 'heavy' && args[1] === 'release' && args.length === 3 && args[2].length <= 300) return { kind: 'heavy-release' };
@@ -192,6 +200,11 @@ export function parseControlCommand(command) {
 }
 
 export function parseControllerCommand(command, { participants = null } = {}) {
+  if (typeof command === 'string' && command.includes('\n')) {
+    const lines = command.trimEnd().split('\n');
+    const match = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+seal\s+--operation-id\s+([a-f0-9-]{36})\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0]);
+    if (match && resolve(match[1] ?? match[2] ?? match[3]) === CONTROLLER_PATH && UUID_RE.test(match[4]) && lines.at(-1) === match[5] && Buffer.byteLength(lines.slice(1, -1).join('\n')) <= 16000) return { kind: 'controller-seal', operationId: match[4] };
+  }
   const acceptedSubmit = (message) => {
     if (participants !== null) {
       try { normalizeSubmissionEnvelope(message, participants); } catch { return null; }
@@ -610,11 +623,36 @@ export function classifyUnhealthyToolUse({ toolName, toolInput, health }) {
 
 export async function classifyToolUse({ toolName, toolInput, state, paths, executor = {}, config = null, env = process.env, invocationCwd = paths?.canonicalRoot }) {
   if (typeof toolName !== 'string' || !isPlainObject(toolInput) || !state || !paths) return deny('malformed tool request');
+  const profile = resolveSettings(config, state, executor.sessionId).values;
+  const main = !executor.agentId && !executor.agentType;
+  const bound = Boolean(executor.sessionId && executor.sessionId === state.workspace?.activeSessionId && state.workspace?.sessions[executor.sessionId]?.milestoneId === state.workspace?.activeMilestoneId);
+  const task = executionPlan(config, state, executor.sessionId);
+  const claudeEdits = bound && main && ['implementation', 'testWriting', 'docs'].includes(task.role) && task.executor === 'claude';
+  const claudeImages = bound && main && profile['roles.imageReview.executor'] === 'claude';
+  if (toolName === 'Skill' && /^(?:fabex:)?(?:settings|milestone)$/.test(toolInput.skill ?? '') && (toolInput.args ?? '').trim()) return deny('settings changes require an owner-typed slash command');
   if (toolName.split('__')[0] === 'mcp' && toolName.split('__')[1] === 'codex') return deny('Codex turns must use the canonical Fabex SDK controller');
   if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only; invoke the slash command directly to mint a single-use grant');
   const structuralController = toolName === 'Bash' ? parseControllerCommand(toolInput.command) : null;
   const controller = toolName === 'Bash' ? parseControllerCommand(toolInput.command, { participants: state.participants }) : null;
+  if (controller?.kind === 'controller-submit') {
+    const envelope = normalizeSubmissionEnvelope(controller.message, state.participants);
+    if (envelope.ownerSessionId && envelope.ownerSessionId !== executor.sessionId) return deny('ownerSessionId must match this host session');
+  }
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
+  if (control?.kind === 'workspace-apply') {
+    const grant = state.workspace?.grants[control.grantId];
+    return main && grant && grant.sessionId === executor.sessionId && grant.expiresAt >= Date.now() && state.route !== 'recovery-read-only' ? defer() : deny('settings changes require this session\'s owner-issued grant');
+  }
+  if (control?.kind === 'workspace-view') return defer();
+  const activeSession = executor.sessionId === state.workspace?.activeSessionId;
+  if (control?.kind === 'task-role') return activeSession && main && state.route !== 'recovery-read-only' ? defer() : deny('task role selection requires the bound main session');
+  if (control?.kind === 'usage-report') return activeSession ? defer() : deny('bind this session before reading its usage settings');
+  if (control?.kind === 'milestone-checkpoint') return main && activeSession && state.route !== 'recovery-read-only' ? defer() : deny('milestone checkpoint requires the bound main session and healthy state');
+  if (control?.kind === 'usage-snapshot') return state.route === 'normal' && main && activeSession ? defer() : deny('usage recording requires the bound main session in work mode');
+  if (controller?.kind === 'controller-seal') {
+    const op = state.operations.find(item => item.id === controller.operationId);
+    return main && op?.result.relay?.sessionId === executor.sessionId && state.route !== 'recovery-read-only' ? defer() : deny('only the originating main session seals its independent assessment');
+  }
   if (['mem', 'prompts', 'resources-list', 'heavy-status', 'heavy-wait'].includes(control?.kind)) return defer();
   if (['heavy-release', 'heavy-recover'].includes(control?.kind)) return state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt && (!(executor.agentId || executor.agentType) || isOperationalExecutor(executor)) ? defer() : deny('heavy recovery requires owner-selected work mode and main or operational executor');
   if (control?.kind === 'resources-release' && (executor.agentId || executor.agentType) && !isOperationalExecutor(executor)) return deny('resource shutdown requires the main or verified operational executor');
@@ -655,7 +693,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   if (toolName === 'Bash' && !control && safeCommandSegments(toolInput.command)?.some((segment) => parseControlCommand(segment)?.kind?.startsWith('mode-'))) {
     return deny('command shape is not an exact Fabex control; run the mode command standalone with no prefix, chain, or pipe');
   }
-  if (!isOperationalExecutor(executor) && ['Read', 'WebFetch'].includes(toolName) && referencesImage(toolInput)) return deny('Image inspection belongs to Codex by default, or the verified operational helper; Fable and other subagents must use their description');
+  if (!claudeImages && !isOperationalExecutor(executor) && ['Read', 'WebFetch'].includes(toolName) && referencesImage(toolInput)) return deny('Image inspection belongs to Codex by default, or the verified operational helper; Fable and other subagents must use their description');
   if (protectedOperation && (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt || ((executor.agentId || executor.agentType) && !isOperationalExecutor(executor)))) {
     return deny(`${protectedOperation} requires owner-selected work mode and the main session or verified ${OPERATIONAL_AGENT} subagent`);
   }
@@ -668,7 +706,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   }
   if (state.route === 'normal') {
     if (protectedOperation) return defer();
-    if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !activeExecutorException(state, toolName, executor)) {
+    if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !claudeEdits && !activeExecutorException(state, toolName, executor)) {
       return deny('normal Fabex mode reserves workstream edits for Codex; every Claude executor requires a structured owner-named exception');
     }
     if (WRITE_TOOLS.has(toolName)) return defer();
@@ -680,18 +718,18 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       const rule = workCommandDenial(toolInput.command, paths.canonicalRoot, invocationCwd, config);
       if (rule && !rule.startsWith('project source authorship')) return deny(`work policy: ${rule}`);
       if (activeExecutorException(state, toolName, executor)) return defer();
-      if (rule) return deny(`work policy: ${rule}; Codex authors project source`);
+      if (rule && !claudeEdits) return deny(`work policy: ${rule}; Codex authors project source`);
       return defer();
     }
     if (toolName.startsWith('mcp__')) {
       if (typeof toolInput.command === 'string') {
         if (protectedGithubOperation(toolInput.command)) return deny('Git delivery must use the verified operational Bash lane');
         const rule = workCommandDenial(toolInput.command, paths.canonicalRoot, invocationCwd, config);
-        if (rule) return deny(`work policy: ${rule}`);
+        if (rule && !(claudeEdits && rule.startsWith('project source authorship'))) return deny(`work policy: ${rule}`);
       }
       if (/(?:^|_)(?:commit|push|publish|deploy|drop_database|reset_database)(?:_|$)/i.test(toolName.split('__').at(-1))) return deny('delivery, deployment or destructive MCP effects are not routine development');
       const target = writeTarget(toolInput);
-      if (/(?:write|edit|create|delete|move|patch)/i.test(toolName.split('__').at(-1)) && target && insideRoot(target, paths.canonicalRoot) && !activeExecutorException(state, toolName, executor)) return deny('work policy: project source authorship through MCP remains with Codex');
+      if (/(?:write|edit|create|delete|move|patch)/i.test(toolName.split('__').at(-1)) && target && insideRoot(target, paths.canonicalRoot) && !claudeEdits && !activeExecutorException(state, toolName, executor)) return deny('work policy: project source authorship through MCP remains with Codex');
       return defer();
     }
     return defer();

@@ -19,6 +19,8 @@ import { sampleMemory, processMemory } from './lib/memory.mjs';
 import { heavyStatus, waitHeavy, runHeavy, releaseHeavy, recoverHeavy } from './lib/heavy.mjs';
 import { resourceList, retainResource, releaseResource } from './lib/resources.mjs';
 import { recentOwnerPromptEvidence } from './lib/hook-evidence.mjs';
+import { workspaceStatus, applyWorkspaceGrant, contextGauge, milestoneHandoff, selectTaskRole } from './lib/workspace.mjs';
+import { usageControl } from './lib/usage-integration.mjs';
 
 const USAGE = 'Usage: control.mjs mem | prompts | heavy status|wait [--timeout 1..120] | resources list|retain <id> --note <reason>|release <id> | status [--all|--brief] | config | diagnose | dev start|stop|restart|status|logs [--lines 1..400] | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
 const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
@@ -91,6 +93,8 @@ async function status(root, view = 'default') {
   const selected = view === 'all' ? result.state.operations : result.state.operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status) || terminal.includes(operation));
   const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle, usage, result: operationResult }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle, usage, reviewStructured: Boolean(operationResult.structured), relayStatus: operationResult.relay?.status ?? null, resultWarning: operationResult.warning, attachments: operationResult.attachments }));
   const output = {
+    workspace: await workspaceStatus(root),
+    contextGauge: await contextGauge(root),
     memory: { ...(await heavyStatus(root)), processes: await processMemory(result.state.controller.runnerPid) },
     resources: await resourceList(root),
     health: result.health,
@@ -362,6 +366,7 @@ async function diagnose(root) {
   const claude = await claudeModelSource(state.state.claudeModel, process.env);
   process.stdout.write(`${JSON.stringify({
     plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown', loadedRoot: PLUGIN_ROOT, beta: true, installed, warnings: installWarnings },
+    ...(state.ok ? { workspace: await workspaceStatus(root), contextGauge: await contextGauge(root) } : {}),
     memory: { ...(await heavyStatus(root)), processes: await processMemory(state.state.controller.runnerPid) },
     resources: await resourceList(root),
     node: process.version,
@@ -399,6 +404,20 @@ async function diagnose(root) {
 export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
   const root = await rootFromControlCwd(cwd, process.env);
   const [command, ...args] = argv;
+  if (['settings', 'milestone'].includes(command) && args.length === 2 && args[0] === '--session' && args[1]) {
+    process.stdout.write(JSON.stringify(await workspaceStatus(root, process.env, args[1]), null, 2) + '\n'); return;
+  }
+  if (command === 'role' && args.length === 1) { process.stdout.write(JSON.stringify(await selectTaskRole(root, args[0]), null, 2) + '\n'); return; }
+  if (command === 'settings') {
+    const result = args.length === 0 ? await workspaceStatus(root) : args.length === 3 && args[0] === 'apply' && args[1] === '--grant' ? await applyWorkspaceGrant(root, assertUuid(args[2])) : null;
+    if (!result) throw new ValidationError('settings accepts no arguments or apply --grant <owner-issued-id>');
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n'); return;
+  }
+  if (command === 'milestone' && args.length === 0) { process.stdout.write(JSON.stringify(await workspaceStatus(root), null, 2) + '\n'); return; }
+  if (command === 'milestone' && ['handoff', 'rotate'].includes(args[0]) && args[1] === '--review' && (args[0] === 'handoff' ? args.length === 4 : args.length === 3)) {
+    process.stdout.write(JSON.stringify(await milestoneHandoff(root, assertUuid(args[2]), args[3], args[0] === 'rotate')) + '\n'); return;
+  }
+  if (command === 'usage') { const result = await usageControl(root, args); if (result !== null) process.stdout.write(JSON.stringify(result, null, 2) + '\n'); return; }
   if (command === 'mem' && args.length === 0) {
     const { readPrivate, sidecar } = await import('./lib/private-store.mjs');
     const state = await readPrivate(await sidecar(root, 'state.json', process.env), null, 8 * 1024 * 1024);

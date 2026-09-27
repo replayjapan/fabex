@@ -1,5 +1,73 @@
 # Fabex — Beta
 
+## Optional milestone and session setup (1.10.0)
+
+Existing projects require no new setup: their continuous thread becomes the Legacy
+milestone, with the same development, RAM, recovery and mode controls. New features
+are additive. Schema 17 migrates private state losslessly after an old runner ends.
+
+`/fabex:settings` displays defaults, overrides and each value's source. Owner-typed
+arguments such as `roles.implementation.executor=claude scope=session` grant a
+single settings change; agents cannot mint it. `scope=project` explicitly saves a
+project default in `.fabex/config.json`; `key=inherit scope=session` removes that
+override. Flat validated keys live under `settings` in machine/project config.
+Session choices persist privately and do not change another chat. Changes wait for
+a completed review cycle. No-argument viewing needs no grant.
+
+Settings include two partner models/efforts; implementation, testWriting,
+testRunning, imageReview, docs and gitDelivery assignments; new-chat milestone
+policy; context review threshold; summaries; and optional usage tracking. Before a
+task, `control.mjs role <role>` selects the already-authorized assignment. Codex's
+independent review uses its main partner settings; assigned Codex execution uses
+role model/effort during reconciliation. Claude-host model controls remain host
+controls: configured requests are not observed service. Unsupported choices fail
+at the provider or require explicit host selection; no account model catalog or
+silent fallback is claimed. Other permissions are unchanged. Image access and
+authorship overrides apply only to the bound main chat, never arbitrary subagents.
+
+`/fabex:milestone <name-or-id>` creates/selects a milestone; no arguments lists it.
+With `milestones.newChatMeansNewMilestone=true`, a new Claude session gets one
+automatically. Default false continues the current milestone. Titles use a bounded
+read of matching custom-title records, falling back to the session ID. VS Code
+title propagation requires live verification. Private state stores original chat
+references, summaries, handoffs and Codex thread bindings outside the source tree.
+Nothing moves between provider transcripts and returning never rolls code back.
+One active review cycle is serialized per workstream; another chat cannot rebind
+its thread or settings while it is busy.
+
+Save a reviewed handoff with `control.mjs milestone handoff --review <phase2-id>
+"handoff"`. `milestone rotate --review <phase2-id>` archives the old thread and
+seeds a linked continuation at a completed cycle. Original thread records remain
+private. Verify the successor before proceeding and preserve the predecessor if
+startup fails. Summaries cannot replace current repository checks or original
+records. The context gauge is a timestamped **last-call snapshot**, with a count
+from its bounded rollout tail—not live occupancy or a lifetime count. Repeated
+compactions prompt review, never an automatic restart. Native compaction remains.
+
+### Independently authored first views
+
+For newly registered both-partner cycles, submit Phase 1, seal Claude's independent
+owner-facing assessment with `controller.mjs seal --operation-id <id>` on stdin,
+then wait/read. Codex cannot execute until the seal exists. Reconciliation adds
+the seal automatically; no early answer exists to leak. Legacy queued operations
+retain their protocol. Both reviews and verbatim owner summaries remain required.
+This enforces order and prompt separation, not adversarial filesystem isolation:
+the SDK must not read Claude's current private assessment through other paths.
+
+### Optional AI Usage Tracker
+
+`usageTracker.mode` is off by default, with session `on/off/inherit`; the installed
+launcher is selected explicitly through `usageTracker.path`. Off means no tracker
+calls or report sections. On uses `control.mjs usage snapshot --event
+start|checkpoint|progress|end [--checkpoint id]`; Claude records once for both
+providers. `usage report` uses Fabex's bundled read-only database adapter, without
+executing the configured add-on in discussion. Its
+database stays outside the plugin cache; failures are nonblocking. Installing it
+does not enable Fabex integration, and disabling integration never removes a
+separately configured global collector. Account allowance, project token usage
+and context size are different measures. No exclusive per-session attribution is
+claimed when several chats share a project. See [live acceptance](docs/acceptance-1.10.0.md).
+
 ## 1.9.2: bounded continuation and RAM precautions
 
 Routine updates lead with outcomes, important failures and the next step. Claude's

@@ -13,6 +13,8 @@ import { ValidationError } from './validation.mjs';
 import { attachmentShape, selectedModeAttachments, validateAttachments, validateSubmissionAttachments } from './attachments.mjs';
 import { parseReview, reviewSchema } from './review.mjs';
 import { codexModelSource, speakerLabels } from './speakers.mjs';
+import { resolveSettings, executionPlan } from './workspace-settings.mjs';
+import { assertSealed, bindQueuedSession } from './workspace.mjs';
 
 export const TERMINAL_OPERATION_LIMIT = 24;
 export const MAX_OWNER_MESSAGE_BYTES = 192 * 1024;
@@ -46,14 +48,15 @@ export function pruneOperations(operations, terminalLimit = TERMINAL_OPERATION_L
   return [...terminal, ...pending];
 }
 
-function nextClaimableOperation(operations) {
+function nextClaimableOperation(operations, seals = {}) {
   for (const independent of operations.filter((operation) => operation.request?.phase === 'independent' && operation.status === 'completed' && !operation.request.interrupted)) {
     const reconciliation = operations.find((candidate) => candidate.request?.parentOperationId === independent.id);
     if (!reconciliation) return null;
     if (reconciliation.status === 'queued') return reconciliation;
     if (reconciliation.status === 'working') return null;
   }
-  return operations.find((operation) => operation.status === 'queued') ?? null;
+  const next = operations.find((operation) => operation.status === 'queued') ?? null;
+  return next && seals[next.id] && !seals[next.id].reading ? null : next;
 }
 
 export function awaitingPhase2Operation(state) {
@@ -152,6 +155,11 @@ export function normalizeSubmissionEnvelope(value, participants) {
   if (typeof value === 'string' && value.trim().startsWith('{')) {
     let object;
     try { object = JSON.parse(value); } catch { throw new Error('submission requires valid JSON without trailing text'); }
+    if (Object.hasOwn(object, 'ownerSessionId')) {
+      const { ownerSessionId, ...body } = object;
+      if (typeof ownerSessionId !== 'string' || !ownerSessionId || ownerSessionId.length > 256) throw new Error('ownerSessionId must identify the originating host session');
+      return { ...normalizeSubmissionEnvelope(JSON.stringify(body), participants), ownerSessionId };
+    }
     if (Object.hasOwn(object, 'ownerMessageStatus') || Object.hasOwn(object, 'ownerMessageRef') || Object.hasOwn(object, 'ownerMessageDigest')) {
       const { ownerMessageStatus, ownerMessageDigest, ownerMessageRef, ...body } = object;
       if (Object.hasOwn(body, 'ownerMessage') || ownerMessageStatus !== 'recorded' || !((/^[a-f0-9]{64}$/.test(ownerMessageDigest ?? '') && ownerMessageRef === undefined) || (ownerMessageRef === 'latest' && ownerMessageDigest === undefined))) throw new Error('recorded message requires exactly one specific digest or latest reference');
@@ -313,6 +321,7 @@ function enqueueGrantMessage(state, grant, now, attachments) {
   const reply = state.recordedReply?.status === 'available' && state.recordedReply.sessionId === grant.sessionId && state.contextEvidence.ownerVisibleReply?.digest === textDigest(state.recordedReply.text) ? state.recordedReply.text : null;
   const id = grant.operationId ?? randomUUID();
   if (state.operations.some((operation) => operation.id === id)) throw new Error('reserved mode-message operation id already exists');
+  if (phase === 'independent' && state.workspace?.sessions[grant.sessionId]) state.workspace.seals[id] = { reading: null, digest: null, at: null };
   state.operations = pruneOperations(state.operations);
   state.operations.push(operationRecord({
     id,
@@ -418,9 +427,14 @@ export async function attachmentSessionId(root, envelope, state, env = process.e
   if (envelope.ownerMessageStatus === 'recorded') envelope = { ...envelope, ownerMessage: (await resolveRecordedPrompt(root, envelope, state, env)).text };
   if (envelope.phase === 'reconcile') {
     const parent = state.operations.find((op) => op.id === envelope.parentOperationId && op.request.phase === 'independent' && op.status === 'completed' && op.request.ownerMessageDigest === textDigest(envelope.ownerMessage));
+    if (envelope.ownerSessionId && parent?.result.relay?.sessionId !== envelope.ownerSessionId) throw new Error('reconciliation belongs to another host session');
     return parent?.result.relay?.sessionId ?? '';
   }
   const evidence = [...await recentOwnerPromptEvidence(root, env), state.contextEvidence.ownerPrompt].filter((entry) => entry?.digest === textDigest(envelope.ownerMessage));
+  if (envelope.ownerSessionId) {
+    if (!evidence.some(entry => entry.sessionId === envelope.ownerSessionId)) throw new Error('ownerSessionId has no matching recorded owner message');
+    return envelope.ownerSessionId;
+  }
   const sessions = new Set(evidence.map((entry) => entry.sessionId));
   // No caller-supplied session ID, and no guess when identical messages came
   // from different sessions. Other attachments retain their existing policy.
@@ -486,6 +500,9 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
     if (parent.request.ownerMessageDigest !== ownerMessageDigest) throw new Error('Phase 2 ownerMessage does not match its Phase 1 owner message');
     if (current.state.operations.some((operation) => operation.request.parentOperationId === parent.id)) throw new Error('Phase 1 already has a Phase 2 operation');
     sessionId = parent.result.relay?.sessionId ?? sessionId;
+    assertSealed(current.state, parent);
+    const sealed = current.state.workspace?.seals[parent.id];
+    if (sealed?.reading) envelope.fableResponse = `CLAUDE INDEPENDENT ASSESSMENT (sealed before Codex execution):\n${sealed.reading}\n\nCLAUDE RECONCILIATION:\n${envelope.fableResponse}`;
     envelope.message = `OWNER MESSAGE (verbatim):\n${envelope.ownerMessage}\n\nCODEX PHASE 1 INDEPENDENT READING (stored verbatim):\n${parent.result.finalResponse}\n\nFABLE RESPONSE (owner-visible, verbatim):\n${envelope.fableResponse}`;
   }
   const retainedOwnerMessage = envelope.phase === 'independent' ? envelope.ownerMessage : null;
@@ -496,6 +513,9 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
   const now = new Date().toISOString();
   const updated = await updateState(root, (state) => {
     state.operations = pruneOperations(state.operations);
+    const workspace = state.workspace;
+    for (const key of Object.keys(workspace?.seals ?? {})) if (!state.operations.some(op => op.id === key)) delete workspace.seals[key];
+    if (envelope.phase === 'independent' && state.participants === 'both' && workspace?.sessions[sessionId]) workspace.seals[id] = { reading: null, digest: null, at: null };
     state.operations.push(operationRecord({
       id,
       message: envelope.phase === 'independent' ? null : envelope.message,
@@ -645,13 +665,14 @@ export async function claimNextOperation(root, env = process.env) {
     const current = await readState(root, env, { lockWaitMs: Math.max(0, deadline - Date.now()) });
     if (!current.ok) throw current.error ?? new Error(`queue unavailable: ${current.health}`);
     if (current.state.route === 'recovery-read-only') return null;
-    const queued = nextClaimableOperation(current.state.operations);
+    const queued = nextClaimableOperation(current.state.operations, current.state.workspace?.seals);
     if (!queued) return null;
     const now = new Date().toISOString();
     const updated = await updateState(root, (state) => {
       if (state.controller.activeOperationId) throw new Error('another operation is active');
       const operation = state.operations.find((item) => item.id === queued.id && item.status === 'queued');
       if (!operation) throw new Error('queued operation changed');
+      bindQueuedSession(state, operation);
       operation.status = 'working';
       operation.lifecycle.phase = 'working';
       operation.lifecycle.detail = 'Codex is working.';
@@ -802,9 +823,13 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
   try {
     const before = await readState(root, env);
     if (!before.ok) throw new Error(`partner state unavailable: ${before.health}`);
+    assertSealed(before.state, operation);
     expectedId = before.state.partner.thread.threadId;
     if (before.state.operations.find((item) => item.id === operation.id)?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK execution'), { name: 'AbortError' });
     const config = (await loadEffectiveConfig(before.paths.canonicalRoot, env)).config;
+    const profile = resolveSettings(config, before.state, operation.result.relay?.sessionId).values;
+    const plan = executionPlan(config, before.state, operation.result.relay?.sessionId);
+    const roleExecution = operation.request.phase !== 'independent' && plan.executor === 'codex';
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
     const options = {
       ...(!expectedId ? { threadSource: 'fabex' } : {}),
@@ -812,8 +837,8 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       skipGitRepoCheck: true,
       sandboxMode: operation.request.sandbox,
       approvalPolicy: 'on-request',
-      model: config.models.codex.model ?? undefined,
-      modelReasoningEffort: config.models.codex.reasoningEffort,
+      model: (roleExecution ? plan.model : null) ?? profile['partners.codex.model'] ?? undefined,
+      modelReasoningEffort: (roleExecution ? plan.effort : null) ?? profile['partners.codex.effort'] ?? config.models.codex.reasoningEffort,
       networkAccessEnabled: operation.request.sandbox === 'workspace-write' && config.models.codex.networkAccessEnabled === true,
       ...(repositoryDirectory ? { additionalDirectories: [repositoryDirectory] } : {})
     };
@@ -823,18 +848,23 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const input = attachments.length ? [{ type: 'text', text: prompt }, ...attachments.map((path) => ({ type: 'local_image', path }))] : prompt;
     const jobs = await heavyStatus(root, env);
     const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. Exit 4 from wait means the shared continuation budget is exhausted: stop polling, inspect the blocker, preserve required review/relay. Never bypass an occupied queue. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork within the checkpoint budget; a review-cycle completion is not task completion.`;
-    const initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling;
+    const initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling + ` Active task assignment: ${JSON.stringify(plan)}. Preserve independent review by both main partners. During Phase 1 do not read Claude's current sealed assessment, chat transcript or scratch notes; use the original message and agreed prior context. Sanctioned status controls omit sealed readings. When the active task is assigned to Claude, do not perform competing task work; review independently. Model/effort role preferences not supported by the executing host must be reported, not silently claimed applied.`;
     const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
       const stored = state.operations.find((op) => op.id === operation.id);
+      state.workspace.observations ??= {};
+      state.workspace.observations.codex = { requested: options.model ?? null, effort: options.modelReasoningEffort, observed: null, verified: false, source: 'SDK request; no served-model evidence yet', at: new Date().toISOString(), role: plan.role };
       if (stored?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK submission'), { name: 'AbortError' });
       stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
     }, env);
     const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' ? { outputSchema: reviewSchema(operation.request.phase) } : {}) });
     let first = true;
     for await (const event of streamed.events) {
+      if (typeof event.model === 'string') await mutate(root, 'sdk-model-observation', state => {
+        Object.assign(state.workspace.observations.codex, { observed: event.model, verified: true, source: 'SDK event', at: new Date().toISOString() });
+      }, env);
       if (first) {
         verifiedId = verifyThreadStarted(expectedId, event);
         first = false;
@@ -868,7 +898,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const unbounded = review.finalResponse;
     finalResponse = boundedFinalResponse(unbounded);
     if (finalResponse !== unbounded) review.warning = 'Codex answer exceeded the 32 KiB storage bound and was truncated; this is not the complete original answer.';
-    const model = await codexModelSource(config, env);
+    const model = options.model ? { id: options.model, source: 'requested SDK model', verified: false } : await codexModelSource(config, env);
     const relay = finalResponse ? { label: speakerLabels(null, model.id).codex, sessionId: operation.result.relay?.sessionId ?? '', status: 'pending' } : null;
     await finishOperation(root, operation.id, 'completed', { finalResponse, structured: review.structured, warning: review.warning, relay, threadId: verifiedId, fingerprint, completedAt, version, usage, attachmentDelivered }, env);
     return { status: 'completed', threadId: verifiedId, finalResponse };
@@ -931,9 +961,9 @@ export async function releaseRunnerIfIdle(root, pid = process.pid, env = process
     const current = await readState(root, env);
     if (!current.ok) throw new Error(`runner state unavailable: ${current.health}`);
     if (current.state.controller.runnerPid !== pid) return true;
-    if (nextClaimableOperation(current.state.operations)) return false;
+    if (nextClaimableOperation(current.state.operations, current.state.workspace?.seals)) return false;
     const updated = await updateState(root, (state) => {
-      if (state.controller.runnerPid !== pid || nextClaimableOperation(state.operations)) throw new Error('runner release raced with queue submission');
+      if (state.controller.runnerPid !== pid || nextClaimableOperation(state.operations, state.workspace?.seals)) throw new Error('runner release raced with queue submission');
       state.controller.runnerPid = null;
       state.generation += 1;
       return state;

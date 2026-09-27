@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.10.0 — 2026-09-27
+
+### Why
+
+One project thread accumulated unrelated milestone context, and settings could
+not express session-specific roles or optional usage tracking.
+
+### What it gave us
+
+Private milestone/thread bindings, session settings with explicit owner grants,
+bounded context snapshots, sealed independent assessments and optional tracker
+integration. Existing projects keep a Legacy milestone and current defaults.
+
+### Tradeoffs
+
+Claude main model/effort remain host-controlled. Account model availability is
+verified by execution, not a fabricated catalog. Rollout/title formats are read
+defensively; a bounded context tail is not a lifetime compaction count. No claim
+of live VS Code acceptance, exact quota attribution or mechanically isolated
+external services follows from unit tests. See the acceptance checklist.
+
+### Changes
+
+- Schema 17 preserves existing history and waits for an active old runner.
+- Owner-only settings changes; views show effective values and their sources.
+- Per-chat role overrides, optional named milestones and reviewed linked parts.
+- Claude seals its first assessment before registered Codex Phase 1 execution,
+  preventing early result exposure without blocking general source searches.
+- Tracker disabled by default, bounded recording receipts and read-only reporting.
+- Existing RAM, continuation, recovery, permission and relay controls remain.
+
+### Verification
+
+Focused regression tests and one sequential full regression gate; real-host
+checks are listed separately, not represented by fixtures.
+
 ## 1.9.3 — 2026-09-16
 
 ### Why

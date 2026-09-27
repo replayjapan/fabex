@@ -5,6 +5,12 @@ description: Enter normal Claude conversation mode without automatic Codex consu
 
 # Work Claude
 
+1.10: owner-granted session task roles supersede default authorship/image rules,
+not participant selection. View settings freely; never mint a settings grant.
+Claude-only mode still does not silently consult Codex. A trial requiring both
+partners must use the owner's both-participant mode. Main Claude model/effort
+selection remains host-controlled, not changed by a configured label.
+
 1.9.2: Run heavy operational jobs sequentially, inspect `control.mjs mem` and
 `heavy status`, and repeat `heavy wait` on exit 3 before retrying. Never ask the
 owner to send a message just to resume a waiting check. Inspect `resources list`,

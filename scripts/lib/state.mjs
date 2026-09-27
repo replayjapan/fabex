@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { emptyCheckpoint, emptyFieldUpdatedAt, migrateLegacyCheckpoint } from './checkpoint.mjs';
 import { projectPaths } from './paths.mjs';
 import { STATE_SCHEMA_VERSION, ValidationError, validateState } from './validation.mjs';
+import { emptyWorkspace } from './workspace-settings.mjs';
 
 process.umask(0o077);
 const MAX_STATE_BYTES = 1024 * 1024;
@@ -29,6 +30,7 @@ export function initialState(identity) {
   const createdAt = new Date().toISOString();
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
+    workspace: emptyWorkspace(),
     generation: 0,
     project: { id: identity.projectId, canonicalRoot: identity.canonicalRoot },
     route: 'normal',
@@ -131,7 +133,7 @@ async function releaseLock(paths) {
 
 async function loadValidated(paths) {
   const parsed = await parseJsonFile(paths.stateFile);
-  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(parsed?.schemaVersion);
+  const migrated = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(parsed?.schemaVersion);
   let state = parsed;
   if (migrated) {
     state = structuredClone(parsed);
@@ -233,6 +235,7 @@ async function loadValidated(paths) {
         attachments: sourceVersion >= 11 ? operation.request.attachments : []
       }
     }));
+    state.workspace ??= emptyWorkspace();
     state.schemaVersion = STATE_SCHEMA_VERSION;
   }
   try { validateState(state, paths); } catch (error) {

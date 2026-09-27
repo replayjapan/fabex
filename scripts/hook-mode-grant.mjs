@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 import { issueModeGrant, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { PLUGIN_ROOT, rootFromHookInput } from './lib/paths.mjs';
+import { issueWorkspaceGrant } from './lib/workspace.mjs';
 
 export async function expansionWithoutArguments(input) {
   if (!modeTargetForSkill(input?.command_name)) throw new Error('unknown Fabex mode skill');
@@ -26,6 +27,8 @@ async function readInput() {
 }
 
 export async function modeGrantDecision(input, root, env = process.env) {
+  const settingsGrant = await issueWorkspaceGrant(root, input, env);
+  if (settingsGrant) return { hookSpecificOutput: { hookEventName: 'UserPromptExpansion', additionalContext: settingsGrant.viewing ? `View effective settings with control.mjs settings --session ${JSON.stringify(input.session_id)}; no mutation authorized.` : `Owner-issued settings grant. Run node ${PLUGIN_ROOT}/scripts/control.mjs settings apply --grant ${settingsGrant.id}. It applies only the captured owner arguments; no retyping or additional changes.` } };
   const target = modeTargetForSkill(input?.command_name);
   if (!target) return {};
   if (input.expansion_type !== 'slash_command' || input.command_source !== 'plugin') {

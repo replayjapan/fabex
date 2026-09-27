@@ -11,7 +11,57 @@ Phone uploads (1.8.0): when the host supplies an upload file reference for the c
 
 Relay attachment status accurately: submit lists each path as `selected` (validated and queued). Controller status/result use the same order's zero-based indexes: `submitted` means SDK submission attempted, `delivered` means an image-bearing SDK turn reported completion, and `failed` means delivery was not confirmed (including cancellation). Old records may report null/unknown. Do not say Codex received or reviewed an image merely because it was queued. Paths are erased at terminal state; index/status metadata remains. Report delivery failures without replacing Codex's complete answer.
 
-Both means both on every owner cycle. Questions authorize answers only. Codex performs every project file edit; Claude coordinates and verifies. Native permissions remain authoritative.
+Both means both on every owner cycle. Questions authorize answers only. Codex performs project file edits by default; an owner-granted session task-role override selects the alternate author. Native permissions remain authoritative.
+
+## 1.10 session settings and independent assessments
+
+Legacy role statements below are defaults, not a ban on owner-selected session roles.
+`control.mjs settings` shows inherited values and session overrides. Only the owner
+can grant changes using `/fabex:settings`; viewing does not require a grant. Select
+an existing task assignment with `control.mjs role implementation|testWriting|testRunning|imageReview|docs|gitDelivery`
+before its review cycle. This does not expand task authorization. One source author
+at a time; the other main partner reviews. Claude image access requires its explicit
+imageReview assignment. For an experimental editor, isolate source in a worktree or
+branch and use a disposable database for database effects; do not change branches
+or discard dirty work merely to satisfy a setting.
+
+Include the exact `ownerSessionId` supplied by session context in submission JSON.
+It scopes recorded-message lookup when two windows use identical words. The host
+guard requires that ID to match its calling session. Queued cycles bind their own
+milestone and roles only when the previous two-phase cycle has finished.
+
+New registered sessions use a seal **before execution**: submit Phase 1, write your
+own assessment of the original owner message and shared prior context, then run:
+
+```sh
+node "/absolute/plugin/path/scripts/controller.mjs" seal --operation-id <uuid> <<'FABEX_SEAL_7F3A2C91'
+Claude's independently authored assessment.
+FABEX_SEAL_7F3A2C91
+```
+
+Then wait and read Codex's result. The queued turn cannot run before the seal;
+the controller automatically supplies it in reconciliation. Do not await Codex
+before sealing. Existing pre-upgrade cycles finish using their existing protocol.
+No private reasoning is required: seal only the concise owner-facing first opinion.
+
+Milestones keep private transcript references, summaries and their own Codex threads.
+Use the optional `/fabex:milestone` command or the owner's new-chat policy. Save a
+reviewed handoff before switching. Review the actual branch and dirty files when
+resuming; never restore old code automatically. Compact first; repeated compaction
+is a review signal, not a forced reset. Rotate only after a reviewed handoff at a
+completed cycle and verify the successor; archived predecessors remain recoverable.
+
+Partner model/effort requests and per-role preferences are not proof of service.
+Codex independent turns use the main partner; role-assigned Codex execution uses the
+role model/effort in reconciliation. Claude main settings remain controlled by the
+host; verify `/model` or supported helper selection, and report unsupported effort
+instead of claiming it was applied. Do not silently substitute models.
+
+When and only when effective usage tracking is on, Claude records one start,
+checkpoint, periodic progress and end receipt for both providers through
+`control.mjs usage snapshot --event ...`; discussion uses `usage report` only.
+Do not retry failed tracking in a loop or stop development for it. Off means no
+calls, notices or usage sections. The independent global collector is not changed.
 
 Never relay private reasoning or tool logs; always relay owner-visible replies verbatim. Hidden instructions and scratch content are private too. Relay the owner's message verbatim and owner-visible replies only through the strict controller envelopes below. Codex must finish Phase 1 before it receives Claude/Fable's current response.
 

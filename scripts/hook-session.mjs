@@ -8,6 +8,8 @@ import { rootFromHookInput } from './lib/paths.mjs';
 import { initializeState, readState, updateState } from './lib/state.mjs';
 import { recordOwnerPromptEvidence, notificationLikePrompt } from './lib/hook-evidence.mjs';
 import { claudeModelSource, codexModelSource, speakerLabels } from './lib/speakers.mjs';
+import { registerSession, contextGauge } from './lib/workspace.mjs';
+import { resolveSettings, executionPlan } from './lib/workspace-settings.mjs';
 
 async function readInput() {
   const chunks = [];
@@ -59,6 +61,11 @@ export async function main() {
     const root = await rootFromHookInput(input, process.env);
     const effective = await loadEffectiveConfig(root, process.env);
     let result = await initializeState(root, process.env, { recoverUnresolved: hookEventName === 'SessionStart' });
+    let workspaceWarning = '';
+    if (result.ok && ['SessionStart', 'UserPromptSubmit'].includes(hookEventName)) {
+      try { const registered = await registerSession(root, input, process.env); workspaceWarning = registered?.archiveWarning ?? ''; result = await readState(root, process.env); }
+      catch (error) { workspaceWarning = ` Session binding not changed: ${error.message}`; }
+    }
     if (result.ok && ['SessionStart', 'PostModelSwitch'].includes(hookEventName)) {
       const recorded = await updateState(root, (state) => {
         captureClaudeModel(state, { ...input, hook_event_name: hookEventName });
@@ -96,6 +103,20 @@ export async function main() {
         ? 'Fabex state migration is deferred while the already-loaded controller finishes its active operation. Use controller wait or non-mutating host monitoring; do not mutate state or bypass the migration gate.'
         : `Fabex state: ${result.health}. Route: recovery-read-only; use /fabex:recover.`;
     context += returnWarning;
+    context += workspaceWarning;
+    if (result.ok && result.state.workspace?.sessions[input.session_id]) {
+      const settings = resolveSettings(effective.config, result.state, input.session_id).values;
+      const plan = executionPlan(effective.config, result.state, input.session_id);
+      context += ` Include ownerSessionId: ${JSON.stringify(input.session_id)} in controller submission envelopes; recorded message references stay bound to this chat even when another window submits identical words.`;
+      context += ` Active task assignment: ${JSON.stringify(plan)}. For a different task select control role <implementation|testWriting|testRunning|imageReview|docs|gitDelivery> before its review cycle; this chooses an existing owner-configured assignment, not new authority. The other main partner reviews. Claude-host model/effort changes are not made by Fabex: verify the chosen host model or delegate through supported host controls; do not silently substitute.`;
+      if (hookEventName === 'SessionStart') {
+        const gauge = await contextGauge(root);
+        if (gauge.compactions >= settings['context.reviewAfterCompactions']) context += ' Repeated compactions are visible in the bounded history: jointly review whether a checked handoff and linked continuation would help. This is not an automatic restart or proof of lost context.';
+      }
+      if (!settings.summaries) context += ' Optional milestone summaries are disabled; retain the minimum continuity handoff and original transcript references.';
+      context += ` Milestone ${result.state.workspace.sessions[input.session_id].milestoneId}. These roles supersede default authorship/image assignments only in this session; modes and host permissions still apply. Host-managed model/effort choices must be verified, never claimed from configuration alone. Before Codex Phase 1 can execute, submit it, then seal your independent assessment using controller seal --operation-id <id> with text on stdin; do not wait before sealing. Only after sealing read its answer and reconcile. Save milestone summary/handoff before switching. Returning to older work requires checking current branch and files.`;
+      if (settings['usageTracker.mode'] === 'on') context += ' Optional usage tracking enabled: record start once, checkpoints, bounded progress updates during long active work, and end with control usage snapshot; use usage report in discussion. Claude records once for both providers; keep account allowance, project tokens and context size separate. Failures never block the task.';
+    }
     if (result.ok && result.state.partner.thread.threadId) context += ' The next Codex turn must resume this exact persisted SDK thread ID and verify the thread.started event before accepting output.';
     if (result.ok) {
       const warnings = checkpointWarnings(result.state.partner.thread.checkpoint, result.state.partner.thread.metadata, { repositoryRootConfigured: effective.config.project.repositoryRoot !== null });

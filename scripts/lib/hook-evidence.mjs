@@ -94,15 +94,15 @@ export function closePrompt(a, b, limit = 5) {
 
 export async function resolveRecordedPrompt(root, envelope, state, env = process.env) {
   const all = await recentOwnerPromptEvidence(root, env);
-  const sessionId = state.contextEvidence.ownerPrompt?.sessionId;
+  const sessionId = envelope.ownerSessionId ?? state.contextEvidence.ownerPrompt?.sessionId;
   const entries = all.filter(entry => typeof entry.text === 'string' && (!sessionId || entry.sessionId === sessionId));
   let candidates;
   if (envelope.ownerMessageDigest) candidates = entries.filter(entry => entry.digest === envelope.ownerMessageDigest);
   else if (envelope.ownerMessageRef === 'latest') {
-    const last = Math.max(0, ...state.operations.filter(op => op.request.phase !== 'reconcile').map(op => Date.parse(op.lifecycle.queuedAt)));
+    const last = Math.max(0, ...state.operations.filter(op => op.request.phase !== 'reconcile' && (!envelope.ownerSessionId || op.result.relay?.sessionId === envelope.ownerSessionId)).map(op => Date.parse(op.lifecycle.queuedAt)));
     candidates = entries.filter(entry => Date.parse(entry.capturedAt) > last);
   } else {
-    if (all.some(entry => entry.digest === textDigest(envelope.ownerMessage))) return { text: envelope.ownerMessage, substituted: false };
+    if ((envelope.ownerSessionId ? entries : all).some(entry => entry.digest === textDigest(envelope.ownerMessage))) return { text: envelope.ownerMessage, substituted: false };
     if (!envelope.ownerMessage.trim()) return { text: envelope.ownerMessage, substituted: false }; // preserve image-only captions
     candidates = entries.filter(entry => normalizedPrompt(entry.text) === normalizedPrompt(envelope.ownerMessage));
     if (!candidates.length) candidates = entries.filter(entry => closePrompt(entry.text, envelope.ownerMessage));

@@ -5,6 +5,14 @@ description: Enter normal joint work mode, where Claude and Codex use Fabex rout
 
 # Work
 
+1.10 additions take precedence over legacy default-role wording below: use the
+bound session's owner-granted task roles from `/fabex:settings`, choosing the
+current assignment with `control.mjs role <role>` before its cycle. One author,
+the other main partner reviewing; no mode or host permission is bypassed.
+For newly registered cycles, including mode-command tasks, submit Phase 1 then
+seal Claude's independent assessment **before waiting** as `/fabex:jointly`
+describes. Codex is held queued until that seal exists. Do not wait first.
+
 1.9.2: Follow the RAM and bounded-continuation section in `/fabex:jointly`.
 Use recorded owner-message digests; mode-command task text is reusable. Heavy
 jobs wait and retry automatically, not in parallel batches. Inspect memory and

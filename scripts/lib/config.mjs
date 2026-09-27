@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
 import { dataRoot, PLUGIN_ROOT } from './paths.mjs';
 import { isPlainObject, validateDevServer } from './validation.mjs';
+import { validateSettings } from './workspace-settings.mjs';
 
 export const CONFIG_SCHEMA_VERSION = 1;
 export const DEFAULTS_FILE = resolve(PLUGIN_ROOT, 'config', 'defaults.json');
@@ -10,7 +11,7 @@ export const PROJECT_CONFIG_RELATIVE_PATH = '.fabex/config.json';
 export const CODEX_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent']);
 export const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const KEYS = {
-  '': new Set(['schemaVersion', 'models', 'collaboration', 'display', 'project', 'guard', 'devServer']),
+  '': new Set(['schemaVersion', 'models', 'collaboration', 'display', 'project', 'guard', 'devServer', 'settings']),
   models: new Set(['claudePrimary', 'codex', 'operational']),
   'models.codex': new Set(['model', 'reasoningEffort', 'networkAccessEnabled']),
   collaboration: new Set(['jointByDefault']),
@@ -52,6 +53,12 @@ function mergeLayer(base, overlay, warnings, name, { projectLayer = false } = {}
     return result;
   }
   warnUnknown(overlay, '', warnings);
+  if ('settings' in overlay) {
+    validateSettings(overlay.settings);
+    const settings = Object.fromEntries(Object.entries(overlay.settings).filter(([key, value]) => !(key === 'usageTracker.mode' && value === 'inherit')));
+    result.settings = { ...result.settings, ...settings };
+    result.settingSources = { ...result.settingSources, ...Object.fromEntries(Object.keys(settings).map(key => [key, name])) };
+  }
   if ('devServer' in overlay) {
     result.devServer = null;
     if (!projectLayer) warnings.push('devServer is project-layer only; value ignored');

@@ -7,6 +7,9 @@ import { cancelOperation, claimNextOperation, claimRunner, operationStatus, rele
 import { relayBlock } from './lib/review.mjs';
 import { consumeWaitBudget } from './lib/wait-budget.mjs';
 import { sdkLaunchOptions } from './lib/sdk-process.mjs';
+import { sealReading, assertSealed } from './lib/workspace.mjs';
+import { readState } from './lib/state.mjs';
+import { spawn } from 'node:child_process';
 
 async function codexFactory(options, context) {
   const { Codex } = await import('@openai/codex-sdk');
@@ -93,6 +96,12 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     return runQueue(resolve(args[1]), env);
   }
   const root = await rootFromControlCwd(cwd, env);
+  if (command === 'seal' && args.length === 2 && args[0] === '--operation-id') {
+    const id = assertUuid(args[1]);
+    process.stdout.write(JSON.stringify(await sealReading(root, id, await stdinMessage(), env)) + '\n');
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'runner', '--root', root], { detached: true, stdio: 'ignore', env }); child.unref();
+    return;
+  }
   if (command === 'submit') {
     const message = args.length === 0 ? await stdinMessage() : args.length === 2 && args[0] === '--message' ? args[1] : null;
     if (message === null) throw new ValidationError('submit accepts stdin or exactly --message <owner-message>');
@@ -104,6 +113,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     if ((!full && args.length !== 2) || args[0] !== '--operation-id') throw new ValidationError(`${command} requires --operation-id <uuid>${command === 'relay' ? ' [--full]' : ''}`);
     const id = assertUuid(option(args, '--operation-id'), 'operation id');
     let result = command === 'cancel' ? await cancelOperation(root, id, env) : await operationStatus(root, id, env);
+    if (['result', 'relay'].includes(command)) assertSealed((await readState(root, env)).state, result);
     if (command === 'relay') {
       const block = terminal(result.status) && relayBlock(result, { full });
       if (!block) throw new Error('operation has no complete relay block');

@@ -156,5 +156,5 @@ test('1.9.1 controller relay --full prints full stored answer and default prints
   await writeFile(current.paths.stateFile, JSON.stringify(legacy));
   const migrated = await readState(project, env);
   assert.equal(migrated.ok, true, migrated.error?.message);
-  assert.deepEqual(migrated.state, { ...legacy, schemaVersion: 16, generation: migrated.state.generation });
+  assert.deepEqual(migrated.state, { ...legacy, schemaVersion: 17, generation: migrated.state.generation });
 });
