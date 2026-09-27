@@ -19,14 +19,14 @@ export async function settingsView(status, env = process.env) {
     '', 'Models', `Codex model: ${codex} (${source(status.sources['partners.codex.model'])}).`,
     `Codex reasoning effort: ${value(v['partners.codex.effort'])} (${source(status.sources['partners.codex.effort'])}); more reasoning can take longer.`,
     `Claude model: ${claude?.id ?? 'Unknown'} (${claudeSource}); change it with /model and use Claude’s own effort control.`,
-    'Unavailable model or effort choices are reported when used, never silently replaced.'
+    'The picker lists models and effort levels reported by Codex; if unavailable, it says so without guessing.'
   ];
   for (const field of ['model', 'effort']) if (v[`partners.claude.${field}`] !== null) lines.push(`Saved Claude ${field} note: ${v[`partners.claude.${field}`]}; this does not change the running chat.`);
   const observed = status.observations?.codex;
   if (observed?.observed && observed.requested && observed.observed !== observed.requested) lines.push(`Model differs: Codex requested ${observed.requested} but reported ${observed.observed} (${observed.at}).`);
   lines.push('', 'Who does what');
   for (const [label, role] of Object.entries(TASKS)) lines.push(`${label}: ${taskValue(status, role, 'executor')}; model: ${taskValue(status, role, 'model')}; effort: ${taskValue(status, role, 'effort')}.`);
-  lines.push('Testing changes writing and running preferences together; either partner can still run a check.', 'Both give independent answers using their main models; task model and effort choices apply when Codex does the work.', 'Fabex cannot change the model or effort of Claude’s running chat.',
+  lines.push('Documentation defaults to Both: independently written Claude and Codex sections; each author revises only its own words.', 'With Both, task model and effort choices apply to Codex only; Claude uses its own host controls.', 'Testing changes writing and running preferences together; either partner can still run a check.', 'Both give independent answers using their main models; task model and effort choices apply when Codex does the work.', 'Fabex cannot change the model or effort of Claude’s running chat.',
     '', `Weekly usage: ${t.effective} (${source(t.source)}); reports account allowance and recorded usage.`,
     `Tracker: ${i.status === 'found' ? 'installed' : i.status}.`);
   if (i.status === 'ambiguous') {
@@ -37,6 +37,6 @@ export async function settingsView(status, env = process.env) {
     const cache = await readUsageCache(status.project, i, status.milestone.id, env);
     if (!cache.allowances?.some(a => a.provider === 'claude')) lines.push('', 'No Claude allowance reading is available; ask for Weekly Tracker setup help if needed.');
   }
-  lines.push('', 'Choose a value and where it applies together; a conversation setting takes priority over its milestone, then the project.', 'Use default removes that override; Back and Cancel save nothing.', 'Prefer typing? Example: /fabex:settings tracking=on');
+  lines.push('', 'Choose a value and where it applies together; a conversation setting takes priority over its milestone, then the project.', 'Default removes that override. Click tabs to revisit choices; Back and Cancel are buttons. Nothing is saved until Apply.', 'Prefer typing? Example: /fabex:settings tracking=on');
   return lines.join('\n') + '\n';
 }

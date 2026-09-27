@@ -10,19 +10,26 @@ what, and Weekly usage. Do not expose internal configuration as extra menu
 sections. A milestone is a stage in the owner's plan, never inferred from a new
 chat or chat title. Viewing alone never changes a preference.
 
-An owner-typed `/fabex:settings` starts a five-minute, single-change dialog grant.
-`/fabex:settings tracking=on|off|inherit` starts at scope selection. The expansion
-hook supplies exact `AskUserQuestion` questions. Offer them unchanged. The
-PostToolUse hook validates each owner answer and supplies the next question or
-final apply command. Back and Cancel are accepted through the host's Other input
-as well as dedicated choices where shown. Do not choose for the owner, invent an
-answer, apply intermediate selections, or apply after cancellation. Unknown host
-payloads fail closed. The final dialog asks value and scope together; it is the
-owner’s selection, with no additional confirmation. Both answers must be recorded.
-Apply only its hook-confirmed `settings apply --grant <id>` command between
-completed review cycles. Without a dialog, read `settings --json` and show only
-the relevant command from `typedCommands` for the owner to type. Questions alone
-do not authorize other changes.
+An owner-typed `/fabex:settings` starts a five-minute grant for one atomic set of
+changes. The expansion hook supplies exact `AskUserQuestion` questions. Pass the
+whole questions array in one tool call: the host displays related questions as
+clickable tabs. Never split them into separate calls or ask the owner to type
+Back. Every screen has visible Cancel; Back is a button on follow-up screens.
+Keep current leaves the existing/pending choice alone, even if scope changes.
+No milestone scope is offered until the owner has named a stage of the plan.
+
+The PostToolUse hook validates every answer and supplies the next screen or the
+final apply command. More models/effort levels pages through the live catalog,
+keeping pending choices. Task selection precedes the writer/scope tabs; Model
+options opens model/effort tabs for that task. Claude uses its host controls;
+with Both, the editable task model/effort are explicitly Codex's, never shared.
+Navigation displays any pending changes. Apply saves them together; Cancel or
+expiry saves nothing. Do not invent answers, options, or a partial apply. Apply
+only the hook-confirmed `settings apply --grant <id>` between completed review
+cycles. Unknown host payloads fail closed. Pre-upgrade dialogs must be reopened.
+The tracking shortcut opens the tracking/scope tabs directly. Without a native
+dialog, show only the relevant typed command from `settings --json` for the owner
+to type. Do not request a confirmation after an already recorded Apply.
 
 An explicit owner command such as `/fabex:settings tracking=on scope=milestone`
 applies directly through the exact grant command supplied by the expansion hook.
@@ -44,12 +51,18 @@ an explicit choice; show the provided path commands and do not guess. A
 Installation or collector setup requires an owner instruction, not a settings
 view. Missing Claude allowance readings do not prove the collector is absent.
 
-Models from configuration or recent SDK observations are suggestions, independent
-of usage tracking. Provider validation occurs on use. The main Claude model is
-host-managed. Task model/effort overrides apply to Codex working turns; the first
-independent answer uses the partner model. Claude main task model/effort cannot
-be switched by Fabex. Test-running assignment guides work, not exclusive tool
-authorization. Both main partners retain independent review in joint work.
+Model choices and supported effort levels come from the pinned Codex CLI's
+`model/list` response for its current account. Saved names and usage history are
+not an availability catalog. If lookup fails, show the supplied explanation and
+retain preferences; do not invent fallback choices. Provider validation still
+occurs on use, without substitution. Claude's actual model picker is its native
+`/model` control, not a hard-coded Fabex list.
+
+Documentation defaults to Both unless an explicit existing preference overrides
+it. Follow the independent draft/assembly procedure in `jointly/SKILL.md`; this is
+not merely an assignment note. Claude and Codex each write their own contribution.
+Coding and Testing remain single-author. Test-running assignment guides work, not
+exclusive tool authorization. Both main partners retain independent review.
 
 The current main Claude model is host-managed. A requested preference is not
 proof it is applied; verify host `/model` and effort support. Codex partner
@@ -59,7 +72,7 @@ not inferred from a static list. Do not silently substitute a model.
 Role preferences do not waive discussion, sandbox or destructive-action rules.
 For a coding trial use a reviewed isolated worktree/branch when appropriate,
 preserve dirty work, and separately isolate database effects. Settings do not
-create a branch or reset data. Only one source author at a time.
+create a branch or reset data. Only one source author at a time; Docs Both uses separate drafts and serial assembly.
 
 Usage tracking is optional. Inherit follows the project setting; Off means no
 Fabex integration calls or normal-reply reminders. Independently installed global

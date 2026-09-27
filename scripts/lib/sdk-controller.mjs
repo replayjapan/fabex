@@ -1,3 +1,4 @@
+import { requireDocumentationDraft, saveDocumentationDraft } from './docs-both.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, realpath } from 'node:fs/promises';
@@ -827,7 +828,9 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const config = (await loadEffectiveConfig(before.paths.canonicalRoot, env)).config;
     const profile = resolveSettings(config, before.state, operation.result.relay?.sessionId).values;
     const plan = executionPlan(config, before.state, operation.result.relay?.sessionId);
-    const roleExecution = operation.request.phase !== 'independent' && plan.executor === 'codex';
+    const docsBoth = plan.role === 'docs' && plan.executor === 'both' && operation.request.participants === 'both' && operation.request.route === 'normal';
+    const documentation = docsBoth ? await requireDocumentationDraft(root, operation, env) : null;
+    const roleExecution = operation.request.phase !== 'independent' && ['codex', 'both'].includes(plan.executor);
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
     const options = {
       ...(!expectedId ? { threadSource: 'fabex' } : {}),
@@ -841,12 +844,18 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       ...(repositoryDirectory ? { additionalDirectories: [repositoryDirectory] } : {})
     };
     const seed = expectedId ? null : buildRecoverySeed(before.state.partner.thread.checkpoint, before.paths.canonicalRoot);
-    const prompt = turnPrompt(operation, operation.request.phase === 'independent' ? null : seed);
+    let prompt = turnPrompt(operation, operation.request.phase === 'independent' ? null : seed);
+    if (docsBoth) {
+      prompt += '\nDOCUMENTATION BOTH: Write only your own contribution in the required documentation response field. The controller stores it as Codex’s contribution; do not write private draft files or edit the assembled document. Your ordinary answer still reports work and independent conclusions. Each author revises only its own words; preserve disagreements. Claude’s main model stays host controlled. The Documentation model/effort override belongs only to Codex on working reconciliation turns.';
+      if (operation.request.phase === 'reconcile') prompt += `\nCOMPLETED INDEPENDENT DOCUMENTATION CONTRIBUTIONS (review only; revise only Codex’s):\n${JSON.stringify({ claude: documentation.claude, codex: documentation.codex })}`;
+    }
+
     const attachments = validateAttachments(operation.request.attachments ?? [], before.paths.canonicalRoot, config, { sessionId: operation.result.relay?.sessionId ?? '', env });
     const input = attachments.length ? [{ type: 'text', text: prompt }, ...attachments.map((path) => ({ type: 'local_image', path }))] : prompt;
     const jobs = await heavyStatus(root, env);
     const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. A wait timeout is not task completion. Preserve required review/relay. Never bypass an occupied queue. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork until complete, interrupted, or genuinely blocked; a review-cycle completion is not task completion.`;
-    const initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling + ` Active task assignment: ${JSON.stringify(plan)}. Preserve independent review by both main partners. During Phase 1 do not read Claude's current sealed assessment, chat transcript or scratch notes; use the original message and agreed prior context. Sanctioned status controls omit sealed readings. When the active task is assigned to Claude, do not perform competing task work; review independently. Model/effort role preferences not supported by the executing host must be reported, not silently claimed applied.`;
+    let initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling + ` Active task assignment: ${JSON.stringify(plan)}. Preserve independent review by both main partners. During Phase 1 do not read Claude's current sealed assessment, chat transcript or scratch notes; use the original message and agreed prior context. Sanctioned status controls omit sealed readings. When the active task is assigned to Claude, do not perform competing task work; review independently. Model/effort role preferences not supported by the executing host must be reported, not silently claimed applied.`;
+    if (docsBoth) initialInstructions += ' The documentation response field is your authored document contribution, not private reasoning. It may contain up to 32 KiB, within the existing 48 KiB total response bound.';
     const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: profile['partners.codex.helperServers'] });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
@@ -858,7 +867,9 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       if (stored?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK submission'), { name: 'AbortError' });
       stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
     }, env);
-    const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' ? { outputSchema: reviewSchema(operation.request.phase) } : {}) });
+    const outputSchema = reviewSchema(operation.request.phase);
+    if (docsBoth) { outputSchema.properties.documentation = { type: 'string' }; outputSchema.required.push('documentation'); }
+    const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' ? { outputSchema } : {}) });
     let first = true;
     for await (const event of streamed.events) {
       if (typeof event.model === 'string') await mutate(root, 'sdk-model-observation', state => {
@@ -893,7 +904,19 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const fingerprint = await repositoryFingerprint(before.paths.canonicalRoot, config);
     const completedAt = new Date().toISOString();
     const version = await sourceVersion();
+    let documentBody = null;
+    if (docsBoth) {
+      let response;
+      try { response = JSON.parse(finalResponse); } catch { throw new Error('Docs Both has no valid Codex contribution; the independent Claude draft is preserved.'); }
+      documentBody = response?.documentation;
+      if (typeof documentBody !== 'string' || !documentBody.trim() || Buffer.byteLength(documentBody) > 32768 || Buffer.byteLength(finalResponse) > 48 * 1024) throw new Error('Docs Both has no valid Codex contribution within the response limit; drafts are preserved.');
+      delete response.documentation; finalResponse = JSON.stringify(response);
+    }
     const review = operation.request.participants === 'both' ? parseReview(finalResponse, operation.request.phase) : { finalResponse, structured: null, warning: null };
+    if (docsBoth) {
+      if (!review.structured) throw new Error('Docs Both requires a valid structured review alongside the contribution; drafts are preserved.');
+      await saveDocumentationDraft(root, operation.request.parentOperationId ?? operation.id, { body: documentBody }, { ...env, FABEX_DOCUMENTATION_OPERATION: operation.id });
+    }
     const unbounded = review.finalResponse;
     finalResponse = boundedFinalResponse(unbounded);
     if (finalResponse !== unbounded) review.warning = 'Codex answer exceeded the 32 KiB storage bound and was truncated; this is not the complete original answer.';

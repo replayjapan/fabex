@@ -19,10 +19,10 @@ async function fixture(t) {
   const { paths } = await initializeState(root, env); await registerSession(root, { session_id: 'a' }, env);
   t.after(() => rm(dir, { recursive: true, force: true })); return { dir, root, env, paths };
 }
-const grant = (f, args, session = 'a', command = 'settings') => issueWorkspaceGrant(f.root, { command_name: `fabex:${command}`, command_args: args, session_id: session, expansion_type: 'slash_command', command_source: 'plugin' }, f.env);
+const grant = (f, args, session = 'a', command = 'settings') => issueWorkspaceGrant(f.root, { command_name: `fabex:${command}`, command_args: args, session_id: session, expansion_type: 'slash_command', command_source: 'plugin' }, f.env, { catalog: async () => ({models:[],error:'Model list unavailable in fixture.'}) });
 const apply = async (f, args, session = 'a', command) => applyWorkspaceGrant(f.root, (await grant(f, args, session, command)).id, f.env);
-function answer(g, scope = 'This planned milestone', mode = 'On') {
-  return { hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', session_id: g.sessionId, tool_use_id: 'fixture-choice', tool_input: { questions: g.questions }, tool_response: { answers: Object.fromEntries(g.questions.map((q, n) => [q.question, g.flow?.stage === 'choose' ? (n ? scope : mode) : scope])) } };
+function answer(g, scope = 'This milestone', mode = 'On') {
+  return { hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', session_id: g.sessionId, tool_use_id: 'fixture-choice', tool_input: { questions: g.questions }, tool_response: { answers: Object.fromEntries(g.questions.map((q, n) => [q.question, g.flow?.stage === 'tracking' ? [mode,scope,'Apply'][n] : scope])) } };
 }
 async function packageAt(path) {
   await mkdir(join(path, '.claude-plugin'), { recursive: true }); await mkdir(join(path, 'skills/weekly-tracker'), { recursive: true });
@@ -62,14 +62,17 @@ test('1.10.2 milestone inheritance persists across chats and thread rollovers wi
   assert.equal((await workspaceStatus(f.root, f.env, 'b')).tracking.effective, 'on');
 });
 test('1.10.2 only exact owner dialog answers select a one-use scoped grant', async t => {
-  const f = await fixture(t), g = await grant(f, 'tracking=on');
+  const f = await fixture(t); await apply(f,'Plan stage','a','milestone'); const g = await grant(f, 'tracking=on');
   await assert.rejects(applyWorkspaceGrant(f.root, g.id, f.env), /Choose/);
   assert.equal(await recordWorkspaceSelection(f.root, answer(g), f.env), null);
   await recordWorkspaceQuestion(f.root, { ...answer(g), hook_event_name: 'PreToolUse' }, f.env);
   assert.equal(await recordWorkspaceSelection(f.root, { ...answer(g), tool_use_id: 'different-question' }, f.env), null);
   assert.equal(await recordWorkspaceSelection(f.root, { ...answer(g), session_id: 'other' }, f.env), null);
   assert.equal(await recordWorkspaceSelection(f.root, { ...answer(g), agent_id: 'subagent' }, f.env), null);
-  assert.equal(await recordWorkspaceSelection(f.root, answer(g, 'invented'), f.env), null);
+  const retry = await recordWorkspaceSelection(f.root, answer(g, 'invented'), f.env);
+  assert.match(retry.questions[0].question, /Please pick one of the choices/);
+  Object.assign(g, (await readState(f.root, f.env)).state.workspace.grants[g.id]);
+  await recordWorkspaceQuestion(f.root, { ...answer(g), hook_event_name: 'PreToolUse' }, f.env);
   assert.equal(await recordWorkspaceSelection(f.root, { ...answer(g), tool_response: {} }, f.env), null);
   const altered = answer(g); altered.tool_input = { questions: [] };
   assert.equal(await recordWorkspaceSelection(f.root, altered, f.env), null);
@@ -93,11 +96,12 @@ test('1.10.2 bare settings offers tracked choices and preserves human/JSON CLI v
     child.stdin.end(JSON.stringify({ ...input, cwd: f.root }));
   });
   let current = g;
-  for (const pick of ['Weekly usage', 'Default for this project']) {
+  for (const pick of ['Unknown section', 'Weekly usage', 'Whole project']) {
     const pre = await invokeHook('hook-route-guard.mjs', { ...answer(current, pick), hook_event_name: 'PreToolUse' });
     assert.notEqual(pre.hookSpecificOutput?.permissionDecision, 'deny');
     const receipt = await invokeHook('hook-heavy.mjs', answer(current, pick));
-    assert.match(receipt.hookSpecificOutput.additionalContext, pick === 'Default for this project' ? /Owner selection recorded: tracking="on" scope=project/ : /Continue the owner settings dialog/);
+    assert.match(receipt.hookSpecificOutput.additionalContext, pick === 'Whole project' ? /Owner selection recorded: tracking="on" scope=project/ : /Continue the owner settings dialog/);
+    if (pick === 'Unknown section') assert.match(receipt.hookSpecificOutput.additionalContext, /Please pick one of the choices/);
     current = (await readState(f.root, f.env)).state.workspace.grants[g.id];
   }
   await applyWorkspaceGrant(f.root, g.id, f.env);

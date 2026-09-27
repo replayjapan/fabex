@@ -411,6 +411,17 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
   if (command === 'milestone' && args.length === 2 && args[0] === '--session' && args[1]) {
     process.stdout.write(JSON.stringify(await workspaceStatus(root, process.env, args[1]), null, 2) + '\n'); return;
   }
+  if (command === 'docs') {
+    const { saveDocumentationDraft, readDocumentationDrafts, assembleDocumentation } = await import('./lib/docs-both.mjs');
+    if (args[1] !== '--operation-id') throw new ValidationError('docs requires --operation-id');
+    const id = assertUuid(args[2]);
+    let result;
+    if (args[0] === 'draft' && args.length === 3) result = await saveDocumentationDraft(root, id, await stdinJson(40 * 1024));
+    else if (args[0] === 'read' && args.length === 3) result = await readDocumentationDrafts(root, id);
+    else if (args[0] === 'assemble' && args.length === 5 && args[3] === '--review') result = await assembleDocumentation(root, id, assertUuid(args[4]));
+    else throw new ValidationError('docs accepts draft/read --operation-id ID or assemble --operation-id ID --review ID');
+    process.stdout.write(JSON.stringify(result) + '\n'); return;
+  }
   if (command === 'role' && args.length === 1) { process.stdout.write(JSON.stringify(await selectTaskRole(root, args[0]), null, 2) + '\n'); return; }
   if (command === 'settings') {
     if (args.length === 3 && args[0] === 'apply' && args[1] === '--grant') {

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { discoverTracker } from './tracker-discovery.mjs';
+import { availableModels } from './model-catalog.mjs';
 import { startSettingsMenu, advanceSettingsMenu, menuSummary, typedSettingsReference } from './settings-menu.mjs';
 import { claudeModelSource, codexModelSource } from './speakers.mjs';
 import { randomUUID, createHash } from 'node:crypto';
@@ -124,7 +125,7 @@ export async function registerSession(root, input, env = process.env) {
   if (state.workspace.activeSessionId !== sessionId) state.archiveWarning = `${state.archiveWarning ?? ''} This chat is registered; its thread and execution settings bind when its queued cycle starts.`;
   return state;
 }
-export async function issueWorkspaceGrant(root, input, env = process.env) {
+export async function issueWorkspaceGrant(root, input, env = process.env, { catalog = availableModels } = {}) {
   const command = input.command_name?.replace(/^\//, '').replace(/^fabex:/, '');
   if (!['settings', 'milestone'].includes(command)) return null;
   const args = (input.command_args ?? '').trim();
@@ -137,14 +138,14 @@ export async function issueWorkspaceGrant(root, input, env = process.env) {
   const resolvedModel = before.ok ? resolveSettings(config, before.state, input.session_id).values['partners.codex.model'] : null;
   const defaultModel = await codexModelSource({ ...config, models: { ...config.models, codex: { ...config.models.codex, model: resolvedModel } } }, env);
   const claude = await claudeModelSource(before.state?.claudeModel?.sessionId === input.session_id ? before.state.claudeModel : null, env);
+  const modelCatalog = command === 'settings' && !args ? await catalog(root, env) : { models: [], error: null };
   await mutate(root, 'workspace-owner-grant', state => {
     const session = state.workspace.sessions[input.session_id];
     if (!session) throw new Error('Session not registered; submit a normal owner message first.');
     grant.milestoneId = session.milestoneId;
     if (command === 'settings' && (!args || /^tracking=(on|off|inherit)$/.test(args))) {
       const { values } = resolveSettings(config, state, input.session_id);
-      const models = [...new Set([values['partners.codex.model'], defaultModel.id, state.workspace.observations?.codex?.observed].filter(v => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(v)))].slice(0, 2);
-      Object.assign(grant, startSettingsMenu(args, { project: basename(root), milestone: session.milestoneId === 'legacy' ? 'none chosen yet (earlier work)' : state.workspace.milestones[session.milestoneId].name, models, claude: `${claude.id ?? 'Unknown'} (${claude.source})` }));
+      Object.assign(grant, startSettingsMenu(args, { project: basename(root), milestone: session.milestoneId === 'legacy' ? null : state.workspace.milestones[session.milestoneId].name, models: modelCatalog.models, catalogError: modelCatalog.error, values, defaultModel: defaultModel.id, claude: `${claude.id ?? 'Unknown'} (${claude.source})` }));
       grant.selection = null;
       grant.questionToolId = null;
       for (const [id, previous] of Object.entries(state.workspace.grants)) if (previous.questions && previous.sessionId === grant.sessionId) delete state.workspace.grants[id];
@@ -174,6 +175,7 @@ export async function recordWorkspaceSelection(root, input, env = process.env) {
       if (!grant.questions || grant.questionToolId !== input.tool_use_id || grant.sessionId !== input.session_id || grant.expiresAt < Date.now() || grant.selection || !isDeepStrictEqual(input.tool_input?.questions, grant.questions)) continue;
       if (state.workspace.sessions[grant.sessionId]?.milestoneId !== grant.milestoneId) continue;
       if (grant.flow) {
+        if (grant.flow.version !== 2) continue;
         const next = advanceSettingsMenu(grant, response.answers);
         if (next) { selected = { grantId: grant.id, ...next }; if (next.cancelled) delete state.workspace.grants[grant.id]; }
         continue;
@@ -219,7 +221,7 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
   const grant = before.state.workspace.grants[grantId];
   if (!grant || grant.expiresAt < Date.now()) throw new Error('owner settings grant missing or expired');
   if (cycleBusy(before.state)) throw new Error('Apply settings between completed review cycles.');
-  if (grant.flow && !grant.selection) throw new Error('Choose and apply a setting in the owner dialog, or type an explicit scoped command.');
+  if (grant.flow && (grant.flow.version !== 2 || !grant.selection)) throw new Error('Choose and apply a setting in the owner dialog, or type an explicit scoped command.');
   if (grant.options && (!grant.selection || !grant.options.includes(grant.selection))) throw new Error('Choose an offered setting in the owner dialog, or type an explicit scoped settings command.');
   const parsed = grant.command === 'settings' ? parseSettingsArgs(grant.selection ?? grant.args) : null;
   const state = await mutate(root, 'workspace-apply-owner-grant', async state => {
@@ -274,6 +276,15 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
 }
 export async function sealReading(root, operationId, reading, env = process.env) {
   if (typeof reading !== 'string' || !reading.trim() || Buffer.byteLength(reading) > 16000) throw new Error('sealed assessment must be 1..16000 bytes');
+  const prior = await readState(root, env);
+  const operation = prior.state?.operations.find(o => o.id === operationId);
+  if (operation?.request.route === 'normal') {
+    const plan = executionPlan((await loadEffectiveConfig(root, env)).config, prior.state, operation.result.relay?.sessionId);
+    if (plan.role === 'docs' && plan.executor === 'both') {
+      const { sealDocumentationDraft } = await import('./docs-both.mjs');
+      await sealDocumentationDraft(root, operation, env);
+    }
+  }
   await mutate(root, 'seal-independent-assessment', state => {
     const op = state.operations.find(o => o.id === operationId), seal = state.workspace.seals[operationId];
     if (op && seal?.digest === digest(reading)) return;

@@ -90,6 +90,56 @@ Use labels from session context or status. Claude session evidence takes precede
 
 Owner approval does not change the prescribed executor. An exception is valid only when the owner explicitly names the alternate executor. Record it with `control.mjs executor-exception authorize`; clear it with `executor-exception reconcile`. Decision prose never grants permission.
 
+## Documentation with Both (default when no writer preference is saved)
+
+Select `control.mjs role docs` before the documentation cycle. Both means two
+independently authored contributions, not a merged voice. Each receives the same
+owner brief and shared sources; neither sees the other's current draft first.
+The normal independent assessment/reconciliation and owner-summary relay remain.
+
+1. Submit Phase 1. Before sealing the assessment, Claude saves its complete own
+   contribution using this exact narrow control, with a quoted heredoc and valid
+   JSON (escape newlines inside JSON strings):
+
+```sh
+node "/absolute/plugin/path/scripts/control.mjs" docs draft --operation-id <phase1-uuid> <<'FABEX_DOCS_7F3A2C91'
+{"path":"perspectives.md","body":"Claude's own contribution."}
+FABEX_DOCS_7F3A2C91
+```
+
+Choose a new Markdown output in an existing project folder. Existing unrelated
+files are preserved; for an existing README, keep it and create a companion
+perspectives document unless the owner chooses one writer for the README.
+Do not fill in Codex's contribution. Seal the independent assessment only after
+saving the draft; the controller enforces that ordering.
+
+2. Codex returns its own contribution in the `documentation` field of its
+   structured response. The controller stores only that author's slot. Codex
+   never needs write access to Fabex's private state. Neither partner reads
+   private draft storage directly. Before Phase 1 completes, `docs read` exposes
+   only the caller's own draft.
+3. Then Claude reads both through `docs read --operation-id <phase1-uuid>`.
+   The controller includes both completed contributions in Codex's reconciliation
+   prompt. Review and preserve disagreements. Claude revises only its own draft
+   through `docs draft` at the idle boundary; Codex returns only its own revised
+   contribution in `documentation`. Original independent drafts remain private.
+4. After the matching Phase 2 completes, Claude runs:
+
+```sh
+node "/absolute/plugin/path/scripts/control.mjs" docs assemble --operation-id <phase1-uuid> --review <phase2-uuid>
+```
+
+Assembly writes one document with Claude and Codex headings, preserving both
+contributions byte for byte. Neither author edits the assembled file directly.
+External edits cause assembly to stop rather than overwrite them. The native
+sandbox remains authoritative; these controls do not grant broad Claude writes.
+
+Each draft is bounded at 32 KiB; do not truncate silently. Use separate owner-
+authorized documents/cycles for longer work. Model/effort settings never select
+one shared model for Both: Claude keeps its host-selected model; Codex's first
+independent answer uses its main model and its working reconciliation uses any
+Codex Documentation override. Do not claim an override changed the first draft.
+
 ## Two-phase SDK protocol
 
 From the resolved workstream root, run Fabex `config`, `status`, and `diagnose`. If participants are `claude`, ask the owner to invoke `/fabex:work`; never switch participants autonomously.

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10.4
+
+- Related settings now use native question tabs, visible Back/Cancel, Keep current,
+  and atomic Apply. Unnamed milestones are omitted from scope choices.
+- Model choices and efforts come from the pinned Codex account's model/list;
+  lookup failure retains preferences and offers no guessed models. Claude's
+  available-model chooser remains its host `/model` control.
+- Documentation defaults to Both for unset preferences. Each partner saves its
+  independent contribution separately, revises only its own, and a reviewed
+  assembly preserves both verbatim in one new Markdown document. Existing files
+  and explicit writer preferences are preserved.
+
+
 ## 1.10.3 — 2026-09-27
 
 - Replace the tracking-only dialog with Models, Who does what, and Weekly usage, using plain scope and restore choices.

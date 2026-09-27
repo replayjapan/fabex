@@ -1,89 +1,105 @@
 import { isDeepStrictEqual } from 'node:util';
-
 export const TASKS = { Coding: 'implementation', Testing: 'testing', 'Image review': 'imageReview', Documentation: 'docs' };
-const scopes = { 'Only this conversation': 'session', 'This planned milestone': 'milestone', 'Default for this project': 'project' };
-const controls = { 'Who does it': 'executor', Model: 'model', 'Reasoning effort': 'effort' };
-const modelId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value);
-const targets = ['tracking', 'partners.codex.model', 'partners.codex.effort', ...Object.values(TASKS).flatMap(role => Object.values(controls).map(field => `roles.${role}.${field}`))];
+const scopes = { 'Only this conversation': 'session', 'This milestone': 'milestone', 'Whole project': 'project' };
 const option = (label, description) => ({ label, description });
-function question(text, options, header = 'Settings') {
-  if (options.length < 4 && !options.some(o => o.label === 'Cancel')) options.push(option('Cancel', 'Close settings without saving.'));
-  return [{ question: `${text} Use Other to type Back or Cancel.`, header, multiSelect: false, options }];
+const keep = () => option('Keep current', 'Leave this choice unchanged.');
+const reset = () => option('Default', 'Remove this override and use the broader setting.');
+const q = (header, question, options) => ({ header, question, multiSelect: false, options });
+const actions = (extra, f) => q('Navigation', `Save these choices, go back, or cancel without saving.${Object.keys(f.draft).length ? ' Pending: ' + menuSummary(f) : ''}`, [option('Apply', 'Save all selected changes together.'), ...(extra ? [option(extra, 'Choose Codex’s model and effort for this task; Claude uses its host controls.')] : []), option('Back', 'Return without saving; pending selections are kept.'), option('Cancel', 'Close without saving anything.')]);
+const keyPrefix = f => f.stage === 'models' ? 'partners.codex' : `roles.${f.task}`;
+const keyValue = (f, key) => f.draft[key] === 'inherit' ? null : f.draft[key] ?? f.context.values[key];
+function modelFor(f) { const requested = keyValue(f, `${keyPrefix(f)}.model`) ?? keyValue(f, 'partners.codex.model') ?? f.context.defaultModel; return requested ? f.context.models.find(m => m.id === requested) : f.context.models.find(m => m.isDefault); }
+function scopeQuestion(f) {
+  return q('Apply to', `Where should these changes apply? Current choice: ${f.scope === 'project' ? f.context.project : f.scope === 'milestone' ? f.context.milestone : 'only this conversation'}.`, [keep(), ...Object.entries(scopes).filter(([,v]) => v !== 'milestone' || f.context.milestone).map(([label, value]) => option(label, value === 'project' ? f.context.project : value === 'milestone' ? f.context.milestone : 'Overrides the milestone or project in this conversation.'))]);
+}
+function choices(values, page, more) {
+  const selected = values.length ? [option(values[page % values.length], 'Reported by the current Codex account’s model list.')] : [];
+  return [keep(), reset(), ...selected, ...(values.length > 1 ? [option(more, 'Show the next available choice; keep pending selections.')] : [])];
 }
 export function startSettingsMenu(args, context) {
-  const flow = { stage: args ? 'scope' : 'section', target: args ? 'tracking' : null, scope: null, value: args ? args.split('=')[1] : null, history: [], context };
+  const flow = { version: 2, stage: args ? 'tracking' : 'section', scope: 'session', task: null, draft: args ? { tracking: args.split('=')[1] } : {}, pages: { model: 0, effort: 0 }, context };
   return { flow, questions: menuQuestions(flow), selection: null, questionToolId: null };
 }
-function scopeQuestion(f) {
-  return question('Where should this change apply? Submitting the choices saves one change for the next applicable turn.', Object.entries(scopes).map(([label, scope]) => option(label, scope === 'project' ? f.context.project : scope === 'milestone' ? f.context.milestone : 'Only this conversation; it overrides the milestone or project.')), 'Scope');
-}
-function valueQuestion(f) {
-  const reset = option('Use default', 'Remove this override: a conversation uses its milestone/project, a milestone uses its project, and a project uses the normal default.');
-  if (f.target === 'tracking') return question('Weekly usage reports', [option('On', 'Record and report usage when the tracker is available.'), option('Off', 'No Fabex tracking calls or ordinary usage reminders.'), reset], 'Value');
-  if (f.target.endsWith('.executor')) return question('Who should do this task?', [option('Claude', 'Claude does the task; Codex retains independent review.'), option('Codex', 'Codex does the task; Claude retains independent review.'), reset], 'Value');
-  if (f.target.endsWith('.model')) {
-    const suggestions = f.context.models.slice(0, 2).map(id => option(id, 'Configured or previously observed suggestion; availability is checked on use.'));
-    return question('Choose a model, or type its name in Other; unavailable models are reported without substitution.', [option('Use normal model', f.target.startsWith('roles.') ? 'Use the main model for this AI.' : 'Use the model configured in Codex.'), ...suggestions, reset], 'Value');
+function screenQuestions(f) {
+  const c = f.context;
+  if (f.stage === 'section') return [q('Settings', 'What would you like to view or change?', [option('Models', 'Choose Codex’s model and reasoning effort; see Claude controls.'), option('Who does what', 'Coding, Testing, Image review, or Documentation.'), option('Weekly usage', 'Turn optional usage reports on or off.'), option('Cancel', 'Close without saving.')])];
+  if (f.stage === 'tasks') return [q('Task', 'Which task would you like to set up?', Object.keys(TASKS).map(label => option(label, label === 'Documentation' ? 'Both is the default: two independently written, labeled contributions.' : 'Choose who does this task.'))), q('Navigation', 'Open this task or return to the settings sections.', [option('Continue', 'Open the selected task.'), option('Back', 'Return without saving.'), option('Cancel', 'Close without saving.')])];
+  if (f.stage === 'task') return [q('Writer', `${Object.keys(TASKS).find(k => TASKS[k] === f.task)}: who does it? Current: ${keyValue(f, `roles.${f.task}.executor`) ?? c.values['roles.testWriting.executor']}.`, [keep(), option('Claude', 'Claude does the work; independent review remains.'), option('Codex', 'Codex does the work; independent review remains.'), ...(f.task === 'docs' ? [option('Both', 'Each writes its own contribution before seeing the other’s; neither rewrites the other.')] : [reset()])]), scopeQuestion(f), q('Defaults', 'Use the project or milestone writer instead? Default overrides the Writer tab; model and effort are unchanged.', [keep(), reset()]), actions('Model options', f)];
+  if (f.stage === 'tracking') return [q('Weekly usage', `Weekly usage reports. Current: ${f.draft.tracking ?? c.values['usageTracker.mode']}.`, [keep(), option('On', 'Record and report usage when the tracker is available.'), option('Off', 'No tracking calls or ordinary usage reminders.'), reset()]), scopeQuestion(f), actions(null, f)];
+  if (['models', 'taskModels'].includes(f.stage)) {
+    const executor = f.stage === 'models' ? 'codex' : keyValue(f, `roles.${f.task}.executor`);
+    const ids = executor === 'claude' ? [] : c.models.map(m => m.id);
+    const model = modelFor(f), prefix = keyPrefix(f);
+    const note = executor === 'claude' ? 'Claude’s running model and effort must be changed through its host controls.' : c.catalogError ?? 'Only models reported by Codex are offered. Availability is checked again when used.';
+    const efforts = executor === 'claude' ? [] : model?.efforts ?? [];
+    return [q('Codex model', `${note} Claude: ${c.claude}; change it with /model. Pending/current Codex model: ${keyValue(f, `${prefix}.model`) ?? 'default'}. Available models: ${ids.join(', ') || 'none reported'}. You can type an exact listed name in Other.`, choices(ids, f.pages.model, 'More models')), q('Codex effort', `How much reasoning should Codex request? Model: ${model?.id ?? 'unavailable'}. Pending/current effort: ${keyValue(f, `${prefix}.effort`) ?? 'default'}. Available effort levels: ${efforts.join(', ') || 'none reported'}. You can type an exact supported level in Other.`, choices(efforts, f.pages.effort, 'More effort levels')), scopeQuestion(f), actions(null, f)];
   }
-  return question('Choose how much reasoning to request; Other also accepts minimal, xhigh, max, ultra or persistent, subject to model support.', [option('low', 'Request less reasoning.'), option('medium', 'Request medium reasoning.'), option('high', 'Request more reasoning.'), reset], 'Value');
+  throw new Error('Invalid settings screen.');
 }
 export function menuQuestions(f) {
-  const c = f.context;
-  switch (f.stage) {
-    case 'section': return question('What would you like to view or change?', [option('Models', 'Choose the main Codex model and effort; see Claude controls.'), option('Who does what', 'Coding, Testing, Image review, or Documentation.'), option('Weekly usage', 'Turn optional usage reports on or off.')]);
-    case 'models': return question('Choose a model control.', [option('Codex model', 'Which Codex AI gives its independent answer and does work without a task override.'), option('Codex reasoning effort', 'How much reasoning to request; more may take longer.'), option('Claude model and effort', 'View the model; change the running chat through Claude’s own controls.')]);
-    case 'claude': return question(`Claude: ${c.claude}; use /model and Claude’s effort control because Fabex cannot switch the running chat.`, [option('Back', 'Return to Models.'), option('Cancel', 'Close settings without saving.')]);
-    case 'task': return question('Choose the task.', Object.entries(TASKS).map(([label]) => option(label, ({ Coding: 'Write or change code.', Testing: 'Write automated tests and run them.', 'Image review': 'Inspect images and screenshots.', Documentation: 'Write documentation.' })[label])));
-    case 'control': return question(`${c.taskLabel ?? ''}: choose what to change. ${c.taskNote ?? ''}`, Object.keys(controls).map(label => option(label, label === 'Who does it' ? 'Choose Claude or Codex; both retain independent review.' : `Optional task ${label.toLowerCase()} for Codex working turns; Claude’s running chat uses its own controls.`)));
-    case 'scope': return scopeQuestion(f); // The short tracking command already supplied the value.
-    case 'choose': return [...valueQuestion(f), ...scopeQuestion(f)];
-    default: throw new Error('invalid settings menu stage');
-  }
+  const questions = screenQuestions(f);
+  if (f.notice) questions[0].question = `${f.notice} ${questions[0].question}`;
+  return questions;
 }
+function move(grant) { grant.questionToolId = null; grant.questions = menuQuestions(grant.flow); return { questions: grant.questions }; }
 export function advanceSettingsMenu(grant, answers) {
-  const f = grant.flow;
-  const labels = grant.questions.map(q => answers[q.question]);
-  // A cancellation or Back in either question never applies the other answer.
-  if (labels.some(label => label === 'Cancel')) return { cancelled: true };
-  if (labels.some(label => label === 'Back')) {
-    const previous = f.history.pop();
-    if (previous) Object.assign(f, previous);
-    grant.questions = menuQuestions(f); grant.questionToolId = null;
-    return { questions: grant.questions };
+  const f = grant.flow, labels = grant.questions.map(question => answers[question.question]);
+  if (labels.includes('Cancel')) return { cancelled: true };
+  if (!labels.every(label => typeof label === 'string')) return null;
+  const modelTabs = ['models', 'taskModels'].includes(f.stage);
+  const codexChoices = modelTabs && (f.stage === 'models' || keyValue(f, `roles.${f.task}.executor`) !== 'claude');
+  // Validate effort against the model chosen in this same tabbed submission,
+  // including names not on the current button page. Never infer availability.
+  const candidate = { ...f, draft: { ...f.draft } };
+  if (codexChoices) {
+    if (labels[0] === 'Default') candidate.draft[`${keyPrefix(f)}.model`] = 'inherit';
+    else if (f.context.models.some(m => m.id === labels[0])) candidate.draft[`${keyPrefix(f)}.model`] = labels[0];
   }
-  if (labels.some(label => typeof label !== 'string' || label.length > 200)) return null;
-  const valid = labels.every((label, index) => grant.questions[index].options.some(o => o.label === label) || index === 0 && f.stage === 'choose' && (f.target.endsWith('.model') && modelId(label) || f.target.endsWith('.effort') && ['minimal', 'xhigh', 'max', 'ultra', 'persistent'].includes(label)));
-  if (!valid) return null;
-  const label = labels[0];
-  if (f.stage === 'choose' || f.stage === 'scope') {
-    f.scope = scopes[labels.at(-1)];
-    if (f.stage === 'choose') f.value = label === 'Use default' ? 'inherit' : label === 'Use normal model' ? null : ({ On: 'on', Off: 'off', Claude: 'claude', Codex: 'codex' })[label] ?? label;
-    grant.selection = menuSelection(f);
-    return { selection: grant.selection, summary: menuSummary(f) };
+  const valid = labels.every((label, i) => {
+    if (codexChoices && i === 0 && f.context.models.some(m => m.id === label)) return true;
+    if (codexChoices && i === 1 && !['Keep current', 'Default', 'More effort levels'].includes(label)) return modelFor(candidate)?.efforts.includes(label) === true;
+    return grant.questions[i].options.some(o => o.label === label);
+  });
+  if (!valid) { f.notice = 'Please pick one of the choices.' + (modelTabs ? ' Model names and effort levels must exactly match the reported list.' : ''); return move(grant); }
+  delete f.notice;
+  const goBack = () => { f.stage = f.stage === 'taskModels' ? 'task' : f.stage === 'task' ? 'tasks' : 'section'; return move(grant); };
+  if (labels.includes('Back') && ['section', 'tasks'].includes(f.stage)) return goBack();
+  if (f.stage === 'section') { f.stage = ({ Models: 'models', 'Who does what': 'tasks', 'Weekly usage': 'tracking' })[labels[0]]; return move(grant); }
+  if (f.stage === 'tasks') { f.task = TASKS[labels[0]]; f.stage = 'task'; return move(grant); }
+  const scopeLabel = labels[f.stage === 'models' || f.stage === 'taskModels' ? 2 : 1];
+  if (scopeLabel !== 'Keep current') f.scope = scopes[scopeLabel];
+  const put = (key, label) => { if (label !== 'Keep current') f.draft[key] = label === 'Default' ? 'inherit' : ({ Claude: 'claude', Codex: 'codex', Both: 'both', On: 'on', Off: 'off' })[label] ?? label; };
+  if (f.stage === 'tracking') put('tracking', labels[0]);
+  if (f.stage === 'task') {
+    put(`roles.${f.task}.executor`, labels[0]);
+    if (labels[2] === 'Default') f.draft[`roles.${f.task}.executor`] = 'inherit';
+    if (labels.includes('Back')) return goBack();
+    if (labels[3] === 'Model options') { f.stage = 'taskModels'; return move(grant); }
   }
-  const previous = { stage: f.stage, target: f.target, scope: f.scope, value: f.value, context: structuredClone(f.context) };
-  switch (f.stage) {
-    case 'section': f.stage = ({ Models: 'models', 'Who does what': 'task', 'Weekly usage': 'choose' })[label]; if (label === 'Weekly usage') { f.target = 'tracking'; f.context.settingLabel = 'Weekly usage'; } break;
-    case 'models':
-      if (label === 'Claude model and effort') f.stage = 'claude';
-      else { f.target = label === 'Codex model' ? 'partners.codex.model' : 'partners.codex.effort'; f.context.settingLabel = label; f.stage = 'choose'; } break;
-    case 'task': f.target = `roles.${TASKS[label]}.executor`; f.context.taskLabel = label; f.context.taskNote = label === 'Testing' ? 'Changes cover writing and running tests together.' : ''; f.stage = 'control'; break;
-    case 'control': f.target = f.target.replace(/\.[^.]+$/, `.${controls[label]}`); f.context.settingLabel = `${f.context.taskLabel}: ${label}`; f.stage = 'choose'; break;
-    default: return null;
+  if (['models', 'taskModels'].includes(f.stage)) {
+    const prefix = keyPrefix(f);
+    if (labels[0] === 'More models') f.pages.model++; else put(`${prefix}.model`, labels[0]);
+    if (labels[1] === 'More effort levels') f.pages.effort++; else put(`${prefix}.effort`, labels[1]);
+    if (labels.includes('Back')) return goBack();
+    if (labels.includes('More models') || labels.includes('More effort levels')) return move(grant);
+    const model = modelFor(f), effort = keyValue(f, `${prefix}.effort`);
+    if (Object.keys(f.draft).some(key => key.endsWith('.model') || key.endsWith('.effort')) && effort && model && !model.efforts.includes(effort)) { f.notice = 'That model does not offer this effort. Choose a supported level or Default.'; return move(grant); }
   }
-  f.history.push(previous); grant.questionToolId = null; grant.questions = menuQuestions(f);
-  return { questions: grant.questions };
+  if (labels.includes('Back')) return goBack();
+  if (!Object.keys(f.draft).length) return { cancelled: true, unchanged: true };
+  grant.selection = menuSelection(f);
+  grant.questions = menuQuestions(f);
+  return { selection: grant.selection, summary: menuSummary(f) };
 }
-export function menuSelection(f) { return `${f.target}=${f.value === 'inherit' ? 'inherit' : JSON.stringify(f.value)} scope=${f.scope}`; }
+export function menuSelection(f) { return Object.entries(f.draft).map(([key,value]) => `${key}=${value === 'inherit' ? 'inherit' : JSON.stringify(value)}`).join(' ') + ` scope=${f.scope}`; }
 export function menuSummary(f) {
-  const setting = f.context.settingLabel ?? 'Weekly usage';
-  const value = f.value === 'inherit' ? ({ session: 'use the milestone/project setting', milestone: 'use the project setting', project: 'use the normal default' })[f.scope] : f.value === null ? 'use the main/default model' : f.value;
-  const scope = f.scope === 'project' ? `project ${f.context.project}` : f.scope === 'milestone' ? `milestone ${f.context.milestone}` : 'this conversation';
-  return `${setting}: ${value}, for ${scope}; effective on the next applicable turn unless a more specific setting takes precedence.`;
+  const labels = { tracking: 'Weekly usage', 'partners.codex.model': 'Codex model', 'partners.codex.effort': 'Codex effort', ...Object.fromEntries(Object.entries(TASKS).flatMap(([label, role]) => [['executor', 'writer'], ['model', 'Codex model'], ['effort', 'Codex effort']].map(([key, name]) => [`roles.${role}.${key}`, `${label} ${name}`]))) };
+  return Object.entries(f.draft).map(([key,v]) => `${labels[key] ?? key.replace(/^roles\./, '').replace(/\.executor$/, ' writer').replace(/\./g, ' ')}: ${v === 'inherit' ? 'use the broader setting' : v}`).join('; ') + ` — ${f.scope === 'project' ? 'project ' + f.context.project : f.scope === 'milestone' ? 'milestone ' + f.context.milestone : 'only this conversation'}.`;
 }
 export function validateSettingsMenu(g) {
   const f = g.flow;
-  if (!f || !Array.isArray(f.history) || f.history.length > 8 || !f.context || typeof f.context.project !== 'string' || typeof f.context.milestone !== 'string' || typeof f.context.claude !== 'string' || !Array.isArray(f.context.models) || f.context.models.length > 2 || !f.context.models.every(modelId) || f.target !== null && !targets.includes(f.target) || f.scope !== null && !Object.values(scopes).includes(f.scope) || g.questionToolId !== null && (typeof g.questionToolId !== 'string' || g.questionToolId.length > 200) || !isDeepStrictEqual(g.questions, menuQuestions(f)) || g.selection !== null && (!['choose', 'scope'].includes(f.stage) || !f.scope || g.selection !== menuSelection(f))) throw new Error('invalid settings menu grant');
+  if (f && f.version === undefined) return; // Read pre-upgrade grants; applying them requires reopening settings.
+  if (!f || f.version !== 2 || !f.context || !Array.isArray(f.context.models) || f.context.models.length > 200 || !f.draft || typeof f.draft !== 'object' || !['session','milestone','project'].includes(f.scope) || f.scope === 'milestone' && !f.context.milestone || !isDeepStrictEqual(g.questions, menuQuestions(f)) || g.selection !== null && g.selection !== menuSelection(f) || g.questionToolId !== null && typeof g.questionToolId !== 'string') throw new Error('invalid settings menu grant');
 }
 export function typedSettingsReference() {
   return {

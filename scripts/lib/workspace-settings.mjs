@@ -9,7 +9,7 @@ export const SETTING_DEFAULTS = {
   summaries: true, 'usageTracker.mode': 'off', 'usageTracker.path': null,
   'usageTracker.progressMinutes': 120,
   ...Object.fromEntries(ROLE_NAMES.flatMap(role => [
-    [`roles.${role}.executor`, ['testRunning', 'gitDelivery'].includes(role) ? 'claude' : 'codex'],
+    [`roles.${role}.executor`, role === 'docs' ? 'both' : ['testRunning', 'gitDelivery'].includes(role) ? 'claude' : 'codex'],
     [`roles.${role}.model`, null], [`roles.${role}.effort`, null]
   ]))
 };
@@ -18,7 +18,7 @@ export function validateSettings(values) {
   for (const [key, value] of Object.entries(values)) {
     if (!Object.hasOwn(SETTING_DEFAULTS, key)) throw new Error(`unknown setting ${key}; choices: ${Object.keys(SETTING_DEFAULTS).join(', ')}`);
     let valid;
-    if (key.endsWith('.executor')) valid = ['claude', 'codex'].includes(value);
+    if (key.endsWith('.executor')) valid = ['claude', 'codex'].includes(value) || key === 'roles.docs.executor' && value === 'both';
     else if (key.endsWith('.effort')) valid = value === null || ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent'].includes(value);
     else if (key.endsWith('.model')) valid = value === null || typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value);
     else if (key === 'partners.codex.helperServers') valid = ['inherit', 'off'].includes(value);

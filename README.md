@@ -25,7 +25,7 @@ changes. You stay in control of modes and settings.
 Fabex is beta software. It adds coordination, not infallibility: review important
 changes, keep backups and expect the host's normal permission checks. VS Code's
 Claude Code integration is the primary workflow; host-specific checks are listed
-in the [acceptance notes](docs/acceptance-1.10.3.md).
+in the [acceptance notes](docs/acceptance-1.10.4.md).
 
 ### Install
 
@@ -56,6 +56,7 @@ is below.
 
 ### What's new?
 
+- **1.10.4:** clickable tabbed settings, account-reported Codex model choices, and independently authored Documentation with Both as the default. [Details](CHANGELOG.md)
 - **1.10.3:** the full, simple settings menu: Models, Who does what, and Weekly usage. Milestones follow your plan; the cumulative continuation cutoff is removed. [Details](CHANGELOG.md)
 
 - **1.10.2:** discoverable tracking controls, automatic tracker discovery and milestone preferences. [Details](CHANGELOG.md)
@@ -79,30 +80,31 @@ data and credentials do not belong in this public repository.
 Open `/fabex:settings` to see your project, current **planned milestone** and
 current choices. Opening it saves nothing. Choose one of three sections:
 
-- **Models:** choose the Codex model and how much reasoning to request. Claude's
-  model is shown with its source; use Claude's `/model` and host effort control to
-  change the running chat. Configured or previously used models are suggestions,
-  not a promise of availability. Unsupported requests fail visibly.
-- **Who does what:** Coding, Testing, Image review and Documentation. Choose
-  Claude or Codex, with optional model/effort requests for that task. Testing
-  updates test-writing and test-running preferences together. Task overrides
-  affect Codex working turns; the first independent answer uses its main model.
-  Claude's main chat remains host-controlled. The test-running preference guides
-  work; either partner can still run a check.
-- **Weekly usage:** On or Off. Fabex locates the separate tracker automatically
-  and shows installation help when needed. Reporting frequency stays automatic.
+- **Models:** choose from the models and reasoning levels reported by the signed-in
+  Codex account. If the list cannot load, Fabex says so and keeps your settings.
+  Claude's model is shown here; use its native `/model` picker and effort control
+  for the models available to Claude. Fabex never silently substitutes a model.
+- **Who does what:** Coding, Testing, Image review and Documentation. Documentation
+  defaults to **Both**: Claude and Codex write independently, then their contributions
+  appear in one document under separate headings. Each revises only its own words.
+  Existing explicit writer choices stay intact. Coding and Testing have one writer.
+  Testing updates writing and running preferences together; either partner may
+  still run a check. Optional task model/effort choices apply to Codex working
+  turns; Claude's main model remains host-controlled. With Both these are separate
+  author controls, never a shared model override.
+- **Weekly usage:** On or Off. Fabex finds the separate tracker and offers setup
+  help when needed. Reporting frequency stays automatic.
 
-Choose **Only this conversation**, **This planned milestone**, or **Default for
-this project** alongside the value in the same dialog; submitting the answers
-applies that one change. A conversation choice
-wins over a milestone choice, which wins over the project default. To undo an
-override, choose **Use default** at the level you want to clear. Back and
-Cancel save nothing. Changes take effect on the next applicable turn after the
-current review cycle finishes. Both partners retain independent review in joint work.
+Related choices appear as clickable tabs. **Keep current** leaves that choice
+alone. **Apply to** offers **Only this conversation**, **This milestone** (only
+when one is named), and **Whole project**. A conversation choice takes priority
+over its milestone, then the project. **Default** removes the selected override.
+**Apply** saves the pending changes together; **Back** and **Cancel** are buttons.
+You never need to type Back. Model lists have a clickable More choice when they
+exceed the host's option limit. Nothing is saved on cancellation or expiry.
 
-`/fabex:settings tracking=on` goes straight to the scope choice. For typing
-instead of clicking, the full command reference is in the technical section below
-and `/fabex:settings --json`; the normal view stays short.
+`/fabex:settings tracking=on` opens the tracking and scope tabs directly. Typed
+shortcuts remain in the technical reference and `/fabex:settings --json`.
 
 A milestone is a stage of your plan, not a chat. New chats continue the selected
 milestone; renaming a chat never renames it. Use `/fabex:milestone` to view or
@@ -145,7 +147,7 @@ uses the main/default model. Replace `MODEL_ID` with the requested model name.
 /fabex:settings roles.implementation.executor=claude scope=session
 /fabex:settings roles.testing.executor=codex scope=milestone
 /fabex:settings roles.imageReview.executor=claude scope=session
-/fabex:settings roles.docs.executor=codex scope=project
+/fabex:settings roles.docs.executor=both scope=project
 /fabex:settings roles.testing.model=MODEL_ID scope=milestone
 /fabex:settings roles.testing.effort=high scope=milestone
 /fabex:settings roles.testing.executor=inherit scope=milestone
@@ -230,8 +232,9 @@ task, `control.mjs role <role>` selects the already-authorized assignment. Codex
 independent review uses its main partner settings; assigned Codex execution uses
 role model/effort during reconciliation. Claude-host model controls remain host
 controls: configured requests are not observed service. Unsupported choices fail
-at the provider or require explicit host selection; no account model catalog or
-silent fallback is claimed. Other permissions are unchanged. Image access and
+at the provider or require explicit host selection. The picker uses the pinned
+CLI’s `model/list` catalog, not a history-derived list; lookup failures remain
+visible. No silent fallback is permitted. Other permissions are unchanged. Image access and
 authorship overrides apply only to the bound main chat, never arbitrary subagents.
 
 `/fabex:milestone <name-or-id>` creates/selects a milestone; no arguments lists it.
