@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.10.1 — 2026-09-27
+
+### Why
+
+People need a readable introduction before implementation details. Chat renames,
+large history files and maintenance controls also exposed related rough edges.
+
+### What it gave us
+
+Human-first installation and usage guidance; stable-ID chat archives; full-file,
+incremental context accounting; clearer recovery and optional helper-server control.
+
+### Changes
+
+- Preserve owner/shared milestone names and thread identity across chat renames.
+- Stream older title records on first registration and index compactions incrementally.
+- Permit composed read-only settings queries and read-only controller observation during migration.
+- Clear continuation blockers explicitly and normalize historical literal-null fields.
+- Add verified named-source working-copy cleanup without weakening the original audit.
+- Add opt-in inherited MCP helper disabling, default inherit, without global edits.
+- Preserve existing modes, independent phases, role settings, RAM controls and history.
+
+### Tradeoffs and verification
+
+Counts describe the retained file and last observed call, not live context or
+predicted compaction timing. Unknown old naming provenance is preserved, not guessed.
+Helper disabling requires supported CLI enumeration and does not control unrelated
+processes or promise RAM savings. Host rename/upgrade acceptance remains separate
+from regression tests. See [acceptance](docs/acceptance-1.10.1.md).
+
 ## 1.10.0 — 2026-09-27
 
 ### Why

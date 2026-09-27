@@ -8,9 +8,49 @@ import { PLUGIN_ROOT } from './paths.mjs';
 const exec = promisify(execFile);
 const command = async (file, args, options = {}) => (await exec(file, args, { maxBuffer: 8 * 1024 * 1024, ...options })).stdout;
 
+async function inspectNamedCopy(root, target, source, activeCheck) {
+  if (!isAbsolute(source) || !isAbsolute(target) || resolve(source) !== source || resolve(target) !== target) throw new Error('cleanup requires exact absolute source and copy paths');
+  const [src, dst, work] = await Promise.all([realpath(source), realpath(target), realpath(root)]);
+  if (src !== source || dst !== target || src === dst || src.startsWith(dst + '/') || dst.startsWith(src + '/')) throw new Error('cleanup refuses redirected, nested or identical paths');
+  if (![work, dirname(work)].includes(dirname(src)) && src !== work) throw new Error('cleanup source must be the workstream or an adjacent project');
+  if (![work, dirname(src), await realpath(tmpdir())].includes(dirname(dst))) throw new Error('cleanup copy must be adjacent or in the temp root');
+  const suffix = basename(dst).slice(basename(src).length);
+  if (!basename(dst).startsWith(basename(src)) || !/^-next(?:\d+|-\d+\.\d+\.\d+)?$/.test(suffix)) throw new Error('cleanup copy name must be <source>-next[version or number]');
+  const info = await lstat(dst);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('cleanup requires an ordinary copy directory');
+  const manifest = JSON.parse(await readFile(join(src, '.claude-plugin/plugin.json'), 'utf8'));
+  if (!manifest.name || typeof manifest.version !== 'string') throw new Error('source plugin manifest missing');
+  let files = 0;
+  const walk = async (dir, prefix = '') => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!prefix && ['node_modules', '.git'].includes(entry.name)) continue;
+      const path = prefix + entry.name;
+      if (entry.isSymbolicLink()) throw new Error(`cleanup refuses symlink: ${path}`);
+      const baseline = join(src, path); let original;
+      try { original = await lstat(baseline); } catch { throw new Error(`cleanup refuses unique file: ${path}`); }
+      if (original.isSymbolicLink()) throw new Error(`cleanup refuses source symlink: ${path}`);
+      if (entry.isDirectory() && original.isDirectory()) await walk(join(dir, entry.name), path + '/');
+      else if (entry.isFile() && original.isFile() && (await readFile(join(dir, entry.name))).equals(await readFile(baseline))) files++;
+      else throw new Error(`cleanup refuses differing file: ${path}`);
+    }
+  };
+  await walk(dst);
+  // A copied Git database can contain unique reflog/unreachable work even when
+  // refs match. Generic cleanup refuses it rather than claiming it disposable.
+  try { await lstat(join(dst, '.git')); throw new Error('generic cleanup refuses copied Git metadata; use the Fabex-specific audit'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!files) throw new Error('cleanup copy has no verified files');
+  if (activeCheck) await activeCheck(dst);
+  else try {
+    if ((await command('lsof', ['-t', '+D', dst])).trim()) throw new Error('cleanup target is in active use');
+  } catch (error) { if (error.code !== 1 || error.stdout?.trim() || error.stderr?.trim()) throw new Error(`cleanup cannot prove target idle: ${error.message}`); }
+  return { path: dst, source: src, files, version: manifest.version, verified: true, device: info.dev, inode: info.ino };
+}
+
 // A manifest is not proof that a directory is disposable. Compare every source
 // file, reject unique extras and refs, and require an OS active-use check.
-export async function inspectCleanup(root, target, { source = PLUGIN_ROOT, activeCheck = null } = {}) {
+export async function inspectCleanup(root, target, { source = PLUGIN_ROOT, activeCheck = null, namedSource = false } = {}) {
+  if (namedSource) return inspectNamedCopy(root, target, source, activeCheck);
   if (!isAbsolute(target) || resolve(target) !== target || !/^fabex-next(?:-\d+\.\d+\.\d+)?$/.test(basename(target))) throw new Error('cleanup requires an exact absolute Fabex working-copy directory');
   const info = await lstat(target);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('cleanup target must be a directory, never a symlink');

@@ -169,6 +169,7 @@ async function checkpoint(root, args) {
   }
   const current = await currentState(root);
   const value = current.state.partner.thread.checkpoint;
+  if (args.length === 2 && args[1] === '--clear' && ['owner-action-required', 'blocker'].includes(args[0])) args = ['clear', args[0]];
   if (args[0] === 'clear' && args.length === 2 && ['open-work', 'owner-action-required', 'blocker'].includes(args[1])) {
     if (current.state.route !== 'normal') throw new ValidationError('continuation updates require work mode');
     const field = FIELD_NAMES.get(args[1]);
@@ -201,7 +202,9 @@ async function checkpoint(root, args) {
     return;
   }
   if (args.length !== 2 || !FIELD_NAMES.has(args[0])) throw new ValidationError('checkpoint requires <field> <bounded-value>');
-  const state = await updateCheckpoint(root, FIELD_NAMES.get(args[0]), args[1], process.env);
+  const state = ['owner-action-required', 'blocker'].includes(args[0]) && args[1] === 'null'
+    ? await snapshotCheckpoint(root, { [FIELD_NAMES.get(args[0])]: null }, process.env)
+    : await updateCheckpoint(root, FIELD_NAMES.get(args[0]), args[1], process.env);
   process.stdout.write(`${JSON.stringify({ recorded: true, field: args[0], recoverySeedBytes: recoverySeedBytes(state, root), recoverySeedLimitBytes: MAX_RECOVERY_SEED_BYTES })}\n`);
 }
 
@@ -472,9 +475,9 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
     return;
   }
   if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }
-  if (command === 'cleanup' && args.length === 2 && args[0] === '--path') {
+  if (command === 'cleanup' && [2, 4].includes(args.length) && args[0] === '--path' && (args.length === 2 || args[2] === '--source')) {
     await currentState(root);
-    process.stdout.write(`${JSON.stringify(await cleanupWorkingCopy(root, args[1]))}\n`);
+    process.stdout.write(`${JSON.stringify(await cleanupWorkingCopy(root, args[1], args.length === 4 ? { source: args[3], namedSource: true } : undefined))}\n`);
     return;
   }
   if (command === 'mode') {

@@ -849,12 +849,13 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const jobs = await heavyStatus(root, env);
     const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. Exit 4 from wait means the shared continuation budget is exhausted: stop polling, inspect the blocker, preserve required review/relay. Never bypass an occupied queue. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork within the checkpoint budget; a review-cycle completion is not task completion.`;
     const initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling + ` Active task assignment: ${JSON.stringify(plan)}. Preserve independent review by both main partners. During Phase 1 do not read Claude's current sealed assessment, chat transcript or scratch notes; use the original message and agreed prior context. Sanctioned status controls omit sealed readings. When the active task is assigned to Claude, do not perform competing task work; review independently. Model/effort role preferences not supported by the executing host must be reported, not silently claimed applied.`;
-    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env });
+    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: profile['partners.codex.helperServers'] });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
       const stored = state.operations.find((op) => op.id === operation.id);
       state.workspace.observations ??= {};
+      state.workspace.observations.helperServers = codex.fabexHelperServers ?? { requested: profile['partners.codex.helperServers'], verified: false };
       state.workspace.observations.codex = { requested: options.model ?? null, effort: options.modelReasoningEffort, observed: null, verified: false, source: 'SDK request; no served-model evidence yet', at: new Date().toISOString(), role: plan.role };
       if (stored?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK submission'), { name: 'AbortError' });
       stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
@@ -943,11 +944,11 @@ export async function cancelOperation(root, operationId, env = process.env) {
 }
 
 export async function operationStatus(root, operationId, env = process.env, readOptions = {}) {
-  const current = await readState(root, env, readOptions);
+  const current = await readState(root, env, { ...readOptions, observationOnly: true });
   if (!current.ok) throw current.error ?? new Error(`state is ${current.health}`);
   const operation = current.state.operations.find((item) => item.id === operationId);
   if (!operation) throw new Error('operation not found');
-  return structuredClone(operation);
+  return { ...structuredClone(operation), observationHealth: current.health };
 }
 
 export async function releaseRunner(root, pid = process.pid, env = process.env) {

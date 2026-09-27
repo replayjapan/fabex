@@ -238,6 +238,9 @@ async function loadValidated(paths) {
     state.workspace ??= emptyWorkspace();
     state.schemaVersion = STATE_SCHEMA_VERSION;
   }
+  for (const checkpoint of [state.partner?.thread?.checkpoint, ...Object.values(state.workspace?.milestones ?? {}).map(m => m.thread?.checkpoint)]) {
+    if (checkpoint) for (const field of ['blocker', 'ownerActionRequired']) if (checkpoint[field] === 'null') checkpoint[field] = null;
+  }
   try { validateState(state, paths); } catch (error) {
     const code = error.details?.some((item) => item.includes('schemaVersion')) ? 'schema-mismatch' : 'corrupt';
     throw new StateStoreError(code, error.details?.join('; ') || error.message, error);
@@ -368,13 +371,17 @@ export async function initializeState(root, env = process.env, { recoverUnresolv
   }
 }
 
-export async function readState(root, env = process.env, { checkLock = true, lockWaitMs = DEFAULT_READ_LOCK_WAIT_MS, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds)) } = {}) {
+export async function readState(root, env = process.env, { observationOnly = false, checkLock = true, lockWaitMs = DEFAULT_READ_LOCK_WAIT_MS, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds)) } = {}) {
   const paths = await projectPaths(root, env);
   try {
     if (checkLock && await exists(paths.lockDir)) await waitForReadableLock(paths, Math.max(0, lockWaitMs), pause);
     if (await exists(paths.transactionFile)) throw new StateStoreError('transaction-present', 'an incomplete state transaction requires recovery');
-    if (!(await exists(paths.stateFile))) return initializeState(root, env);
+    if (!(await exists(paths.stateFile))) {
+      if (observationOnly) throw new StateStoreError('missing', 'no existing state to observe');
+      return initializeState(root, env);
+    }
     const loaded = await loadValidated(paths);
+    if (observationOnly) return { ok: true, state: loaded.state, health: loaded.migrated ? 'migration-deferred' : 'healthy', paths, observationOnly: true };
     return { ok: true, state: loaded.migrated ? await persistMigration(paths) : loaded.state, health: 'healthy', paths };
   } catch (error) {
     const wrapped = error instanceof StateStoreError ? error : new StateStoreError('unwritable', 'state cannot be read safely', error);

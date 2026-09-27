@@ -4,13 +4,13 @@
     "name": "rePlay, LLC"
   },
   "metadata": {
-    "description": "Beta — Built for Fable: Claude and Codex collaborate as equal partners through one continuous, resumable Codex SDK thread."
+    "description": "Beta — Claude and Codex work as partners: independent reviews, coordinated coding and resumable milestone conversations."
   },
   "plugins": [
     {
       "name": "fabex",
       "source": "./",
-      "description": "Beta — Built for Fable: Claude and Codex collaborate as equal partners through one continuous, resumable Codex SDK thread.",
+      "description": "Beta — Claude and Codex work as partners: independent reviews, coordinated coding and resumable milestone conversations.",
       "author": {
         "name": "rePlay, LLC"
       },

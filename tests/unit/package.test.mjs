@@ -5,7 +5,7 @@ import { access, readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..', '..');
-const tagline = 'Beta — Built for Fable: Claude and Codex collaborate as equal partners through one continuous, resumable Codex SDK thread.';
+const tagline = 'Beta — Claude and Codex work as partners: independent reviews, coordinated coding and resumable milestone conversations.';
 
 async function filesUnder(directory) {
   const files = [];
@@ -18,17 +18,17 @@ async function filesUnder(directory) {
   return files;
 }
 
-test('plugin, package, lockfiles, and marketplace metadata agree on 1.10.0 Beta', async () => {
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.10.1 Beta', async () => {
   const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
   const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
   const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
   const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
   assert.equal(plugin.name, 'fabex');
-  assert.equal(plugin.version, '1.10.0');
-  assert.equal(pkg.version, '1.10.0');
-  assert.equal(npmLock.version, '1.10.0');
-  assert.equal(npmLock.packages[''].version, '1.10.0');
+  assert.equal(plugin.version, '1.10.1');
+  assert.equal(pkg.version, '1.10.1');
+  assert.equal(npmLock.version, '1.10.1');
+  assert.equal(npmLock.packages[''].version, '1.10.1');
   assert.equal(plugin.description, tagline);
   assert.equal(marketplace.metadata.description, tagline);
   assert.equal(marketplace.plugins[0].description, tagline);

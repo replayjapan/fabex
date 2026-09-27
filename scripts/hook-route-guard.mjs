@@ -176,10 +176,12 @@ export function parseControlCommand(command) {
   if (args[0] === 'status' && (args.length === 1 || args.length === 2 && ['--all', '--brief'].includes(args[1]))) return { kind: 'status' };
   if (['config', 'diagnose'].includes(args[0]) && args.length === 1) return { kind: args[0] };
   if (args[0] === 'cleanup' && args.length === 3 && args[1] === '--path' && isAbsolute(args[2]) && /^fabex-next(?:-\d+\.\d+\.\d+)?$/.test(basename(args[2]))) return { kind: 'cleanup' };
+  if (args[0] === 'cleanup' && args.length === 5 && args[1] === '--path' && args[3] === '--source' && isAbsolute(args[2]) && isAbsolute(args[4])) return { kind: 'cleanup' };
   if (args[0] === 'checkpoint' && (args.length === 1 || args.length === 2 && args[1] === '--help')) return { kind: 'checkpoint-help' };
   if (args[0] === 'checkpoint' && ['capacity', 'export'].includes(args[1]) && args.length === 2) return { kind: `checkpoint-${args[1]}` };
   const fields = new Set(['objective', 'current-task', 'constraint', 'decision', 'relevant-file', 'implementation-status', 'test-status', 'unresolved-problem', 'next-action', 'open-work', 'owner-action-required', 'blocker']);
   if (args[0] === 'checkpoint' && args[1] === 'clear' && ['open-work', 'owner-action-required', 'blocker'].includes(args[2]) && args.length === 3) return { kind: 'checkpoint-continuation' };
+  if (args[0] === 'checkpoint' && ['owner-action-required', 'blocker'].includes(args[1]) && args[2] === '--clear' && args.length === 3) return { kind: 'checkpoint-continuation' };
   if (args[0] === 'checkpoint' && fields.has(args[1]) && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 8192 && args.length === 3) return { kind: 'checkpoint' };
   if (args[0] === 'checkpoint' && args[1] === 'compact' && ['constraint', 'decision', 'relevant-file', 'unresolved-problem'].includes(args[2]) && args[3] === '--keep-last' && /^\d+$/.test(args[4] ?? '') && args.length === 5) return { kind: 'checkpoint-compact' };
   if (args[0] === 'executor-exception' && args[1] === 'authorize' && args.length === 8 && args[2] === '--executor' && args[4] === '--scope' && args[6] === '--reason' && args[3] && args[5] && args[7]) return { kind: 'executor-exception-authorize' };
@@ -424,6 +426,8 @@ function safeCommandSegments(command) {
 }
 
 const SAFE_COMPOSED_CONTROLS = new Set(['status', 'config', 'diagnose', 'checkpoint-capacity', 'checkpoint-export', 'help', 'checkpoint-help', 'controller-status', 'controller-result', 'controller-wait', 'controller-help']);
+SAFE_COMPOSED_CONTROLS.add('workspace-view');
+SAFE_UNHEALTHY.add('controller-relay');
 SAFE_COMPOSED_CONTROLS.add('controller-relay');
 SAFE_COMPOSED_CONTROLS.add('dev-status');
 SAFE_COMPOSED_CONTROLS.add('dev-logs');

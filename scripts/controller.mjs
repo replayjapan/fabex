@@ -6,14 +6,17 @@ import { assertUuid, ValidationError } from './lib/validation.mjs';
 import { cancelOperation, claimNextOperation, claimRunner, operationStatus, releaseRunner, releaseRunnerIfIdle, runOperation, submitOperation } from './lib/sdk-controller.mjs';
 import { relayBlock } from './lib/review.mjs';
 import { consumeWaitBudget } from './lib/wait-budget.mjs';
-import { sdkLaunchOptions } from './lib/sdk-process.mjs';
+import { sdkLaunchOptions, helperServerOptions } from './lib/sdk-process.mjs';
 import { sealReading, assertSealed } from './lib/workspace.mjs';
 import { readState } from './lib/state.mjs';
 import { spawn } from 'node:child_process';
 
 async function codexFactory(options, context) {
   const { Codex } = await import('@openai/codex-sdk');
-  return new Codex(sdkLaunchOptions(options, context));
+  const configured = await helperServerOptions(sdkLaunchOptions(options, context), context);
+  const codex = new Codex(configured);
+  codex.fabexHelperServers = configured.fabexHelperServers ?? { requested: 'inherit' };
+  return codex;
 }
 
 function option(args, name) {
@@ -113,7 +116,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     if ((!full && args.length !== 2) || args[0] !== '--operation-id') throw new ValidationError(`${command} requires --operation-id <uuid>${command === 'relay' ? ' [--full]' : ''}`);
     const id = assertUuid(option(args, '--operation-id'), 'operation id');
     let result = command === 'cancel' ? await cancelOperation(root, id, env) : await operationStatus(root, id, env);
-    if (['result', 'relay'].includes(command)) assertSealed((await readState(root, env)).state, result);
+    if (['result', 'relay'].includes(command)) assertSealed((await readState(root, env, { observationOnly: true })).state, result);
     if (command === 'relay') {
       const block = terminal(result.status) && relayBlock(result, { full });
       if (!block) throw new Error('operation has no complete relay block');
@@ -122,7 +125,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     }
     if (command === 'result' && !terminal(result.status)) throw new Error('operation is not complete');
     if (command === 'result') result = { ...result, relayBlock: relayBlock(result) };
-    if (command === 'status') result = boundedStatus(result);
+    if (command === 'status') result = { ...boundedStatus(result), observationHealth: result.observationHealth };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
@@ -130,6 +133,11 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     if (args.length !== 4 || args[0] !== '--operation-id' || args[2] !== '--timeout') throw new ValidationError('wait requires exactly --operation-id <uuid> --timeout <seconds>');
     const id = assertUuid(args[1], 'operation id');
     if (!/^\d+$/.test(args[3]) || Number(args[3]) < 1 || Number(args[3]) > 120) throw new ValidationError('wait timeout must be an integer from 1 to 120 seconds');
+    const observed = await operationStatus(root, id, env);
+    if (observed.observationHealth === 'migration-deferred') {
+      process.stdout.write(JSON.stringify({ ...boundedStatus(observed), observationHealth: 'migration-deferred', instruction: 'Read-only snapshot; existing runner remains active. No migration or wait budget mutation.' }) + '\n');
+      process.exitCode = terminal(observed.status) ? 0 : 3; return;
+    }
     const budget = await consumeWaitBudget(root, env);
     if (budget.exhausted) {
       const operation = boundedStatus(await operationStatus(root, id, env));

@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { open, readFile, mkdir, writeFile, rename, realpath, lstat } from 'node:fs/promises';
+import { open, readFile, mkdir, writeFile, rename, realpath, lstat, readdir } from 'node:fs/promises';
+import { fullTitle, indexedGauge } from './transcript-index.mjs';
 import { resolve, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -59,7 +60,31 @@ async function saveChatReferences(root, state, env) {
   const m = w.milestones[w.activeMilestoneId];
   const slug = m.name.normalize('NFKC').replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 60) || 'milestone';
   const base = await realpath(paths.projectDir);
-  const folder = join(base, 'chats', `${slug}--${m.id}`);
+  const archiveRoot = join(base, 'chats');
+  await mkdir(archiveRoot, { recursive: true, mode: 0o700 });
+  if (await realpath(archiveRoot) !== archiveRoot) throw new Error('private archive root must not be a symlink');
+  const matches = (await readdir(archiveRoot)).filter(name => name.endsWith(`--${m.id}`));
+  let folder = join(archiveRoot, `${slug}--${m.id}`);
+  // Preserve older duplicate exports intact inside the canonical directory.
+  // Never trust a suffix alone: verify each record before moving anything.
+  for (const name of matches) {
+    const path = join(archiveRoot, name), info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('archive is not an ordinary directory');
+    const ref = join(path, 'references.json');
+    if ((await lstat(ref)).isSymbolicLink() || JSON.parse(await readFile(ref, 'utf8')).milestoneId !== m.id) throw new Error('archive identity mismatch; nothing removed');
+  }
+  if (matches.length) {
+    const chosen = matches.includes(`${slug}--${m.id}`) ? `${slug}--${m.id}` : matches[0];
+    const previous = join(archiveRoot, chosen), info = await lstat(previous);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('archive is not an ordinary directory');
+    if (previous !== folder) await rename(previous, folder);
+    for (const name of matches.filter(name => name !== chosen)) {
+      const history = join(folder, 'previous-exports');
+      await mkdir(history, { recursive: true, mode: 0o700 });
+      if (await realpath(history) !== history) throw new Error('archive history must not be a symlink');
+      await rename(join(archiveRoot, name), join(history, randomUUID()));
+    }
+  }
   await mkdir(folder, { recursive: true, mode: 0o700 });
   if (await realpath(folder) !== folder) throw new Error('private chat archive must not be a symlink');
   const references = Object.entries(w.sessions).filter(([,s]) => s.milestoneId === m.id).map(([id,s]) => ({ sessionId: id, title: s.title, transcriptPath: s.transcriptPath }));
@@ -74,7 +99,11 @@ export async function registerSession(root, input, env = process.env) {
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || ['__proto__', 'constructor', 'prototype'].includes(sessionId)) return null;
   const config = (await loadEffectiveConfig(root, env)).config;
   let title = null;
-  if (input.transcript_path) try { title = titleFromText((await tailText(input.transcript_path)).text, sessionId); } catch {}
+  if (input.transcript_path) try {
+    title = titleFromText((await tailText(input.transcript_path)).text, sessionId);
+    const current = await readState(root, env);
+    if (!title && !current.state?.workspace?.sessions?.[sessionId]) title = await fullTitle(input.transcript_path, sessionId);
+  } catch {}
   const state = await mutate(root, 'workspace-session-binding', state => {
     const w = state.workspace;
     let session = w.sessions[sessionId];
@@ -82,13 +111,14 @@ export async function registerSession(root, input, env = process.env) {
       const values = resolveSettings(config, state, sessionId).values;
       let id = w.activeMilestoneId;
       if (values['milestones.newChatMeansNewMilestone']) {
-        id = randomUUID(); w.milestones[id] = { id, name: title ?? `Temporary ${sessionId.slice(0, 8)}`, thread: null, summary: '', handoff: '', createdAt: new Date().toISOString(), parts: [] };
+        id = randomUUID(); w.milestones[id] = { id, name: title ?? `Temporary ${sessionId.slice(0, 8)}`, nameSource: 'chat', thread: null, summary: '', handoff: '', createdAt: new Date().toISOString(), parts: [] };
       }
       session = w.sessions[sessionId] = { milestoneId: id, title: title ?? sessionId, transcriptPath: input.transcript_path ?? null, settings: {} };
     }
     if (title) {
       const milestone = w.milestones[session.milestoneId];
-      if (milestone.name === session.title || milestone.name === `Temporary ${sessionId.slice(0, 8)}`) milestone.name = title;
+      const shared = Object.values(w.sessions).filter(s => s.milestoneId === milestone.id).length > 1;
+      if (milestone.id !== 'legacy' && milestone.nameSource === 'chat' && !shared) milestone.name = title;
       session.title = title;
     }
     if (input.transcript_path) session.transcriptPath = input.transcript_path;
@@ -172,7 +202,7 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
       const matches = Object.values(w.milestones).filter(m => m.id === name || m.name === name);
       if (matches.length > 1) throw new Error('ambiguous milestone name; use its id');
       const id = matches[0]?.id ?? randomUUID();
-      if (!matches.length) w.milestones[id] = { id, name, thread: null, summary: '', handoff: '', createdAt: new Date().toISOString(), parts: [] };
+      if (!matches.length) w.milestones[id] = { id, name, nameSource: 'owner', thread: null, summary: '', handoff: '', createdAt: new Date().toISOString(), parts: [] };
       if (session.milestoneId !== id) {
         session.profiles ??= {};
         session.profiles[session.milestoneId] = { settings: structuredClone(session.settings), activeRole: session.activeRole ?? 'implementation' };
@@ -254,6 +284,6 @@ export async function contextGauge(root, env = process.env) {
     const base = join(env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
     const { stdout } = await exec('find', [base, '-type', 'f', '-name', `*${id}.jsonl`], { timeout: 1500, maxBuffer: 16384 });
     const files = stdout.trim().split('\n').filter(Boolean); if (files.length !== 1) return { available: false };
-    const value = await tailText(files[0], 512 * 1024); return parseGauge(value.text, value.partial);
+    return await indexedGauge(root, files[0], env);
   } catch { return { available: false }; }
 }

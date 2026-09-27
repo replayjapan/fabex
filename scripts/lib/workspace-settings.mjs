@@ -2,6 +2,7 @@
 export const ROLE_NAMES = ['implementation', 'testWriting', 'testRunning', 'imageReview', 'docs', 'gitDelivery'];
 export const SETTING_DEFAULTS = {
   'partners.codex.model': null, 'partners.codex.effort': null,
+  'partners.codex.helperServers': 'inherit',
   'partners.claude.model': null, 'partners.claude.effort': null,
   'milestones.newChatMeansNewMilestone': false, 'context.reviewAfterCompactions': 3,
   summaries: true, 'usageTracker.mode': 'off', 'usageTracker.path': null,
@@ -19,6 +20,7 @@ export function validateSettings(values) {
     if (key.endsWith('.executor')) valid = ['claude', 'codex'].includes(value);
     else if (key.endsWith('.effort')) valid = value === null || ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent'].includes(value);
     else if (key.endsWith('.model')) valid = value === null || typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value);
+    else if (key === 'partners.codex.helperServers') valid = ['inherit', 'off'].includes(value);
     else if (key === 'usageTracker.mode') valid = ['inherit', 'on', 'off'].includes(value);
     else if (key === 'usageTracker.path') valid = value === null || typeof value === 'string' && value.startsWith('/') && value.length < 4096 && !/[\0\n\r]/.test(value);
     else if (key === 'context.reviewAfterCompactions') valid = Number.isInteger(value) && value >= 1 && value <= 100;

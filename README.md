@@ -1,5 +1,118 @@
 # Fabex — Beta
 
+## FOR HUMANS
+
+**Two AI partners, one development conversation.** Fabex brings Claude and OpenAI
+Codex together inside Claude Code. Each considers your request independently,
+then they compare their conclusions before acting. By default Codex writes code;
+Claude coordinates, reviews and delivers the work. You can choose different task
+roles in settings without changing those defaults for everyone else.
+
+### What is it for?
+
+Fabex is for people building or maintaining software who want a second opinion
+without copying messages between two AI chats. It keeps milestone context,
+records decisions and handoffs, and lets you discuss an idea before authorizing
+changes. You stay in control of modes and settings.
+
+- **Discuss first, work when ready:** read-only discussion and implementation modes.
+- **Keep projects organized:** named milestones, separate Codex threads and saved
+  chat references. Spaces in chat names are fine; renaming does not change identity.
+- **Choose your team:** project defaults and chat-specific model/task preferences.
+- **Reduce babysitting:** continuation, recovery tools and RAM-conscious scheduling.
+- **See what happened:** short partner summaries, decisions and genuine action items.
+
+Fabex is beta software. It adds coordination, not infallibility: review important
+changes, keep backups and expect the host's normal permission checks. VS Code's
+Claude Code integration is the primary workflow; host-specific checks are listed
+in the [acceptance notes](docs/acceptance-1.10.1.md).
+
+### Install
+
+You need Claude Code **2.1.261+**, Node.js **20+**, and Codex CLI already signed in
+with your ChatGPT/Codex subscription. Fabex does not ask for API keys or add a
+separate billing service. Both partners consume their respective account usage.
+
+In Claude Code, run:
+
+```text
+/plugin marketplace add replayjapan/fabex
+/plugin install fabex@fabex
+```
+
+Restart your session, then run `/fabex:diagnose`. Claude Code installs the pinned
+Node dependency automatically; normal marketplace installation needs no manual
+package command. [Contributor setup](#requirements-and-dependency-installation)
+is below.
+
+### First conversation
+
+1. Open your project in Claude Code and use `/fabex:discussion` to explore an idea.
+2. Use `/fabex:work` when you want changes, then describe the task normally.
+3. View `/fabex:settings` for project defaults and this chat's overrides.
+4. Optionally use `/fabex:milestone Checkout improvements` to name a milestone.
+   Existing projects keep their current history; setup is not mandatory.
+5. Use `/fabex:diagnose` if the installation or connection is unclear.
+
+### What's new?
+
+- **1.10.1:** readable guides, safer chat renames, fuller context accounting and
+  clearer recovery controls. [Details](CHANGELOG.md#1101--2026-09-27)
+- **1.10.0:** milestone threads, session settings and optional usage tracking.
+  [Details](CHANGELOG.md#1100--2026-09-27)
+- **1.9.x:** routine-development access, shorter reports, continuation and RAM/recovery
+  safeguards. [Release history](CHANGELOG.md)
+
+Optional: [AI Usage Tracker](https://github.com/replayjapan/ai-usage-tracker) shows
+recorded Claude/Codex allowance and project token usage. Fabex works without it;
+installing it does not enable tracking automatically.
+
+By **rePlay, LLC**, under the [MIT License](LICENSE). Private chat records, usage
+data and credentials do not belong in this public repository.
+
+---
+
+## FOR AI BROTHREN
+
+The following is the operational reference for AI partners and contributors.
+Preserve the human-facing workflow and existing controls when extending it.
+
+### 1.10.1 maintenance notes
+
+Chat-derived names track renames only for unshared milestones with explicit
+chat-name provenance. Owner-named, shared, Legacy and ambiguous older milestones
+keep their names. Session titles still update independently. Archive directories
+use sanitized names plus stable IDs; provider transcripts are never rewritten.
+First registration can scan beyond the recent tail, using bounded memory.
+
+The context index scans complete JSONL records incrementally outside the state
+lock. Counts cover the whole retained file only when scanning reaches its end;
+partial scans are labeled. Appends resume at the last complete record, while file
+replacement/truncation invalidates the index. This is a last-call snapshot, not a
+live occupancy gauge or a promise of when native compaction will occur.
+
+`partners.codex.helperServers=off` is an owner-selected, per-session/project option.
+Default `inherit` preserves existing tools. Off enumerates MCP servers through the
+pinned CLI and disables enabled servers declared in the user's `config.toml` for
+that run; it never edits global settings. Standard named MCP tables are supported;
+inline maps, unusual names and multiline TOML require explicit reader support and
+fail visibly instead of guessing. Status reports the scope, override count and
+other enabled entries. Host/plugin-provided tools, other config layers and managed
+requirements remain host-controlled. This is not a blanket MCP-off switch or a
+guarantee of RAM savings; verify actual host behavior.
+
+`checkpoint blocker --clear` and `checkpoint owner-action-required --clear` are
+aliases for existing clear commands. Literal `null` in those two fields is treated
+as cleared. During schema transition, controller status/result/relay can inspect
+a validated in-memory snapshot without persisting migration; the seal still applies.
+Wait returns a migration-pending snapshot rather than mutating its budget.
+
+`cleanup --path <copy> --source <source>` audits an adjacent `<source>-next...`
+plugin copy against the source, including untracked files. Unique/different files,
+symlinks, copied Git metadata or unverifiable active use prevent deletion. The
+original Fabex cleanup form remains supported. Never delete private usage data
+or force cleanup after a refusal.
+
 ## Optional milestone and session setup (1.10.0)
 
 Existing projects require no new setup: their continuous thread becomes the Legacy
@@ -27,8 +140,9 @@ authorship overrides apply only to the bound main chat, never arbitrary subagent
 
 `/fabex:milestone <name-or-id>` creates/selects a milestone; no arguments lists it.
 With `milestones.newChatMeansNewMilestone=true`, a new Claude session gets one
-automatically. Default false continues the current milestone. Titles use a bounded
-read of matching custom-title records, falling back to the session ID. VS Code
+automatically. Default false continues the current milestone. Titles use matching
+custom-title records with a streaming first-registration fallback to older records,
+then fall back to the session ID. VS Code
 title propagation requires live verification. Private state stores original chat
 references, summaries, handoffs and Codex thread bindings outside the source tree.
 Nothing moves between provider transcripts and returning never rolls code back.
@@ -41,7 +155,7 @@ seeds a linked continuation at a completed cycle. Original thread records remain
 private. Verify the successor before proceeding and preserve the predecessor if
 startup fails. Summaries cannot replace current repository checks or original
 records. The context gauge is a timestamped **last-call snapshot**, with a count
-from its bounded rollout tail—not live occupancy or a lifetime count. Repeated
+from an incremental rollout scan, with explicit coverage—not live occupancy. Repeated
 compactions prompt review, never an automatic restart. Native compaction remains.
 
 ### Independently authored first views
@@ -430,7 +544,7 @@ If an operation is still marked `working` but its recorded runner PID is dead, `
 
 The first SDK event for every turn must be `thread.started`. Fabex accepts the returned `thread_id` only when it creates the canonical thread; every resumed turn must return the exact persisted ID. A missing or mismatched ID fails closed.
 
-Across controller or Claude restarts, Fabex reconstructs the SDK thread with `resumeThread(exactId, perTurnOptions)`. The official SDK cold-resumes threads persisted by the Codex CLI. No empty re-sync turn, sibling thread, manual compaction call, or source rewrite is used.
+Across controller or Claude restarts, Fabex reconstructs the bound milestone's SDK thread with `resumeThread(exactId, perTurnOptions)`. The official SDK cold-resumes threads persisted by the Codex CLI. Ordinary restart uses no empty re-sync turn, sibling thread, manual compaction call, or source rewrite. Explicit milestone selection or a reviewed linked continuation can select a different preserved thread.
 
 A newer hook or status process never migrates persisted state while the already-loaded controller still owns a working operation and its PID is alive. Reads report `migration-deferred`, leave the old document untouched, and permit migration only after that runner exits. This prevents a live source update from invalidating the finishing runner's in-memory schema.
 
@@ -442,7 +556,7 @@ If the SDK returns the verified text `Session not found for thread_id: <id>`, Fa
 
 ## Structured checkpoint and recovery budget
 
-Fabex no longer accumulates raw owner-goal history. Its checkpoint has exactly these fields:
+Fabex no longer accumulates raw owner-goal history. Its checkpoint includes:
 
 - objective;
 - current task;
@@ -454,6 +568,9 @@ Fabex no longer accumulates raw owner-goal history. Its checkpoint has exactly t
 - unresolved problems;
 - next action;
 - repository fingerprint.
+
+Continuation also records open work, any required owner action, a blocker and its
+bounded continuation budget. Clearing a blocker does not waive review obligations.
 
 The complete recovery seed—including title, framing, serialized checkpoint, and stale-repository warning—has a hard 48 KiB UTF-8 limit. Updates that would exceed 49,152 bytes are rejected atomically. `checkpoint capacity` reports counts and bytes, `checkpoint export` is the sanctioned full-text export, `checkpoint replace` and `compact` maintain arrays atomically, and `checkpoint snapshot` updates any subset of the five progress fields in one validated transaction. Tool/notification payloads are rejected. Status exposes only `updatedAt` and bounded warnings, never checkpoint text.
 
