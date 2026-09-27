@@ -1,3 +1,4 @@
+import { validateSettingsMenu } from './settings-menu.mjs';
 // Flat, validated settings keep inheritance and provenance unambiguous.
 export const ROLE_NAMES = ['implementation', 'testWriting', 'testRunning', 'imageReview', 'docs', 'gitDelivery'];
 export const SETTING_DEFAULTS = {
@@ -67,6 +68,7 @@ export function validateWorkspace(w) {
   }
   for (const grant of Object.values(w.grants)) if (!['settings', 'milestone'].includes(grant.command) || typeof grant.sessionId !== 'string' || typeof grant.args !== 'string' || !Number.isFinite(grant.expiresAt)) throw new Error('invalid owner settings grant');
   for (const grant of Object.values(w.grants)) {
+    if (grant.flow) validateSettingsMenu(grant);
     if (grant.options !== undefined && (!Array.isArray(grant.options) || !grant.options.length || grant.options.length > 6 || !grant.options.every(v => /^tracking=(on|off|inherit) scope=(project|milestone)$/.test(v)) || grant.questionToolId !== null && (typeof grant.questionToolId !== 'string' || grant.questionToolId.length > 200) || !Array.isArray(grant.questions) || grant.questions.length < 1 || grant.questions.length > 2 || grant.selection !== null && !grant.options.includes(grant.selection))) throw new Error('invalid owner settings choices');
   }
   for (const seal of Object.values(w.seals)) if (seal.reading !== null && (typeof seal.reading !== 'string' || Buffer.byteLength(seal.reading) > 16000 || !/^[a-f0-9]{64}$/.test(seal.digest))) throw new Error('invalid independent seal');

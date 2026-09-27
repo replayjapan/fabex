@@ -1,10 +1,11 @@
 import { isDeepStrictEqual } from 'node:util';
 import { discoverTracker } from './tracker-discovery.mjs';
-import { settingsQuestions } from './settings-view.mjs';
+import { startSettingsMenu, advanceSettingsMenu, menuSummary, typedSettingsReference } from './settings-menu.mjs';
+import { claudeModelSource, codexModelSource } from './speakers.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { open, readFile, mkdir, writeFile, rename, realpath, lstat, readdir } from 'node:fs/promises';
 import { fullTitle, indexedGauge } from './transcript-index.mjs';
-import { resolve, dirname, join } from 'node:path';
+import { resolve, dirname, join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -100,7 +101,6 @@ async function saveChatReferences(root, state, env) {
 export async function registerSession(root, input, env = process.env) {
   const sessionId = input.session_id;
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || ['__proto__', 'constructor', 'prototype'].includes(sessionId)) return null;
-  const config = (await loadEffectiveConfig(root, env)).config;
   let title = null;
   if (input.transcript_path) try {
     title = titleFromText((await tailText(input.transcript_path)).text, sessionId);
@@ -111,17 +111,10 @@ export async function registerSession(root, input, env = process.env) {
     const w = state.workspace;
     let session = w.sessions[sessionId];
     if (!session) {
-      const values = resolveSettings(config, state, sessionId).values;
-      let id = w.activeMilestoneId;
-      if (values['milestones.newChatMeansNewMilestone']) {
-        id = randomUUID(); w.milestones[id] = { id, name: title ?? `Temporary ${sessionId.slice(0, 8)}`, nameSource: 'chat', thread: null, summary: '', handoff: '', createdAt: new Date().toISOString(), parts: [] };
-      }
+      const id = w.activeMilestoneId;
       session = w.sessions[sessionId] = { milestoneId: id, title: title ?? sessionId, transcriptPath: input.transcript_path ?? null, settings: {} };
     }
     if (title) {
-      const milestone = w.milestones[session.milestoneId];
-      const shared = Object.values(w.sessions).filter(s => s.milestoneId === milestone.id).length > 1;
-      if (milestone.id !== 'legacy' && milestone.nameSource === 'chat' && !shared) milestone.name = title;
       session.title = title;
     }
     if (input.transcript_path) session.transcriptPath = input.transcript_path;
@@ -139,12 +132,19 @@ export async function issueWorkspaceGrant(root, input, env = process.env) {
   if (args === '--json' && command === 'settings') return { viewing: true };
   if (input.expansion_type !== 'slash_command' || input.command_source !== 'plugin' || !input.session_id) throw new Error('Settings changes require an owner-typed slash command.');
   const grant = { id: randomUUID(), command, args, sessionId: input.session_id, expiresAt: Date.now() + 300000 };
+  const config = (await loadEffectiveConfig(root, env)).config;
+  const before = await readState(root, env);
+  const resolvedModel = before.ok ? resolveSettings(config, before.state, input.session_id).values['partners.codex.model'] : null;
+  const defaultModel = await codexModelSource({ ...config, models: { ...config.models, codex: { ...config.models.codex, model: resolvedModel } } }, env);
+  const claude = await claudeModelSource(before.state?.claudeModel?.sessionId === input.session_id ? before.state.claudeModel : null, env);
   await mutate(root, 'workspace-owner-grant', state => {
     const session = state.workspace.sessions[input.session_id];
     if (!session) throw new Error('Session not registered; submit a normal owner message first.');
     grant.milestoneId = session.milestoneId;
     if (command === 'settings' && (!args || /^tracking=(on|off|inherit)$/.test(args))) {
-      Object.assign(grant, settingsQuestions(args, root, state.workspace.milestones[session.milestoneId].name));
+      const { values } = resolveSettings(config, state, input.session_id);
+      const models = [...new Set([values['partners.codex.model'], defaultModel.id, state.workspace.observations?.codex?.observed].filter(v => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(v)))].slice(0, 2);
+      Object.assign(grant, startSettingsMenu(args, { project: basename(root), milestone: session.milestoneId === 'legacy' ? 'none chosen yet (earlier work)' : state.workspace.milestones[session.milestoneId].name, models, claude: `${claude.id ?? 'Unknown'} (${claude.source})` }));
       grant.selection = null;
       grant.questionToolId = null;
       for (const [id, previous] of Object.entries(state.workspace.grants)) if (previous.questions && previous.sessionId === grant.sessionId) delete state.workspace.grants[id];
@@ -173,6 +173,11 @@ export async function recordWorkspaceSelection(root, input, env = process.env) {
     for (const grant of Object.values(state.workspace.grants)) {
       if (!grant.questions || grant.questionToolId !== input.tool_use_id || grant.sessionId !== input.session_id || grant.expiresAt < Date.now() || grant.selection || !isDeepStrictEqual(input.tool_input?.questions, grant.questions)) continue;
       if (state.workspace.sessions[grant.sessionId]?.milestoneId !== grant.milestoneId) continue;
+      if (grant.flow) {
+        const next = advanceSettingsMenu(grant, response.answers);
+        if (next) { selected = { grantId: grant.id, ...next }; if (next.cancelled) delete state.workspace.grants[grant.id]; }
+        continue;
+      }
       const labels = grant.questions.map(q => response.answers[q.question]);
       if (labels.some((label, i) => typeof label !== 'string' || !grant.questions[i].options.some(o => o.label === label))) continue;
       const scope = labels[0] === 'Project' ? 'project' : 'milestone';
@@ -200,9 +205,11 @@ export function parseSettingsArgs(text) {
     const index = token.indexOf('='); if (index < 1) throw new Error('Use key=value scope=session|milestone|project; value=inherit removes an override.');
     const original = token.slice(0, index), key = original === 'tracking' ? 'usageTracker.mode' : original, raw = token.slice(index + 1);
     if (key === 'scope') { if (!['session', 'milestone', 'project'].includes(raw)) throw new Error('scope must be session, milestone or project'); result.scope = raw; continue; }
-    if (!Object.hasOwn(SETTING_DEFAULTS, key)) throw new Error(`unknown setting ${key}`);
+    if (key === 'milestones.newChatMeansNewMilestone' && raw !== 'inherit') throw new Error('Retired: milestones follow your plan, not new chats.');
+    const keys = /^roles\.testing\.(executor|model|effort)$/.test(key) ? ['testWriting', 'testRunning'].map(role => key.replace('testing', role)) : [key];
+    if (keys.some(k => !Object.hasOwn(SETTING_DEFAULTS, k))) throw new Error(`unknown setting ${key}`);
     let value; try { value = JSON.parse(raw); } catch { value = raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1) : raw; }
-    if (raw === 'inherit') result.resets.push(key); else { validateSettings({ [key]: value }); result.updates[key] = value; }
+    for (const k of keys) { if (raw === 'inherit') result.resets.push(k); else { validateSettings({ [k]: value }); result.updates[k] = value; } }
   }
   return result;
 }
@@ -212,6 +219,7 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
   const grant = before.state.workspace.grants[grantId];
   if (!grant || grant.expiresAt < Date.now()) throw new Error('owner settings grant missing or expired');
   if (cycleBusy(before.state)) throw new Error('Apply settings between completed review cycles.');
+  if (grant.flow && !grant.selection) throw new Error('Choose and apply a setting in the owner dialog, or type an explicit scoped command.');
   if (grant.options && (!grant.selection || !grant.options.includes(grant.selection))) throw new Error('Choose an offered setting in the owner dialog, or type an explicit scoped settings command.');
   const parsed = grant.command === 'settings' ? parseSettingsArgs(grant.selection ?? grant.args) : null;
   const state = await mutate(root, 'workspace-apply-owner-grant', async state => {
@@ -262,7 +270,7 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
     }
     delete w.grants[grantId];
   }, env);
-  return { applied: true, ...resolveSettings((await loadEffectiveConfig(root, env)).config, state, grant.sessionId), milestone: state.workspace.activeMilestoneId, note: 'No model or Git branch is silently changed. Verify the requested host model and code state before implementation.' };
+  return { applied: true, ...(grant.flow ? { summary: menuSummary(grant.flow) } : {}), ...resolveSettings((await loadEffectiveConfig(root, env)).config, state, grant.sessionId), milestone: state.workspace.activeMilestoneId, note: 'Saved for the selected scope. Effective values below include any more specific overrides. Model/effort requests apply on the next applicable turn; Claude main controls remain host-managed. No Git action is authorized.' };
 }
 export async function sealReading(root, operationId, reading, env = process.env) {
   if (typeof reading !== 'string' || !reading.trim() || Buffer.byteLength(reading) > 16000) throw new Error('sealed assessment must be 1..16000 bytes');
@@ -284,7 +292,7 @@ export async function workspaceStatus(root, env = process.env, sessionId) {
   const resolved = resolveSettings(config, current.state, sessionId);
   const milestoneId = current.state.workspace.sessions[resolved.sessionId]?.milestoneId ?? current.state.workspace.activeMilestoneId;
   const milestone = current.state.workspace.milestones[milestoneId];
-  return { ...resolved, project: root, milestone: { id: milestoneId, name: milestone.name }, tracking: { installation: await discoverTracker(resolved.values, env), project: config.settings?.['usageTracker.mode'] ?? 'off', milestone: milestone.settings?.['usageTracker.mode'] ?? 'inherit', session: current.state.workspace.sessions[resolved.sessionId]?.settings?.['usageTracker.mode'] ?? 'inherit', effective: resolved.values['usageTracker.mode'], source: resolved.sources['usageTracker.mode'] }, execution: executionPlan(config, current.state, sessionId), observations: current.state.workspace.observations ?? {}, activeMilestoneId: current.state.workspace.activeMilestoneId, milestones: Object.values(current.state.workspace.milestones).map(({ id, name, summary, handoff, thread, parts }) => ({ id, name, summary, handoff, archivedParts: parts.map((part, index) => ({ index, threadId: part.threadId, archivedAt: part.archivedAt })), threadId: id === current.state.workspace.activeMilestoneId ? current.state.partner.thread.threadId : thread?.threadId ?? null })), sessions: current.state.workspace.sessions };
+  return { ...resolved, typedCommands: typedSettingsReference(), models: { claude: await claudeModelSource(current.state.claudeModel?.sessionId === resolved.sessionId ? current.state.claudeModel : null, env), codex: await codexModelSource({ ...config, models: { ...config.models, codex: { ...config.models.codex, model: resolved.values['partners.codex.model'] } } }, env) }, project: root, milestone: { id: milestoneId, name: milestone.name }, tracking: { installation: await discoverTracker(resolved.values, env), project: config.settings?.['usageTracker.mode'] ?? 'off', milestone: milestone.settings?.['usageTracker.mode'] ?? 'inherit', session: current.state.workspace.sessions[resolved.sessionId]?.settings?.['usageTracker.mode'] ?? 'inherit', effective: resolved.values['usageTracker.mode'], source: resolved.sources['usageTracker.mode'] }, execution: executionPlan(config, current.state, sessionId), observations: current.state.workspace.observations ?? {}, activeMilestoneId: current.state.workspace.activeMilestoneId, milestones: Object.values(current.state.workspace.milestones).map(({ id, name, summary, handoff, thread, parts }) => ({ id, name, summary, handoff, archivedParts: parts.map((part, index) => ({ index, threadId: part.threadId, archivedAt: part.archivedAt })), threadId: id === current.state.workspace.activeMilestoneId ? current.state.partner.thread.threadId : thread?.threadId ?? null })), sessions: current.state.workspace.sessions };
 }
 export async function selectTaskRole(root, role, env = process.env) {
   if (!ROLE_NAMES.includes(role)) throw new Error(`role must be ${ROLE_NAMES.join(', ')}`);

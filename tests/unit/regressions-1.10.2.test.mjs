@@ -21,8 +21,8 @@ async function fixture(t) {
 }
 const grant = (f, args, session = 'a', command = 'settings') => issueWorkspaceGrant(f.root, { command_name: `fabex:${command}`, command_args: args, session_id: session, expansion_type: 'slash_command', command_source: 'plugin' }, f.env);
 const apply = async (f, args, session = 'a', command) => applyWorkspaceGrant(f.root, (await grant(f, args, session, command)).id, f.env);
-function answer(g, scope = 'Current milestone', mode = 'On') {
-  return { hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', session_id: g.sessionId, tool_use_id: 'fixture-choice', tool_input: { questions: g.questions }, tool_response: { answers: Object.fromEntries(g.questions.map((q, n) => [q.question, n ? mode : scope])) } };
+function answer(g, scope = 'This planned milestone', mode = 'On') {
+  return { hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', session_id: g.sessionId, tool_use_id: 'fixture-choice', tool_input: { questions: g.questions }, tool_response: { answers: Object.fromEntries(g.questions.map((q, n) => [q.question, g.flow?.stage === 'choose' ? (n ? scope : mode) : scope])) } };
 }
 async function packageAt(path) {
   await mkdir(join(path, '.claude-plugin'), { recursive: true }); await mkdir(join(path, 'skills/weekly-tracker'), { recursive: true });
@@ -73,7 +73,7 @@ test('1.10.2 only exact owner dialog answers select a one-use scoped grant', asy
   assert.equal(await recordWorkspaceSelection(f.root, { ...answer(g), tool_response: {} }, f.env), null);
   const altered = answer(g); altered.tool_input = { questions: [] };
   assert.equal(await recordWorkspaceSelection(f.root, altered, f.env), null);
-  assert.equal((await recordWorkspaceSelection(f.root, answer(g), f.env)).selection, 'tracking=on scope=milestone');
+  assert.equal((await recordWorkspaceSelection(f.root, answer(g), f.env)).selection, 'tracking="on" scope=milestone');
   await applyWorkspaceGrant(f.root, g.id, f.env);
   assert.equal((await workspaceStatus(f.root, f.env)).tracking.source, 'milestone');
   await assert.rejects(applyWorkspaceGrant(f.root, g.id, f.env), /grant/);
@@ -85,24 +85,28 @@ test('1.10.2 only exact owner dialog answers select a one-use scoped grant', asy
 });
 test('1.10.2 bare settings offers tracked choices and preserves human/JSON CLI views', async t => {
   const f = await fixture(t), g = await grant(f, '');
-  assert.equal(g.options.length, 6);
+  assert.deepEqual(g.questions[0].options.map(o => o.label), ['Models', 'Who does what', 'Weekly usage', 'Cancel']);
   const invokeHook = (name, input) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [new URL(`../../scripts/${name}`, import.meta.url).pathname], { cwd: f.root, env: f.env, stdio: ['pipe', 'pipe', 'pipe'] }); let out = '', err = '';
     child.stdout.on('data', chunk => out += chunk); child.stderr.on('data', chunk => err += chunk);
     child.on('error', reject); child.on('exit', code => code === 0 ? resolve(JSON.parse(out)) : reject(new Error(err)));
     child.stdin.end(JSON.stringify({ ...input, cwd: f.root }));
   });
-  const pre = await invokeHook('hook-route-guard.mjs', { ...answer(g), hook_event_name: 'PreToolUse' });
-  assert.notEqual(pre.hookSpecificOutput?.permissionDecision, 'deny');
-  const receipt = await invokeHook('hook-heavy.mjs', answer(g, 'Project', 'On'));
-  assert.match(receipt.hookSpecificOutput.additionalContext, /Owner selection recorded: tracking=on scope=project/);
+  let current = g;
+  for (const pick of ['Weekly usage', 'Default for this project']) {
+    const pre = await invokeHook('hook-route-guard.mjs', { ...answer(current, pick), hook_event_name: 'PreToolUse' });
+    assert.notEqual(pre.hookSpecificOutput?.permissionDecision, 'deny');
+    const receipt = await invokeHook('hook-heavy.mjs', answer(current, pick));
+    assert.match(receipt.hookSpecificOutput.additionalContext, pick === 'Default for this project' ? /Owner selection recorded: tracking="on" scope=project/ : /Continue the owner settings dialog/);
+    current = (await readState(f.root, f.env)).state.workspace.grants[g.id];
+  }
   await applyWorkspaceGrant(f.root, g.id, f.env);
   const status = await workspaceStatus(f.root, f.env);
   const view = await settingsView(status, f.env);
-  assert.match(view, /Current milestone: Legacy/); assert.match(view, /tracking=on scope=milestone/); assert.match(view, /plugin install ai-usage-tracker@ai-usage-tracker/);
+  assert.match(view, /Milestone: none chosen yet/); assert.doesNotMatch(view, /scope=|roles\./); assert.match(view, /plugin install ai-usage-tracker@ai-usage-tracker/);
   const cli = new URL('../../scripts/control.mjs', import.meta.url).pathname;
   const human = await exec(process.execPath, [cli, 'settings', '--session', 'a'], { cwd: f.root, env: f.env });
-  assert.match(human.stdout, /Project default: on/);
+  assert.match(human.stdout, /Weekly usage: on \(project default\)/);
   const json = await exec(process.execPath, [cli, 'settings', '--session', 'a', '--json'], { cwd: f.root, env: f.env });
   assert.equal(JSON.parse(json.stdout).tracking.effective, 'on');
   await assert.rejects(issueWorkspaceGrant(f.root, { command_name: 'settings', command_args: 'tracking=on' }, f.env), /owner-typed/);

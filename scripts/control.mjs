@@ -437,7 +437,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) }
   }
   if (command === 'heavy' && (args.length === 1 && ['status', 'wait'].includes(args[0]) || args.length === 3 && args[0] === 'wait' && args[1] === '--timeout' && /^\d+$/.test(args[2]))) {
     const result = args[0] === 'status' ? await heavyStatus(root) : await waitHeavy(root, Number(args[2] ?? 120));
-    process.stdout.write(JSON.stringify(result) + '\n'); if (result.ready === false) process.exitCode = result.budgetExhausted ? 4 : 3; return;
+    process.stdout.write(JSON.stringify(result) + '\n'); if (result.ready === false) process.exitCode = 3; return;
   }
   if (command === 'heavy' && ['run', 'release'].includes(args[0])) {
     const { state } = await currentState(root);

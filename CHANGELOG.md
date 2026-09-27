@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.10.3 — 2026-09-27
+
+- Replace the tracking-only dialog with Models, Who does what, and Weekly usage, using plain scope and restore choices.
+- Offer Coding, Testing, Image review and Documentation. Testing updates both underlying roles atomically; show host/executor limitations honestly.
+- Bind each dialog step to an exact owner question/answer, with Back, visible Cancel where space permits, free-text model validation and a combined value/scope selection.
+- Keep milestones tied to the project plan. Chat creation and renaming no longer create or rename milestones, including when an old preference is stored. Reject new sets of the retired preference and preserve existing history.
+- Remove the cumulative continuation cutoff and wait counting; retain short waits, RAM/queue ownership and independent-review obligations. Legacy counter fields remain inert for saved-state compatibility.
+- Keep technical settings and automatic reporting behavior outside the ordinary menu. No existing owner preference is changed by this upgrade.
+- Automated host-hook tests cover the new flow; a live multi-step dialog still needs host acceptance.
+
 ## 1.10.2 — 2026-09-27
 
 - Add human settings choices, a short tracking alias, persistent milestone overrides and explicit scope selection.

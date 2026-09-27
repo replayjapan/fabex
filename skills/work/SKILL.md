@@ -13,12 +13,12 @@ For newly registered cycles, including mode-command tasks, submit Phase 1 then
 seal Claude's independent assessment **before waiting** as `/fabex:jointly`
 describes. Codex is held queued until that seal exists. Do not wait first.
 
-1.9.2: Follow the RAM and bounded-continuation section in `/fabex:jointly`.
+Follow the RAM and continuation guidance in `/fabex:jointly`.
 Use recorded owner-message digests; mode-command task text is reusable. Heavy
 jobs wait and retry automatically, not in parallel batches. Inspect memory and
 owned resources; retain requested previews with a note. Set only authorized,
 feasible open-work and keep both phases running until completion, a genuine
-blocker or the continuation budget. A new owner message disarms old task work.
+blocker or owner interruption. A new owner message disarms old task work.
 
 Owner-facing reply: mode badge first; Claude-authored summary with model-aware label, at most five sentences leading with outcome and failures; details on request; Action required only for a genuine owner decision or action, never a request to say continue; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
 

@@ -27,19 +27,21 @@ async function grant(f, session, args, command = 'settings') {
 const title = (sessionId, customTitle) => JSON.stringify({ type: 'custom-title', sessionId, customTitle }) + '\n';
 test('1.10.1 old titles, spaces, Unicode and renames preserve identity and one archive', async t => {
   const f = await fixture(t); await registerSession(f.root, { session_id: 'setup' }, f.env);
-  await grant(f, 'setup', 'milestones.newChatMeansNewMilestone=true scope=project');
+  await mkdir(join(f.root, '.fabex'), { recursive: true });
+  await writeFile(join(f.root, '.fabex/config.json'), JSON.stringify({ schemaVersion: 1, settings: { 'milestones.newChatMeansNewMilestone': true } })); // Stored legacy preference remains readable and inert
+  await grant(f, 'setup', 'Plan stage 日本語 One', 'milestone');
   const transcript = join(f.dir, 'chat.jsonl');
   await writeFile(transcript, title('a', 'Milestone 日本語 One') + ('{}\n'.repeat(100000)));
   await registerSession(f.root, { session_id: 'a', transcript_path: transcript }, f.env);
   let s = (await readState(f.root, f.env)).state, id = s.workspace.activeMilestoneId;
-  assert.equal(s.workspace.milestones[id].name, 'Milestone 日本語 One');
+  assert.equal(s.workspace.milestones[id].name, 'Plan stage 日本語 One');
   await updateState(f.root, v => { v.partner.thread.threadId = 'same-thread'; v.generation++; return v; }, {}, f.env);
   await appendFile(transcript, title('a', '../Renamed With Spaces'));
   await registerSession(f.root, { session_id: 'a', transcript_path: transcript }, f.env);
   s = (await readState(f.root, f.env)).state;
   assert.equal(s.workspace.activeMilestoneId, id); assert.equal(s.partner.thread.threadId, 'same-thread');
   const dirs = (await readdir(join(f.paths.projectDir, 'chats'))).filter(n => n.endsWith(id));
-  assert.equal(dirs.length, 1); assert.match(dirs[0], /Renamed-With-Spaces/);
+  assert.equal(dirs.length, 1); assert.match(dirs[0], /Plan-stage/);
   const archive = JSON.parse(await readFile(join(f.paths.projectDir, 'chats', dirs[0], 'references.json'), 'utf8'));
   assert.equal(archive.threadId, 'same-thread');
   // Recover two folders created by an older release without losing either record.
@@ -48,7 +50,7 @@ test('1.10.1 old titles, spaces, Unicode and renames preserve identity and one a
   assert.equal((await readdir(join(f.paths.projectDir, 'chats'))).filter(n => n.endsWith(id)).length, 1);
   assert.equal((await readdir(join(f.paths.projectDir, 'chats', dirs[0], 'previous-exports'))).length, 1);
   await registerSession(f.root, { session_id: 'b' }, f.env);
-  assert.notEqual((await readState(f.root, f.env)).state.workspace.activeMilestoneId, id);
+  assert.equal((await readState(f.root, f.env)).state.workspace.activeMilestoneId, id);
 });
 test('1.10.1 explicit, legacy and shared milestone names do not follow chat renames', async t => {
   const f = await fixture(t), file = join(f.dir, 'chat.jsonl');

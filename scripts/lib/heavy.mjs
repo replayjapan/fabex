@@ -4,7 +4,6 @@ import { sampleMemory, memoryDecision } from './memory.mjs';
 import { basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { processIdentity, groupMembers, verifiedGone } from './process-evidence.mjs';
-import { consumeWaitBudget } from './wait-budget.mjs';
 
 const EMPTY = { jobs: [], samples: [] };
 export const HEAVY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -118,8 +117,6 @@ export async function backgroundHeavy(root, id, taskId, env = process.env) {
 }
 export async function waitHeavy(root, seconds = 120, env = process.env, { sample = sampleMemory, now = Date.now, sleep = ms => new Promise(done => setTimeout(done, ms)) } = {}) {
   if (!Number.isInteger(seconds) || seconds < 1 || seconds > 120) throw new Error('heavy wait timeout must be 1..120 seconds');
-  const budget = await consumeWaitBudget(root, env);
-  if (budget.exhausted) return { ready: false, budgetExhausted: true, reason: 'Continuation wait budget exhausted; inspect the active job or record a genuine blocker. Do not retry in a loop.', ...await heavyStatus(root, env) };
   const until = now() + seconds * 1000;
   do {
     const status = await heavyStatus(root, env);

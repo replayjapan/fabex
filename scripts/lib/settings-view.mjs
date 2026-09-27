@@ -1,51 +1,42 @@
+import { basename } from 'node:path';
 import { TRACKER_INSTALL } from './tracker-discovery.mjs';
 import { readUsageCache } from './usage-integration.mjs';
+import { TASKS } from './settings-menu.mjs';
 
-export function settingsQuestions(args, project, milestone) {
-  const modes = args ? [args.split('=')[1]] : ['on', 'off', 'inherit'];
-  const questions = [{ question: 'Where should weekly usage tracking apply?', header: 'Scope', multiSelect: false, options: [
-    { label: 'Project', description: `Default for all milestones in ${project}.` },
-    { label: 'Current milestone', description: `Only ${milestone}; persists across chats and thread rollovers.` }
-  ] }];
-  if (!args) questions.push({ question: 'Choose weekly usage tracking.', header: 'Tracking', multiSelect: false, options: [
-    { label: 'On', description: 'Record and report usage when the tracker is available.' },
-    { label: 'Off', description: 'Disable Fabex usage calls and ordinary report sections.' },
-    { label: 'Inherit', description: 'Remove this override and use the inherited setting.' }
-  ] });
-  return { questions, options: modes.flatMap(mode => ['project', 'milestone'].map(scope => `tracking=${mode} scope=${scope}`)) };
+const source = name => ({ session: 'this conversation', milestone: 'this milestone', project: 'project default', machine: 'computer default', 'plugin/legacy-config': 'default' })[name] ?? 'configured default';
+const value = v => v ?? 'default';
+export function taskValue(status, role, field) {
+  const keys = (role === 'testing' ? ['testWriting', 'testRunning'] : [role]).map(r => `roles.${r}.${field}`);
+  const describe = key => status.values[key] === null ? `same as main ${field}` : `${field === 'executor' ? status.values[key][0].toUpperCase() + status.values[key].slice(1) : status.values[key]} (${source(status.sources[key])})`;
+  return keys.length === 2 && status.values[keys[0]] !== status.values[keys[1]] ? `writing: ${describe(keys[0])}; running: ${describe(keys[1])}` : describe(keys[0]);
 }
-
 export async function settingsView(status, env = process.env) {
-  const t = status.tracking, i = t.installation;
-  const lines = [
-    `Project: ${status.project}`, `Current milestone: ${status.milestone.name}`,
-    '', `Weekly usage tracking: ${t.effective} (from ${t.source})`,
-    `Installation: ${i.status}${i.path ? ` — ${i.path}` : ''}`,
-    `Project default: ${t.project}; milestone: ${t.milestone}; this chat: ${t.session}`,
-    'Choose where to turn on: /fabex:settings tracking=on',
-    'Turn on for project: /fabex:settings tracking=on scope=project',
-    'Turn on for current milestone: /fabex:settings tracking=on scope=milestone',
-    'Turn off for project: /fabex:settings tracking=off scope=project',
-    'Turn off for current milestone: /fabex:settings tracking=off scope=milestone',
-    'Use project setting in this milestone: /fabex:settings tracking=inherit scope=milestone',
-    'Clear this chat override: /fabex:settings tracking=inherit scope=session'
+  const t = status.tracking, i = t.installation, v = status.values;
+  const codex = v['partners.codex.model'] ?? status.models?.codex?.id ?? 'configured in Codex';
+  const claude = status.models?.claude;
+  const claudeSource = claude?.source === 'session hook evidence' ? 'reported by this conversation' : claude?.id ? 'configured default' : 'not reported';
+  const lines = [`Project: ${basename(status.project)}`, status.milestone.id === 'legacy' ? 'Milestone: none chosen yet (earlier work is kept). Name the stage from your plan with /fabex:milestone.' : `Milestone: ${status.milestone.name}; use /fabex:milestone to select a different stage of your plan.`,
+    '', 'Models', `Codex model: ${codex} (${source(status.sources['partners.codex.model'])}).`,
+    `Codex reasoning effort: ${value(v['partners.codex.effort'])} (${source(status.sources['partners.codex.effort'])}); more reasoning can take longer.`,
+    `Claude model: ${claude?.id ?? 'Unknown'} (${claudeSource}); change it with /model and use Claude’s own effort control.`,
+    'Unavailable model or effort choices are reported when used, never silently replaced.'
   ];
+  for (const field of ['model', 'effort']) if (v[`partners.claude.${field}`] !== null) lines.push(`Saved Claude ${field} note: ${v[`partners.claude.${field}`]}; this does not change the running chat.`);
+  const observed = status.observations?.codex;
+  if (observed?.observed && observed.requested && observed.observed !== observed.requested) lines.push(`Model differs: Codex requested ${observed.requested} but reported ${observed.observed} (${observed.at}).`);
+  lines.push('', 'Who does what');
+  for (const [label, role] of Object.entries(TASKS)) lines.push(`${label}: ${taskValue(status, role, 'executor')}; model: ${taskValue(status, role, 'model')}; effort: ${taskValue(status, role, 'effort')}.`);
+  lines.push('Testing changes writing and running preferences together; either partner can still run a check.', 'Both give independent answers using their main models; task model and effort choices apply when Codex does the work.', 'Fabex cannot change the model or effort of Claude’s running chat.',
+    '', `Weekly usage: ${t.effective} (${source(t.source)}); reports account allowance and recorded usage.`,
+    `Tracker: ${i.status === 'found' ? 'installed' : i.status}.`);
   if (i.status === 'ambiguous') {
     lines.push('', i.reason);
     for (const c of i.candidates) lines.push(`Select ${c.source}: /fabex:settings usageTracker.path=${JSON.stringify(c.path)} scope=session`);
-  } else if (i.status !== 'found') lines.push('', i.reason, 'Install the independent plugin containing Weekly Tracker:', ...TRACKER_INSTALL, 'Restart Claude Code, then open /fabex:settings again.');
+  } else if (i.status !== 'found') lines.push('', i.reason, 'Install the separate plugin containing Weekly Tracker:', ...TRACKER_INSTALL, 'Restart Claude Code, then open /fabex:settings again.');
   else {
     const cache = await readUsageCache(status.project, i, status.milestone.id, env);
-    if (!cache.allowances?.some(a => a.provider === 'claude')) lines.push('', 'No cached Claude allowance reading. This may mean missing setup or unsupported/missing source fields.', `Preview optional allowance setup: ${JSON.stringify(i.path)} setup-claude`, 'Apply the preview only on owner instruction with setup-claude --apply; then allow a new Claude reading and a usage snapshot.');
+    if (!cache.allowances?.some(a => a.provider === 'claude')) lines.push('', 'No Claude allowance reading is available; ask for Weekly Tracker setup help if needed.');
   }
-  lines.push('', 'Other settings (commands below affect this chat; add scope=project for a project default):');
-  for (const partner of ['claude', 'codex']) for (const option of ['model', 'effort']) {
-    const key = `partners.${partner}.${option}`;
-    lines.push(`${partner} ${option}: ${status.values[key] ?? 'host/default'} — /fabex:settings ${key}=<${option}> scope=session`);
-  }
-  lines.push('Model and effort commands save preferences; Claude host controls and provider availability still apply.');
-  for (const [key, value] of Object.entries(status.values).filter(([key]) => /^roles\..*\.executor$/.test(key))) lines.push(`${key.split('.')[1]} executor: ${value} — /fabex:settings ${key}=${value === 'claude' ? 'codex' : 'claude'} scope=session`);
-  const key = 'milestones.newChatMeansNewMilestone';
-  lines.push(`New chat starts a new milestone: ${status.values[key]} — /fabex:settings ${key}=${!status.values[key]} scope=project`, 'Full settings and sources: /fabex:settings --json');
+  lines.push('', 'Choose a value and where it applies together; a conversation setting takes priority over its milestone, then the project.', 'Use default removes that override; Back and Cancel save nothing.', 'Prefer typing? Example: /fabex:settings tracking=on');
   return lines.join('\n') + '\n';
 }

@@ -99,7 +99,7 @@ test('1.9.2 Stop continuation is work-only, bounded, and disarmed by new questio
   assert.equal(stopDecision({}, current).decision, 'block');
   const checkpoint = current.state.partner.thread.checkpoint;
   checkpoint.continuation.used = 20;
-  assert.match(stopDecision({}, current).systemMessage, /budget/);
+  assert.equal(stopDecision({}, current).decision, 'block');
   checkpoint.continuation.used = 0; checkpoint.blocker = 'Host permission refused';
   assert.notEqual(stopDecision({}, current).decision, 'block');
   checkpoint.blocker = null; current.state.route = 'discussion';
@@ -222,7 +222,7 @@ test('1.9.2 recorded mode task runs two complete linked cycles and observes SDK 
     const child = await claimNextOperation(root, env);
     await runOperation(root, child, fakeSdk('reconcile'), env);
     const current = await readState(root, env);
-    assert.equal(current.state.partner.thread.checkpoint.continuation.used, cycle * 2 + 1);
+    assert.equal(current.state.partner.thread.checkpoint.continuation.used, 0);
     const last = current.state.operations.find(op => op.id === child.id);
     const result = spawnSync(process.execPath, [join(plugin, 'scripts/hook-stop.mjs')], { cwd: root, env, encoding: 'utf8', input: JSON.stringify({ cwd: root, session_id: 's', last_assistant_message: current.state.operations.filter(op => op.result.relay?.status === 'pending').map(op => relayBlock(op)).join('\n') }) });
     assert.equal(result.status, 0, result.stderr);

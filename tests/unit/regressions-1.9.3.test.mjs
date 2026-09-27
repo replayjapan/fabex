@@ -9,7 +9,6 @@ import { initializeState, readState, updateState } from '../../scripts/lib/state
 import { beginHeavy, heavyStatus, heavyShape, finishHeavy, attachHeavyIdentity, releaseHeavy, recoverHeavy, runHeavy, wrappedHeavyInput, waitHeavy } from '../../scripts/lib/heavy.mjs';
 import { sampleMemory } from '../../scripts/lib/memory.mjs';
 import { changePrivate, sidecar, reclaimPrivateLock, readPrivate } from '../../scripts/lib/private-store.mjs';
-import { consumeWaitBudget } from '../../scripts/lib/wait-budget.mjs';
 import { recordOwnerPromptEvidence, resolveRecordedPrompt, textDigest } from '../../scripts/lib/hook-evidence.mjs';
 import { recordSdkProcess, recoverSdkJobs, sdkLaunchOptions } from '../../scripts/lib/sdk-process.mjs';
 import { recordToolCompletion } from '../../scripts/hook-heavy.mjs';
@@ -165,13 +164,13 @@ test('1.9.3 recovery survives death between lock publication and prepared-link c
   assert.equal(await reclaimPrivateLock(lock, dead), true);
   assert.equal(JSON.parse(await readFile(prepared, 'utf8')).identity.pid, owned.pid);
 });
-test('1.9.3 repeated waits consume budget, stop retrying and preserve review obligations', async t => {
+test('1.9.3 repeated waits remain available beyond the legacy quota and preserve review obligations', async t => {
   const { root, env } = await fixture(t);
-  for (let i = 0; i < 20; i++) assert.equal((await consumeWaitBudget(root, env)).exhausted, false);
-  assert.equal((await waitHeavy(root, 1, env, { sample: normal })).budgetExhausted, true);
+  await updateState(root, s => { s.partner.thread.checkpoint.continuation.used = 20; s.generation++; return s; }, {}, env);
+  for (let i = 0; i < 25; i++) assert.equal((await waitHeavy(root, 1, env, { sample: normal })).ready, true);
   const state = await readState(root, env);
   assert.equal(state.state.partner.thread.checkpoint.continuation.used, 20);
-  // Review obligations are checked independently of continuation exhaustion.
+  // Review obligations remain independent of the retired counter.
   state.state.operations.push({ id: randomUUID(), status: 'queued', request: { phase: 'independent' }, result: {} });
   assert.equal(stopDecision({}, state).decision, 'block');
 });

@@ -10,15 +10,14 @@ import { hasBlockingPartnerWork } from './lib/sdk-controller.mjs';
 export function stopDecision(input, stateResult) {
   if (!stateResult?.ok) return {};
   if (missingRelays(stateResult.state, input).length) return { decision: 'block', reason: "Relay Codex's ownerSummary and label verbatim using controller relay --operation-id <uuid>. A completed Phase 2 summary replaces the new-format Phase 1 display; older records and unavailable summaries require the full answer. Full phase records remain available through result and relay --full. An owner-requested interruption may use recover abandon --operation-id <uuid> to waive that cycle's relay." };
-  // A task budget never waives the existing in-flight partner-cycle obligation.
+  // Task completion never waives an in-flight partner-cycle obligation.
   if (input?.stop_hook_active !== true && hasBlockingPartnerWork(stateResult.state)) {
     return { decision: 'block', reason: 'A Codex partner cycle is queued, working, or awaiting Phase 2. Wait for the active phase, submit its matching Phase 2, or explicitly cancel/recover before stopping.' };
   }
   const state = stateResult.state, checkpoint = state.partner?.thread?.checkpoint;
   if (state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant && checkpoint?.continuation?.armed && checkpoint.openWork?.length && !checkpoint.ownerActionRequired?.trim() && !checkpoint.blocker?.trim()) {
     const preview = checkpoint.openWork.slice(0, 3).map(item => item.slice(0, 160)).join('; ') + (checkpoint.openWork.length > 3 ? `; and ${checkpoint.openWork.length - 3} more checkpoint items` : '');
-    if (checkpoint.continuation.used < checkpoint.continuation.limit) return { decision: 'block', reason: `Continue authorized feasible work: ${preview}. Do not ask the owner to say continue. Update open-work as steps finish; record a genuine blocker or owner-action-required when necessary.` };
-    return { systemMessage: 'Continuation budget reached. Work remains; report the unfinished scope and budget limit plainly, without claiming completion.' };
+    return { decision: 'block', reason: `Continue authorized feasible work: ${preview}. Do not ask the owner to say continue. Update open-work as steps finish; record a genuine blocker or owner-action-required when necessary.` };
   }
   if (input?.stop_hook_active === true) return {};
   return {};
@@ -38,14 +37,6 @@ export async function main() {
     }
     const stateResult = await readState(root, process.env);
     const decision = stopDecision(input, stateResult);
-    if (decision.reason?.startsWith('Continue authorized feasible work:')) {
-      const consumed = await updateState(root, state => {
-        state.partner.thread.checkpoint.continuation.used = Math.min(20, state.partner.thread.checkpoint.continuation.used + 1);
-        state.generation += 1;
-        return state;
-      }, { expectedGeneration: stateResult.state.generation, purpose: 'bounded-continuation' });
-      if (!consumed.ok) { process.stdout.write(JSON.stringify({ decision: 'block', reason: 'Continuation budget could not be recorded; inspect state before continuing.' }) + '\n'); return; }
-    }
     if (decision.decision !== 'block' && stateResult.ok) {
       const pending = pendingRelays(stateResult.state, input.session_id).map((op) => op.id);
       if (pending.length) {

@@ -45,7 +45,7 @@ before sealing. Existing pre-upgrade cycles finish using their existing protocol
 No private reasoning is required: seal only the concise owner-facing first opinion.
 
 Milestones keep private transcript references, summaries and their own Codex threads.
-Use the optional `/fabex:milestone` command or the owner's new-chat policy. Save a
+Use `/fabex:milestone` for the named stage in the owner's plan. A new chat never creates or renames a milestone. Save a
 reviewed handoff before switching. Review the actual branch and dirty files when
 resuming; never restore old code automatically. Compact first; repeated compaction
 is a review signal, not a forced reset. Rotate only after a reviewed handoff at a
@@ -139,10 +139,10 @@ hooks reserve recognized commands atomically; Codex command events are recorded,
 not a native pre-execution guard. Other apps, workstreams and child workers still
 consume RAM. Unknown memory is a warning, never proof of safety.
 
-1.9.3: both executor wait commands consume the continuation budget. Exit 4 means
-stop polling, inspect the active job and report the actual blocker; do not loop
-on exit 4 or waive unfinished review/relay. The passive wake watcher remains
-bounded. A finished/cancelled turn is not proof its child jobs ended.
+Waits do not consume a cumulative continuation quota. Each wait remains bounded
+at 120 seconds; retry exit 3 while progress is feasible. Preserve review/relay and
+inspect genuinely stalled work. The passive wake watcher remains bounded. A
+finished/cancelled turn is not proof its child jobs ended.
 Host heavy commands request an owned wrapper without bypassing host permissions.
 Inspect wrapper status. Use `heavy release <id>` only with verified process/group
 completion; unknown legacy records require an owner-typed `recover heavy <id>`
@@ -163,11 +163,10 @@ native cleanup; closing a page is not proof the tooling process exited.
 Set `checkpoint open-work <item>` only for required, authorized, feasible steps.
 Use `checkpoint replace open-work` with a JSON array on stdin to replace it, and
 `checkpoint clear open-work` when done. Record genuine `owner-action-required` or
-`blocker` reasons and clear resolved ones. New owner prompts reset a 20-step budget
-(cycles, Stop nudges and executor waits) and disarm old work; revalidate scope,
+`blocker` reasons and clear resolved ones. New owner prompts disarm old work; revalidate scope,
 never resume from stale TODOs.
 Continue on the recorded owner digest through both phases without another message
-until done, interrupted, genuinely blocked or budget-exhausted. A timeout is not
+until done, interrupted or genuinely blocked. A timeout is not
 completion. Report the exact rejection and remaining work if continuation fails.
 No mode changes, approval invention, or prompt reconstruction loops.
 

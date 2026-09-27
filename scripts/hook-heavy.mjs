@@ -39,7 +39,7 @@ export async function main() {
     const root = await rootFromHookInput(input, process.env);
     if (input.tool_name === 'AskUserQuestion') {
       const selected = await recordWorkspaceSelection(root, input);
-      process.stdout.write(JSON.stringify(selected ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `Owner selection recorded: ${selected.selection}. Apply once with control.mjs settings apply --grant ${selected.grantId}, between completed review cycles.` } } : {}) + '\n');
+      process.stdout.write(JSON.stringify(selected ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: selected.cancelled ? 'Settings cancelled. Nothing was saved.' : selected.questions ? `Continue the owner settings dialog with exactly ${JSON.stringify({ questions: selected.questions })}. No change is authorized yet. Do not choose for the owner.` : `Owner selection recorded: ${selected.selection}. Apply once with control.mjs settings apply --grant ${selected.grantId}, between completed review cycles.` } } : {}) + '\n');
       return;
     }
     await recordToolCompletion(root, input);

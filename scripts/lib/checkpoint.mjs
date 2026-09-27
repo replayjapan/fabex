@@ -27,6 +27,7 @@ export function emptyCheckpoint() {
     unresolvedProblems: [],
     nextAction: null,
     openWork: [], ownerActionRequired: null, blocker: null,
+    // used/limit are inert legacy serialization fields; no runtime quota uses them.
     continuation: { used: 0, limit: 20, ownerDigest: null, armed: false },
     repoFingerprint: { branch: null, head: null, dirty: null },
     repoFingerprintCapturedAt: null,

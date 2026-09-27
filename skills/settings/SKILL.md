@@ -1,28 +1,38 @@
 ---
 name: settings
-description: View project defaults and current-session model, role, milestone and optional usage settings; apply only owner-selected changes.
+description: View and choose models, Coding/Testing/Image review/Documentation responsibilities, and optional usage reports for a conversation, planned milestone or project.
 disable-model-invocation: true
 ---
 
 Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/control.mjs settings --session <ownerSessionId-from-context>`
-and show its human view, including tracking status, scopes, installation help and
-other common choices. Use `--json` only when requested. Owner spelling is
-`/fabex:settings`. Viewing alone never applies a setting.
+and show its human view: project and planned milestone, then Models, Who does
+what, and Weekly usage. Do not expose internal configuration as extra menu
+sections. A milestone is a stage in the owner's plan, never inferred from a new
+chat or chat title. Viewing alone never changes a preference.
 
-An owner-typed bare `/fabex:settings` or `/fabex:settings tracking=on|off|inherit`
-issues a five-minute, single-use selection grant. The expansion hook supplies the
-exact `AskUserQuestion` questions. Offer them unchanged when that host tool is
-available. Apply only after the PostToolUse hook confirms the owner's answer was
-recorded, using its `settings apply --grant <id>` command. Never invent a response,
-select an option yourself, or apply after cancellation. Unknown host payloads fail
-closed. Without a dialog, show the printed explicit commands for the owner to type.
-Questions alone do not authorize mutations outside their recorded choices.
+An owner-typed `/fabex:settings` starts a five-minute, single-change dialog grant.
+`/fabex:settings tracking=on|off|inherit` starts at scope selection. The expansion
+hook supplies exact `AskUserQuestion` questions. Offer them unchanged. The
+PostToolUse hook validates each owner answer and supplies the next question or
+final apply command. Back and Cancel are accepted through the host's Other input
+as well as dedicated choices where shown. Do not choose for the owner, invent an
+answer, apply intermediate selections, or apply after cancellation. Unknown host
+payloads fail closed. The final dialog asks value and scope together; it is the
+owner’s selection, with no additional confirmation. Both answers must be recorded.
+Apply only its hook-confirmed `settings apply --grant <id>` command between
+completed review cycles. Without a dialog, read `settings --json` and show only
+the relevant command from `typedCommands` for the owner to type. Questions alone
+do not authorize other changes.
 
 An explicit owner command such as `/fabex:settings tracking=on scope=milestone`
 applies directly through the exact grant command supplied by the expansion hook.
-Do not reconstruct or expand arguments. `tracking` aliases `usageTracker.mode`.
-After applying, view settings again and report the selected scope, effective state
+Do not reconstruct or expand arguments. `tracking` aliases `usageTracker.mode`; `roles.testing.executor|model|effort`
+updates both testWriting and testRunning preferences together. Existing different
+preferences remain intact until the owner chooses a combined value.
+After applying, show the returned plain-language `summary`, then report effective state
 and any installation or allowance setup help. Do not claim fresh readings from a toggle.
+New assignments to `milestones.newChatMeansNewMilestone` are retired; stored
+values stay readable and can be cleared with `inherit`.
 Project defaults apply across milestones; milestone overrides survive new chats
 and thread rollovers. Precedence is project, milestone, then session. Use
 `tracking=inherit` with an explicit scope to remove its override. Other settings
@@ -33,6 +43,13 @@ an explicit choice; show the provided path commands and do not guess. A
 `usageTracker.path` override remains available. Quote paths containing spaces.
 Installation or collector setup requires an owner instruction, not a settings
 view. Missing Claude allowance readings do not prove the collector is absent.
+
+Models from configuration or recent SDK observations are suggestions, independent
+of usage tracking. Provider validation occurs on use. The main Claude model is
+host-managed. Task model/effort overrides apply to Codex working turns; the first
+independent answer uses the partner model. Claude main task model/effort cannot
+be switched by Fabex. Test-running assignment guides work, not exclusive tool
+authorization. Both main partners retain independent review in joint work.
 
 The current main Claude model is host-managed. A requested preference is not
 proof it is applied; verify host `/model` and effort support. Codex partner

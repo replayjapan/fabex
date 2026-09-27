@@ -25,7 +25,7 @@ changes. You stay in control of modes and settings.
 Fabex is beta software. It adds coordination, not infallibility: review important
 changes, keep backups and expect the host's normal permission checks. VS Code's
 Claude Code integration is the primary workflow; host-specific checks are listed
-in the [acceptance notes](docs/acceptance-1.10.1.md).
+in the [acceptance notes](docs/acceptance-1.10.3.md).
 
 ### Install
 
@@ -50,11 +50,13 @@ is below.
 1. Open your project in Claude Code and use `/fabex:discussion` to explore an idea.
 2. Use `/fabex:work` when you want changes, then describe the task normally.
 3. View `/fabex:settings` for project defaults and this chat's overrides.
-4. Optionally use `/fabex:milestone Checkout improvements` to name a milestone.
+4. Use `/fabex:milestone Checkout improvements` to select a named stage from your plan.
    Existing projects keep their current history; setup is not mandatory.
 5. Use `/fabex:diagnose` if the installation or connection is unclear.
 
 ### What's new?
+
+- **1.10.3:** the full, simple settings menu: Models, Who does what, and Weekly usage. Milestones follow your plan; the cumulative continuation cutoff is removed. [Details](CHANGELOG.md)
 
 - **1.10.2:** discoverable tracking controls, automatic tracker discovery and milestone preferences. [Details](CHANGELOG.md)
 
@@ -74,21 +76,39 @@ data and credentials do not belong in this public repository.
 
 ### Settings you can change
 
-Open `/fabex:settings` to see current values, available choices and installation
-help. You do not need to remember internal setting names. The short
-`/fabex:settings tracking=on` offers **Project** or **Current milestone** before
-saving. Host dialogs are used where supported; printed commands work elsewhere:
+Open `/fabex:settings` to see your project, current **planned milestone** and
+current choices. Opening it saves nothing. Choose one of three sections:
 
-- Project tracking: `/fabex:settings tracking=on scope=project`
-- Milestone tracking: `/fabex:settings tracking=on scope=milestone`
-- Disable milestone tracking: `/fabex:settings tracking=off scope=milestone`
-- Inherit the project choice: `/fabex:settings tracking=inherit scope=milestone`
-- Partner model/effort and task roles: open `/fabex:settings` for current values and commands.
-- New-chat milestone policy: `/fabex:settings milestones.newChatMeansNewMilestone=true scope=project`
+- **Models:** choose the Codex model and how much reasoning to request. Claude's
+  model is shown with its source; use Claude's `/model` and host effort control to
+  change the running chat. Configured or previously used models are suggestions,
+  not a promise of availability. Unsupported requests fail visibly.
+- **Who does what:** Coding, Testing, Image review and Documentation. Choose
+  Claude or Codex, with optional model/effort requests for that task. Testing
+  updates test-writing and test-running preferences together. Task overrides
+  affect Codex working turns; the first independent answer uses its main model.
+  Claude's main chat remains host-controlled. The test-running preference guides
+  work; either partner can still run a check.
+- **Weekly usage:** On or Off. Fabex locates the separate tracker automatically
+  and shows installation help when needed. Reporting frequency stays automatic.
 
-Milestone choices survive new chats and Codex thread rollovers. New milestones
-inherit the project default. Existing chat overrides still take precedence; the
-settings view shows their effect. `/fabex:settings --json` exposes the full detail.
+Choose **Only this conversation**, **This planned milestone**, or **Default for
+this project** alongside the value in the same dialog; submitting the answers
+applies that one change. A conversation choice
+wins over a milestone choice, which wins over the project default. To undo an
+override, choose **Use default** at the level you want to clear. Back and
+Cancel save nothing. Changes take effect on the next applicable turn after the
+current review cycle finishes. Both partners retain independent review in joint work.
+
+`/fabex:settings tracking=on` goes straight to the scope choice. For typing
+instead of clicking, the full command reference is in the technical section below
+and `/fabex:settings --json`; the normal view stays short.
+
+A milestone is a stage of your plan, not a chat. New chats continue the selected
+milestone; renaming a chat never renames it. Use `/fabex:milestone` to view or
+select your plan's stage. Context summaries and conversation handoffs are handled
+by the partners. Technical configuration remains accessible through its existing
+configuration and diagnostic routes, including `/fabex:settings --json`.
 
 ### Weekly usage tracking
 
@@ -109,6 +129,43 @@ plugin does not enable tracking, and Off stays silent in ordinary replies.
 ---
 
 ## FOR AI BROTHREN
+
+### Typed settings reference
+
+The human view shows one short example. `settings --json` includes `typedCommands`
+for the full fallback; provide only the relevant command when the host has no dialog.
+Only owner-typed commands authorize changes. Use `scope=session` for this
+conversation, `scope=milestone` for the selected plan stage, or `scope=project`
+for project defaults. `inherit` removes the override at that scope; `model=null`
+uses the main/default model. Replace `MODEL_ID` with the requested model name.
+
+```text
+/fabex:settings partners.codex.model=MODEL_ID scope=session
+/fabex:settings partners.codex.effort=high scope=session
+/fabex:settings roles.implementation.executor=claude scope=session
+/fabex:settings roles.testing.executor=codex scope=milestone
+/fabex:settings roles.imageReview.executor=claude scope=session
+/fabex:settings roles.docs.executor=codex scope=project
+/fabex:settings roles.testing.model=MODEL_ID scope=milestone
+/fabex:settings roles.testing.effort=high scope=milestone
+/fabex:settings roles.testing.executor=inherit scope=milestone
+/fabex:settings tracking=on scope=project
+/fabex:settings tracking=off scope=milestone
+/fabex:settings tracking=inherit scope=milestone
+```
+
+Each of the four role keys accepts `.executor`, `.model`, or `.effort`; Testing
+sets both underlying testing roles together. Executor values are `claude|codex`.
+Other existing explicit keys remain available. Stored
+`milestones.newChatMeansNewMilestone` remains readable, but new assignments are
+rejected: milestones follow the plan, not chats. Its old override can be cleared
+with `milestones.newChatMeansNewMilestone=inherit`.
+
+The guided flow combines value and scope in its final dialog, with no extra
+confirmation. Only a complete, validated owner response authorizes application;
+Back or Cancel in either question saves nothing. Display the returned `summary`
+after applying, including any more specific setting that takes precedence.
+
 
 The following is the operational reference for AI partners and contributors.
 Preserve the human-facing workflow and existing controls when extending it.
@@ -141,7 +198,7 @@ guarantee of RAM savings; verify actual host behavior.
 aliases for existing clear commands. Literal `null` in those two fields is treated
 as cleared. During schema transition, controller status/result/relay can inspect
 a validated in-memory snapshot without persisting migration; the seal still applies.
-Wait returns a migration-pending snapshot rather than mutating its budget.
+Wait returns a migration-pending snapshot while the older runner remains active.
 
 `cleanup --path <copy> --source <source>` audits an adjacent `<source>-next...`
 plugin copy against the source, including untracked files. Unique/different files,
@@ -165,9 +222,10 @@ override. Flat validated keys live under `settings` in machine/project config.
 Session choices persist privately and do not change another chat. Changes wait for
 a completed review cycle. No-argument viewing needs no grant.
 
-Settings include two partner models/efforts; implementation, testWriting,
-testRunning, imageReview, docs and gitDelivery assignments; new-chat milestone
-policy; context review threshold; summaries; and optional usage tracking. Before a
+The ordinary menu exposes Models, four task responsibilities, and usage On/Off.
+Other stored configuration remains available through JSON diagnostics and explicit
+configuration. The `roles.testing` alias applies both testWriting and testRunning
+changes atomically. Legacy `milestones.newChatMeansNewMilestone` is ignored. Before a
 task, `control.mjs role <role>` selects the already-authorized assignment. Codex's
 independent review uses its main partner settings; assigned Codex execution uses
 role model/effort during reconciliation. Claude-host model controls remain host
@@ -177,11 +235,10 @@ silent fallback is claimed. Other permissions are unchanged. Image access and
 authorship overrides apply only to the bound main chat, never arbitrary subagents.
 
 `/fabex:milestone <name-or-id>` creates/selects a milestone; no arguments lists it.
-With `milestones.newChatMeansNewMilestone=true`, a new Claude session gets one
-automatically. Default false continues the current milestone. Titles use matching
-custom-title records with a streaming first-registration fallback to older records,
-then fall back to the session ID. VS Code
-title propagation requires live verification. Private state stores original chat
+It identifies a named stage from the project plan. A new session binds to the
+current milestone regardless of the legacy new-chat preference. Chat titles are
+kept as references only; they neither create nor rename milestones. Existing
+milestone names and history are preserved. Private state stores original chat
 references, summaries, handoffs and Codex thread bindings outside the source tree.
 Nothing moves between provider transcripts and returning never rolls code back.
 One active review cycle is serialized per workstream; another chat cannot rebind
@@ -223,7 +280,7 @@ separately configured global collector. Account allowance, project token usage
 and context size are different measures. No exclusive per-session attribution is
 claimed when several chats share a project. See [live acceptance](docs/acceptance-1.10.0.md).
 
-## 1.9.2: bounded continuation and RAM precautions
+## Continuation and RAM precautions
 
 Routine updates lead with outcomes, important failures and the next step. Claude's
 summary is at most five sentences (instructional guidance, not a mechanical cap).
@@ -269,9 +326,9 @@ In work mode set `checkpoint open-work <item>` (append), replace the list with
 `checkpoint clear open-work`. Only record required, authorized and feasible work.
 Set `checkpoint owner-action-required <reason>` or `checkpoint blocker <reason>`
 for a genuine stop, and clear those fields when resolved. Each new owner prompt
-resets a 20-cycle/Stop-nudge budget and disarms old work: revalidate scope before
-setting open-work again. Stop requests continued work while the list is armed and
-unblocked, but permits a visible budget-exhaustion report. A checkpoint is not an
+disarms old work: revalidate scope before setting open-work again. Stop requests
+continued work while the list is armed and unblocked. There is no cumulative
+cycle, Stop-nudge or wait quota. A checkpoint is not an
 authorization grant; no task is resumed merely because a new question arrives.
 The host can still interrupt or limit continuation. Schema 16 migrates older
 checkpoints losslessly only after the live-runner migration gate permits it.
@@ -319,12 +376,11 @@ the original SDK launch path with unknown identity. Detached subprocesses that
 leave that group are outside this evidence boundary; do not launch heavy daemons
 through foreground commands. Native host acceptance remains required.
 
-Both executor wait commands consume the shared 20-step continuation budget.
-Exit 3 means one slice elapsed; exit 4 means stop polling and inspect the blocker.
-Never turn exit 4 into another retry loop. Required review/relay is not waived:
-read a completed result or use the existing explicit cancellation/recovery path
-for genuinely stalled work. The bounded passive wake watcher uses valid
-120-second slices and does not spend executor retry budget.
+Executor waits retain a maximum of 120 seconds per invocation. Exit 3 means the
+slice elapsed; continue waiting while progress remains feasible, inspecting a
+real blocker when necessary. Waiting never spends a cumulative task quota.
+Required review and relay are unchanged. The passive wake watcher remains bounded;
+a finished turn alone does not prove its child jobs ended.
 
 `control.mjs mem` is read-only, using only query probes (`memory_pressure -Q`,
 pressure-level sysctl, vm_stat, swapusage and bounded ps fields). Before admission,
@@ -610,8 +666,8 @@ Fabex no longer accumulates raw owner-goal history. Its checkpoint includes:
 - next action;
 - repository fingerprint.
 
-Continuation also records open work, any required owner action, a blocker and its
-bounded continuation budget. Clearing a blocker does not waive review obligations.
+Continuation records open work, required owner action and blockers. Legacy
+`used`/`limit` fields are retained for old-state compatibility but are inert. Clearing a blocker does not waive review obligations.
 
 The complete recovery seed—including title, framing, serialized checkpoint, and stale-repository warning—has a hard 48 KiB UTF-8 limit. Updates that would exceed 49,152 bytes are rejected atomically. `checkpoint capacity` reports counts and bytes, `checkpoint export` is the sanctioned full-text export, `checkpoint replace` and `compact` maintain arrays atomically, and `checkpoint snapshot` updates any subset of the five progress fields in one validated transaction. Tool/notification payloads are rejected. Status exposes only `updatedAt` and bounded warnings, never checkpoint text.
 

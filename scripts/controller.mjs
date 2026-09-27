@@ -5,7 +5,6 @@ import { rootFromControlCwd } from './lib/paths.mjs';
 import { assertUuid, ValidationError } from './lib/validation.mjs';
 import { cancelOperation, claimNextOperation, claimRunner, operationStatus, releaseRunner, releaseRunnerIfIdle, runOperation, submitOperation } from './lib/sdk-controller.mjs';
 import { relayBlock } from './lib/review.mjs';
-import { consumeWaitBudget } from './lib/wait-budget.mjs';
 import { sdkLaunchOptions, helperServerOptions } from './lib/sdk-process.mjs';
 import { sealReading, assertSealed } from './lib/workspace.mjs';
 import { readState } from './lib/state.mjs';
@@ -135,14 +134,8 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     if (!/^\d+$/.test(args[3]) || Number(args[3]) < 1 || Number(args[3]) > 120) throw new ValidationError('wait timeout must be an integer from 1 to 120 seconds');
     const observed = await operationStatus(root, id, env);
     if (observed.observationHealth === 'migration-deferred') {
-      process.stdout.write(JSON.stringify({ ...boundedStatus(observed), observationHealth: 'migration-deferred', instruction: 'Read-only snapshot; existing runner remains active. No migration or wait budget mutation.' }) + '\n');
+      process.stdout.write(JSON.stringify({ ...boundedStatus(observed), observationHealth: 'migration-deferred', instruction: 'Read-only snapshot; existing runner remains active. No migration while the existing runner is active.' }) + '\n');
       process.exitCode = terminal(observed.status) ? 0 : 3; return;
-    }
-    const budget = await consumeWaitBudget(root, env);
-    if (budget.exhausted) {
-      const operation = boundedStatus(await operationStatus(root, id, env));
-      process.stdout.write(JSON.stringify({ ...operation, budgetExhausted: true, instruction: 'Stop polling. The completion wake remains active; required reconciliation and relay are not waived. Inspect a genuine stalled-operation blocker before recovery.' }) + '\n');
-      process.exitCode = terminal(operation.status) ? 0 : 4; return;
     }
     const waited = await waitForOperation(root, id, Number(args[3]), env);
     process.stdout.write(`${JSON.stringify(waited.operation, null, 2)}\n`);
