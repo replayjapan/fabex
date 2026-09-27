@@ -148,13 +148,6 @@ export function parseControlCommand(command) {
   if (typeof command === 'string' && command.includes('\n')) {
     const lines = command.split('\n');
     if (lines.at(-1) === '') lines.pop();
-    const docs = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+docs\s+draft\s+--operation-id\s+([a-f0-9-]{36})\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
-    if (docs && resolve(docs[1] ?? docs[2] ?? docs[3]) === CONTROL_PATH && UUID_RE.test(docs[4]) && lines.at(-1) === docs[5]) {
-      const body = lines.slice(1, -1).join('\n');
-      if (Buffer.byteLength(body) <= 40 * 1024) {
-        try { const data = JSON.parse(body); if (typeof data.body === 'string' && Object.keys(data).every(k => ['path', 'body'].includes(k))) return { kind: 'docs-draft', operationId: docs[4] }; } catch {}
-      }
-    }
     const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+checkpoint\s+(replace\s+(constraint|decision|relevant-file|unresolved-problem|open-work)|snapshot)\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
     if (header && resolve(header[1] ?? header[2] ?? header[3]) === CONTROL_PATH && lines.at(-1) === header[6]) {
       const body = lines.slice(1, -1).join('\n');
@@ -164,7 +157,6 @@ export function parseControlCommand(command) {
   const tokens = simpleTokens(command);
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROL_PATH) return null;
   const args = tokens.slice(2);
-  if (args[0] === 'docs' && args[2] === '--operation-id' && UUID_RE.test(args[3] ?? '') && (args[1] === 'read' && args.length === 4 || args[1] === 'assemble' && args.length === 6 && args[4] === '--review' && UUID_RE.test(args[5] ?? ''))) return { kind: `docs-${args[1]}`, operationId: args[3] };
   if (args[0] === 'settings' && (args.length === 2 && args[1] === '--json' || args.length === 4 && args[1] === '--session' && args[2] && args[3] === '--json')) return { kind: 'workspace-view', sessionId: args[1] === '--session' ? args[2] : undefined };
   if (args.length === 1 && ['settings', 'milestone'].includes(args[0])) return { kind: 'workspace-view' };
   if (args.length === 3 && ['settings', 'milestone'].includes(args[0]) && args[1] === '--session' && args[2]) return { kind: 'workspace-view', sessionId: args[2] };
@@ -655,7 +647,11 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const main = !executor.agentId && !executor.agentType;
   const bound = Boolean(executor.sessionId && executor.sessionId === state.workspace?.activeSessionId && state.workspace?.sessions[executor.sessionId]?.milestoneId === state.workspace?.activeMilestoneId);
   const task = executionPlan(config, state, executor.sessionId);
-  const claudeEdits = bound && main && ['implementation', 'testWriting', 'docs'].includes(task.role) && task.executor === 'claude';
+  // Both uses the existing Documentation author lane, with serial edits.
+  // Role assignment governs the task, not a filename extension; native permissions still apply.
+  const sharedDocs = task.role === 'docs' && task.executor === 'both' && state.participants === 'both';
+  const claudeEdits = bound && main && (['implementation', 'testWriting', 'docs'].includes(task.role) && task.executor === 'claude'
+    || sharedDocs && !state.controller.activeOperationId && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt);
   const claudeImages = bound && main && profile['roles.imageReview.executor'] === 'claude';
   if (toolName === 'Skill' && /^(?:fabex:)?(?:settings|milestone)$/.test(toolInput.skill ?? '') && (toolInput.args ?? '').trim()) return deny('settings changes require an owner-typed slash command');
   if (toolName.split('__')[0] === 'mcp' && toolName.split('__')[1] === 'codex') return deny('Codex turns must use the canonical Fabex SDK controller');
@@ -667,10 +663,6 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     if (envelope.ownerSessionId && envelope.ownerSessionId !== executor.sessionId) return deny('ownerSessionId must match this host session');
   }
   const control = toolName === 'Bash' ? parseControlCommand(toolInput.command) : null;
-  if (control?.kind?.startsWith('docs-')) {
-    const operation = state.operations.find(o => o.id === control.operationId);
-    return main && bound && state.route === 'normal' && !state.modeGrant?.pausedAt && task.role === 'docs' && task.executor === 'both' && operation?.result.relay?.sessionId === executor.sessionId ? defer() : deny('Documentation contributions require the originating main work session with Docs Both.');
-  }
   if (control?.kind === 'workspace-apply') {
     const grant = state.workspace?.grants[control.grantId];
     return main && grant && grant.sessionId === executor.sessionId && grant.expiresAt >= Date.now() && state.route !== 'recovery-read-only' ? defer() : deny('settings changes require this session\'s owner-issued grant');

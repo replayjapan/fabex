@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.10.5
+
+- Correct Docs Both to collaborative updates of the existing handoff or document.
+  Both remains the default; explicit single-writer preferences are preserved.
+- Allow the bound main Claude session to use the existing Documentation edit lane
+  between Codex operations. Both partners can read the shared document at any time.
+- Remove private documentation drafts, document sealing, response-field gates,
+  verbatim assembly and forced companion documents. Existing saved drafts and
+  project files are left intact. Independent strategy/reply assessments stay sealed.
+- Keep current tabbed settings and account-reported model selection unchanged.
+
 ## 1.10.4
 
 - Related settings now use native question tabs, visible Back/Cancel, Keep current,

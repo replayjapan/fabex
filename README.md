@@ -25,7 +25,7 @@ changes. You stay in control of modes and settings.
 Fabex is beta software. It adds coordination, not infallibility: review important
 changes, keep backups and expect the host's normal permission checks. VS Code's
 Claude Code integration is the primary workflow; host-specific checks are listed
-in the [acceptance notes](docs/acceptance-1.10.4.md).
+in the [acceptance notes](docs/acceptance-1.10.5.md).
 
 ### Install
 
@@ -56,7 +56,7 @@ is below.
 
 ### What's new?
 
-- **1.10.4:** clickable tabbed settings, account-reported Codex model choices, and independently authored Documentation with Both as the default. [Details](CHANGELOG.md)
+- **1.10.5:** Documentation defaults to Both updating one shared handoff, including an existing file. No hidden drafts or companion documents. Tabbed settings and account-reported model choices remain. [Details](CHANGELOG.md)
 - **1.10.3:** the full, simple settings menu: Models, Who does what, and Weekly usage. Milestones follow your plan; the cumulative continuation cutoff is removed. [Details](CHANGELOG.md)
 
 - **1.10.2:** discoverable tracking controls, automatic tracker discovery and milestone preferences. [Details](CHANGELOG.md)
@@ -85,8 +85,9 @@ current choices. Opening it saves nothing. Choose one of three sections:
   Claude's model is shown here; use its native `/model` picker and effort control
   for the models available to Claude. Fabex never silently substitutes a model.
 - **Who does what:** Coding, Testing, Image review and Documentation. Documentation
-  defaults to **Both**: Claude and Codex write independently, then their contributions
-  appear in one document under separate headings. Each revises only its own words.
+  defaults to **Both**: Claude and Codex read and update the same handoff or document,
+  taking turns and checking accuracy together. Existing files are updated in place;
+  no extra document or separate author sections are required.
   Existing explicit writer choices stay intact. Coding and Testing have one writer.
   Testing updates writing and running preferences together; either partner may
   still run a check. Optional task model/effort choices apply to Codex working

@@ -59,10 +59,10 @@ occurs on use, without substitution. Claude's actual model picker is its native
 `/model` control, not a hard-coded Fabex list.
 
 Documentation defaults to Both unless an explicit existing preference overrides
-it. Follow the independent draft/assembly procedure in `jointly/SKILL.md`; this is
-not merely an assignment note. Claude and Codex each write their own contribution.
-Coding and Testing remain single-author. Test-running assignment guides work, not
-exclusive tool authorization. Both main partners retain independent review.
+it. Follow the shared-document workflow in `jointly/SKILL.md`: both partners read
+and update the existing handoff in turn, each contributing what it knows. No
+private drafts, compulsory author sections or extra companion document are needed.
+Both main partners retain independent review of the owner's request.
 
 The current main Claude model is host-managed. A requested preference is not
 proof it is applied; verify host `/model` and effort support. Codex partner
@@ -72,7 +72,7 @@ not inferred from a static list. Do not silently substitute a model.
 Role preferences do not waive discussion, sandbox or destructive-action rules.
 For a coding trial use a reviewed isolated worktree/branch when appropriate,
 preserve dirty work, and separately isolate database effects. Settings do not
-create a branch or reset data. Only one source author at a time; Docs Both uses separate drafts and serial assembly.
+create a branch or reset data. Only one source author at a time; Docs Both updates the shared document in turn.
 
 Usage tracking is optional. Inherit follows the project setting; Off means no
 Fabex integration calls or normal-reply reminders. Independently installed global

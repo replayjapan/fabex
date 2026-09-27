@@ -276,15 +276,6 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
 }
 export async function sealReading(root, operationId, reading, env = process.env) {
   if (typeof reading !== 'string' || !reading.trim() || Buffer.byteLength(reading) > 16000) throw new Error('sealed assessment must be 1..16000 bytes');
-  const prior = await readState(root, env);
-  const operation = prior.state?.operations.find(o => o.id === operationId);
-  if (operation?.request.route === 'normal') {
-    const plan = executionPlan((await loadEffectiveConfig(root, env)).config, prior.state, operation.result.relay?.sessionId);
-    if (plan.role === 'docs' && plan.executor === 'both') {
-      const { sealDocumentationDraft } = await import('./docs-both.mjs');
-      await sealDocumentationDraft(root, operation, env);
-    }
-  }
   await mutate(root, 'seal-independent-assessment', state => {
     const op = state.operations.find(o => o.id === operationId), seal = state.workspace.seals[operationId];
     if (op && seal?.digest === digest(reading)) return;
