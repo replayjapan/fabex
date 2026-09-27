@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.10.7
+
+- Ignore helper-agent messages and sub-agent hand-back deliveries as owner prompts.
+  Exclude previously recorded notification text from prompt lookup and reject it
+  when submitted directly, so it cannot be reused as owner authority.
+- Document marketplace refresh, optional plugin update, reload and version checks
+  in the human and AI update instructions.
+
 ## 1.10.6
 
 - Make Coding the source-editing assignment, independent of AI name or task role.

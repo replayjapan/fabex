@@ -9,6 +9,7 @@ export const MODE_GRANT_TTL_MS = 60_000;
 export const OWNER_PROMPT_RING_LIMIT = 8;
 const OWNER_PROMPT_RING_BYTES = 2 * 1024 * 1024;
 const NOTIFICATION_PROMPT_RE = /<task-notification>|\[SYSTEM NOTIFICATION|<system-reminder>|<local-command-caveat>/i;
+const AGENT_DELIVERY_RE = /^\s*(?:<agent-message(?:\s|>)|\[Subagent hand-back\])/i;
 
 const MODE_SKILLS = new Map([
   ['work', { route: 'normal', participants: 'both' }],
@@ -38,7 +39,7 @@ export function modeTargetForSkill(value) {
 }
 
 export function notificationLikePrompt(value) {
-  return typeof value === 'string' && NOTIFICATION_PROMPT_RE.test(value);
+  return typeof value === 'string' && (NOTIFICATION_PROMPT_RE.test(value) || AGENT_DELIVERY_RE.test(value));
 }
 
 function validRingEntry(value) {
@@ -46,7 +47,7 @@ function validRingEntry(value) {
     && Number.isSafeInteger(value.bytes) && value.bytes >= 0
     && typeof value.capturedAt === 'string' && !Number.isNaN(Date.parse(value.capturedAt))
     && typeof value.sessionId === 'string' && value.sessionId.length <= 256
-    && (value.text === undefined || typeof value.text === 'string' && Buffer.byteLength(value.text) <= 192 * 1024 && textDigest(value.text) === value.digest && Buffer.byteLength(value.text) === value.bytes);
+    && (value.text === undefined || typeof value.text === 'string' && !notificationLikePrompt(value.text) && Buffer.byteLength(value.text) <= 192 * 1024 && textDigest(value.text) === value.digest && Buffer.byteLength(value.text) === value.bytes);
 }
 
 async function promptRingPath(root, env) {
@@ -73,6 +74,7 @@ async function appendOwnerPromptEvidence(root, evidence, env) {
 }
 
 export async function recordAuthorizedPrompt(root, text, sessionId, env = process.env, capturedAt, retainText = true) {
+  if (notificationLikePrompt(text)) throw new Error('Notification or helper delivery is not an owner instruction');
   const evidence = digestEvidence(text, sessionId, capturedAt);
   await appendOwnerPromptEvidence(root, { ...evidence, ...(retainText && evidence.bytes <= 192 * 1024 ? { text } : {}) }, env);
   return evidence;
@@ -93,6 +95,7 @@ export function closePrompt(a, b, limit = 5) {
 }
 
 export async function resolveRecordedPrompt(root, envelope, state, env = process.env) {
+  if (notificationLikePrompt(envelope.ownerMessage)) throw new Error('Notification or helper delivery is not an owner instruction');
   const all = await recentOwnerPromptEvidence(root, env);
   const sessionId = envelope.ownerSessionId ?? state.contextEvidence.ownerPrompt?.sessionId;
   const entries = all.filter(entry => typeof entry.text === 'string' && (!sessionId || entry.sessionId === sessionId));

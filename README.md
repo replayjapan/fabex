@@ -45,6 +45,34 @@ Node dependency automatically; normal marketplace installation needs no manual
 package command. [Contributor setup](#requirements-and-dependency-installation)
 is below.
 
+### Update Fabex
+
+1. In Claude Code, refresh Fabex's marketplace:
+
+   ```text
+   /plugin marketplace update fabex
+   ```
+
+   If your interface does not offer that command, run
+   `claude plugin marketplace update fabex` in a terminal instead.
+2. Read the result. With auto-update enabled, the refresh may also update the
+   installed plugin. If it confirms Fabex was updated, skip the next command.
+   Otherwise, update Fabex explicitly in a terminal:
+
+   ```sh
+   claude plugin update fabex@fabex
+   ```
+
+3. Back in Claude's chat, type `/reload-plugins`, then `/fabex:diagnose`.
+   Check that the installed and loaded-source versions match the release you
+   intended to load. If there is a mismatch or reload error, follow its guidance
+   before treating the update as complete.
+
+Auto-update is normally **off** for third-party marketplaces such as Fabex unless
+you enable it. In the plugin manager's **Marketplaces** tab, select **fabex** to
+see or change that option. A marketplace refresh alone is not proof that Fabex
+was updated. See Claude Code's [update guide](https://code.claude.com/docs/en/discover-plugins#keep-plugins-updated).
+
 ### First conversation
 
 1. Open your project in Claude Code and use `/fabex:discussion` to explore an idea.
@@ -55,6 +83,8 @@ is below.
 5. Use `/fabex:diagnose` if the installation or connection is unclear.
 
 ### What's new?
+
+- **1.10.7:** helper reports are excluded from owner instructions; update steps now explain auto-update and version checks. [Details](CHANGELOG.md)
 
 - **1.10.6:** Coding selects the code editor; Docs Both shares text documents without granting source-editing authority. Codex document-only enforcement has a native sandbox limitation, described below. [Details](CHANGELOG.md)
 - **1.10.3:** the full, simple settings menu: Models, Who does what, and Weekly usage. Milestones follow your plan; the cumulative continuation cutoff is removed. [Details](CHANGELOG.md)
@@ -744,7 +774,19 @@ Then submit its public repository through the [Anthropic Console plugin form](ht
 
 ### Upgrading an installed checkout
 
-Claude Code caches plugins under `<claude config dir>/plugins/cache/<marketplace>/<plugin>/<version>/`; `${CLAUDE_PLUGIN_ROOT}` points to that cache copy, not the source checkout. After bumping `plugin.json`, update the marketplace with `/plugin marketplace update fabex` or `claude plugin marketplace update fabex`, reinstall or force-reload with `/reload-plugins --force`, and restart the session because hooks and MCP servers are read at startup. `diagnose` reports the registry version, install path, and whether they match the loaded source. See the [Claude Code plugins reference](https://code.claude.com/docs/en/plugins-reference.md).
+For marketplace installations, Claude Code caches plugins under
+`<claude config dir>/plugins/cache/<marketplace>/<plugin>/<version>/`.
+Development sessions can load a local source instead; inspect the actual plugin
+root rather than inferring it from the registry version.
+Follow [Update Fabex](#update-fabex): refresh the named marketplace, inspect whether
+the installed plugin was also updated, and use `claude plugin update fabex@fabex`
+when it was not. Do not assume every user has auto-update enabled or that the
+terminal and slash commands perform identical actions. Reload with
+`/reload-plugins`, then run `/fabex:diagnose` to compare the registry version,
+install path and loaded source. A published release or refreshed marketplace
+does not by itself prove the running session loaded it. Do not prescribe a
+reinstall, forced reload or restart routinely; follow the host's reported reload
+requirements. See the [Claude Code command reference](https://code.claude.com/docs/en/plugins/cli-reference).
 
 ## Configuration
 

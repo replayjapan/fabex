@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { renderSessionContext } from '../../scripts/hook-session.mjs';
@@ -10,6 +10,7 @@ import { initializeState, readState, updateState } from '../../scripts/lib/state
 import { issueModeGrant } from '../../scripts/lib/hook-evidence.mjs';
 
 const root = resolve(import.meta.dirname, '..', '..');
+const currentVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
 const control = join(root, 'scripts', 'control.mjs');
 const controller = join(root, 'scripts', 'controller.mjs');
 const sessionHook = join(root, 'scripts', 'hook-session.mjs');
@@ -164,7 +165,7 @@ test('controls resolve subdirectories to owning workstream and diagnose pinned S
   assert.equal(checkpoint.code, 0, checkpoint.stderr);
   assert.deepEqual((await readState(project, env)).state.partner.thread.checkpoint.acceptedDecisions, ['from child']);
   const diagnosed = JSON.parse((await controlRun(project, env, 'diagnose')).stdout);
-  assert.equal(diagnosed.plugin.version, '1.10.6');
+  assert.equal(diagnosed.plugin.version, currentVersion);
   assert.equal(diagnosed.codex.transport, 'official TypeScript SDK');
   assert.equal(diagnosed.codex.installed, true);
   assert.equal(diagnosed.codex.dependency, '0.153.4');
