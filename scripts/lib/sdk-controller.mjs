@@ -1,3 +1,5 @@
+import { authorshipPolicy } from './authorship.mjs';
+import { captureAuthorship, authorshipWarning, mergeWarnings } from './authorship-audit.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, realpath } from 'node:fs/promises';
@@ -503,7 +505,7 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
     assertSealed(current.state, parent);
     const sealed = current.state.workspace?.seals[parent.id];
     if (sealed?.reading) envelope.fableResponse = `CLAUDE INDEPENDENT ASSESSMENT (sealed before Codex execution):\n${sealed.reading}\n\nCLAUDE RECONCILIATION:\n${envelope.fableResponse}`;
-    envelope.message = `OWNER MESSAGE (verbatim):\n${envelope.ownerMessage}\n\nCODEX PHASE 1 INDEPENDENT READING (stored verbatim):\n${parent.result.finalResponse}\n\nFABLE RESPONSE (owner-visible, verbatim):\n${envelope.fableResponse}`;
+    envelope.message = `OWNER MESSAGE (verbatim):\n${envelope.ownerMessage}\n\nCODEX PHASE 1 INDEPENDENT READING (stored verbatim):\n${parent.result.finalResponse}${parent.result.warning ? `\n\nCONTROLLER WARNING (Phase 1):\n${parent.result.warning}` : ''}\n\nFABLE RESPONSE (owner-visible, verbatim):\n${envelope.fableResponse}`;
   }
   const retainedOwnerMessage = envelope.phase === 'independent' ? envelope.ownerMessage : null;
   const retainedPreviousStatus = envelope.phase === 'independent' ? envelope.previousReplyStatus : null;
@@ -768,7 +770,7 @@ async function finishOperation(root, operationId, status, { finalResponse = null
           // Retain the unused paused grant and verbatim text, not a half-applied
           // transition. Attachment validation runs before any transition effects.
           if (!/attachment|attach:|ENOENT|EACCES/.test(transitionError.message)) throw transitionError;
-          operation.result.warning = 'Pending owner mode transition could not validate its selected images; grant and text retained. Restore the selected file and retry the same mode command.';
+          operation.result.warning = mergeWarnings(operation.result.warning, 'Pending owner mode transition could not validate its selected images; grant and text retained. Restore the selected file and retry the same mode command.');
         }
       }
     }
@@ -818,6 +820,14 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
   let verifiedId = null;
   let expectedId = null;
   let attachmentDelivered = false;
+  let authorshipBefore = null, auditWarning = null, auditFinished = false;
+  const finishAudit = async () => {
+    if (authorshipBefore && !auditFinished) {
+      auditWarning = authorshipWarning(authorshipBefore, await captureAuthorship(authorshipBefore.root));
+      auditFinished = true;
+    }
+    return auditWarning;
+  };
   try {
     const before = await readState(root, env);
     if (!before.ok) throw new Error(`partner state unavailable: ${before.health}`);
@@ -827,6 +837,12 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const config = (await loadEffectiveConfig(before.paths.canonicalRoot, env)).config;
     const profile = resolveSettings(config, before.state, operation.result.relay?.sessionId).values;
     const plan = executionPlan(config, before.state, operation.result.relay?.sessionId);
+    const authorship = authorshipPolicy(profile, plan);
+    // Review turns cannot edit code when the other main partner is the coder.
+    // Document-writing turns retain normal file tools; their file-type boundary
+    // is instructional while this launch uses the workspace-wide sandbox.
+    const sandbox = operation.request.sandbox === 'workspace-write' && authorship.coder !== 'codex' && !authorship.codexDocuments
+      ? 'read-only' : operation.request.sandbox;
     const docsBoth = plan.role === 'docs' && plan.executor === 'both' && operation.request.participants === 'both' && operation.request.route === 'normal';
     const roleExecution = operation.request.phase !== 'independent' && ['codex', 'both'].includes(plan.executor);
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
@@ -834,15 +850,15 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       ...(!expectedId ? { threadSource: 'fabex' } : {}),
       workingDirectory: before.paths.canonicalRoot,
       skipGitRepoCheck: true,
-      sandboxMode: operation.request.sandbox,
+      sandboxMode: sandbox,
       approvalPolicy: 'on-request',
       model: (roleExecution ? plan.model : null) ?? profile['partners.codex.model'] ?? undefined,
       modelReasoningEffort: (roleExecution ? plan.effort : null) ?? profile['partners.codex.effort'] ?? config.models.codex.reasoningEffort,
-      networkAccessEnabled: operation.request.sandbox === 'workspace-write' && config.models.codex.networkAccessEnabled === true,
-      ...(repositoryDirectory ? { additionalDirectories: [repositoryDirectory] } : {})
+      networkAccessEnabled: sandbox === 'workspace-write' && config.models.codex.networkAccessEnabled === true,
+      ...(repositoryDirectory && sandbox === 'workspace-write' ? { additionalDirectories: [repositoryDirectory] } : {})
     };
     const seed = expectedId ? null : buildRecoverySeed(before.state.partner.thread.checkpoint, before.paths.canonicalRoot);
-    let prompt = turnPrompt(operation, operation.request.phase === 'independent' ? null : seed);
+    let prompt = turnPrompt({ ...operation, request: { ...operation.request, sandbox } }, operation.request.phase === 'independent' ? null : seed);
     if (docsBoth) {
       prompt += '\nDOCUMENTATION BOTH: Collaborate on the same handoff or document. Read the existing file, including the other partner’s edits, and update it in place using its topic structure. Each contributes what it knows; coordinate edits one writer at a time, check the whole handoff for accuracy, preserve relevant disagreements with attribution, and never silently delete the other’s content. Do not create a companion document or require separate author sections. Shared documentation is not a sealed strategy assessment: both may read it at any time. Keep the normal independent assessment and reconciliation of the owner’s request separate from writing the document. Claude’s main model stays host controlled; the Documentation model/effort override applies to Codex on working reconciliation turns.';
     }
@@ -852,11 +868,12 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const jobs = await heavyStatus(root, env);
     const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. A wait timeout is not task completion. Preserve required review/relay. Never bypass an occupied queue. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork until complete, interrupted, or genuinely blocked; a review-cycle completion is not task completion.`;
     let initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling + ` Active task assignment: ${JSON.stringify(plan)}. Preserve independent review by both main partners. During Phase 1 do not read Claude's current sealed assessment, chat transcript or scratch notes; use the original message and agreed prior context. Sanctioned status controls omit sealed readings. When the active task is assigned to Claude, do not perform competing task work; review independently. Model/effort role preferences not supported by the executing host must be reported, not silently claimed applied.`;
+    initialInstructions += ` ${authorship.instructions}`;
     if (docsBoth) initialInstructions += ' Shared handoff and documentation files are collaborative sources, not sealed assessments; both partners may read and update them in turn.';
     const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: profile['partners.codex.helperServers'] });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
-      state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox: operation.request.sandbox, instructionProfile: 'continuous-canonical-v1' };
+      state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox, instructionProfile: 'continuous-canonical-v1' };
       const stored = state.operations.find((op) => op.id === operation.id);
       state.workspace.observations ??= {};
       state.workspace.observations.helperServers = codex.fabexHelperServers ?? { requested: profile['partners.codex.helperServers'], verified: false };
@@ -865,6 +882,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
     }, env);
     const outputSchema = reviewSchema(operation.request.phase);
+    if (authorship.coder !== 'codex' && operation.request.route === 'normal') authorshipBefore = await captureAuthorship(before.paths.canonicalRoot);
     const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' ? { outputSchema } : {}) });
     let first = true;
     for await (const event of streamed.events) {
@@ -905,19 +923,21 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const unbounded = review.finalResponse;
     finalResponse = boundedFinalResponse(unbounded);
     if (finalResponse !== unbounded) review.warning = 'Codex answer exceeded the 32 KiB storage bound and was truncated; this is not the complete original answer.';
+    review.warning = mergeWarnings(await finishAudit(), review.warning);
     const model = options.model ? { id: options.model, source: 'requested SDK model', verified: false } : await codexModelSource(config, env);
     const relay = finalResponse ? { label: speakerLabels(null, model.id).codex, sessionId: operation.result.relay?.sessionId ?? '', status: 'pending' } : null;
     await finishOperation(root, operation.id, 'completed', { finalResponse, structured: review.structured, warning: review.warning, relay, threadId: verifiedId, fingerprint, completedAt, version, usage, attachmentDelivered }, env);
     return { status: 'completed', threadId: verifiedId, finalResponse };
   } catch (error) {
+    const warning = await finishAudit();
     const cancelled = signal?.aborted || error?.name === 'AbortError';
     if (cancelled) {
-      await finishOperation(root, operation.id, 'cancelled', { threadId: verifiedId ?? expectedId, attachmentDelivered }, env);
+      await finishOperation(root, operation.id, 'cancelled', { threadId: verifiedId ?? expectedId, attachmentDelivered, warning }, env);
       return { status: 'cancelled', threadId: verifiedId ?? expectedId };
     }
     const missing = expectedId && isMissingSessionError(error);
     const mismatch = error?.code === 'thread-mismatch';
-    await finishOperation(root, operation.id, 'failed', { error: error?.message ?? String(error), threadId: expectedId, requiresRecovery: Boolean(missing || mismatch), attachmentDelivered }, env);
+    await finishOperation(root, operation.id, 'failed', { error: error?.message ?? String(error), threadId: expectedId, requiresRecovery: Boolean(missing || mismatch), attachmentDelivered, warning }, env);
     throw error;
   } finally { await recoverSdkJobs(root, operation.id, env).catch(() => {}); }
 }

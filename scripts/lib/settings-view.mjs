@@ -25,8 +25,11 @@ export async function settingsView(status, env = process.env) {
   const observed = status.observations?.codex;
   if (observed?.observed && observed.requested && observed.observed !== observed.requested) lines.push(`Model differs: Codex requested ${observed.requested} but reported ${observed.observed} (${observed.at}).`);
   lines.push('', 'Who does what');
-  for (const [label, role] of Object.entries(TASKS)) lines.push(`${label}: ${taskValue(status, role, 'executor')}; model: ${taskValue(status, role, 'model')}; effort: ${taskValue(status, role, 'effort')}.`);
-  lines.push('Documentation defaults to Both: Claude and Codex read and update the same handoff or document.', 'With Both, task model and effort choices apply to Codex only; Claude uses its own host controls.', 'Testing changes writing and running preferences together; either partner can still run a check.', 'Both give independent answers using their main models; task model and effort choices apply when Codex does the work.', 'Fabex cannot change the model or effort of Claude’s running chat.',
+  for (const [label, role] of Object.entries(TASKS)) {
+    if (role === 'testing') lines.push(`Testing: ${taskValue(status, 'testRunning', 'executor')} runs tests; test code is written by the Coding AI (${v['roles.implementation.executor'] === 'claude' ? 'Claude' : 'Codex'}); running model: ${taskValue(status, 'testRunning', 'model')}; effort: ${taskValue(status, 'testRunning', 'effort')}.`);
+    else lines.push(`${label}: ${taskValue(status, role, 'executor')}; model: ${taskValue(status, role, 'model')}; effort: ${taskValue(status, role, 'effort')}.`);
+  }
+  lines.push('Documentation defaults to Both: Claude and Codex read and update the same handoff or document.', 'With Both, task model and effort choices apply to Codex only; Claude uses its own host controls.', 'Coding selects the only code editor, including test code; other partners review or run checks.', 'Documentation writers may share text documents, not code. Owner-authorized sub-agent exceptions remain available.', 'Both give independent answers using their main models; task model and effort choices apply when Codex does the work.', 'Fabex cannot change the model or effort of Claude’s running chat.',
     '', `Weekly usage: ${t.effective} (${source(t.source)}); reports account allowance and recorded usage.`,
     `Tracker: ${i.status === 'found' ? 'installed' : i.status}.`);
   if (i.status === 'ambiguous') {

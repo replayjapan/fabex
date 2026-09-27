@@ -11,7 +11,7 @@ Phone uploads (1.8.0): when the host supplies an upload file reference for the c
 
 Relay attachment status accurately: submit lists each path as `selected` (validated and queued). Controller status/result use the same order's zero-based indexes: `submitted` means SDK submission attempted, `delivered` means an image-bearing SDK turn reported completion, and `failed` means delivery was not confirmed (including cancellation). Old records may report null/unknown. Do not say Codex received or reviewed an image merely because it was queued. Paths are erased at terminal state; index/status metadata remains. Report delivery failures without replacing Codex's complete answer.
 
-Both means both on every owner cycle. Questions authorize answers only. Codex performs project file edits by default; an owner-granted session task-role override selects the alternate author. Native permissions remain authoritative.
+Both means both on every owner cycle. Questions authorize answers only. Only the AI selected for Coding edits code (Codex by default). Documentation writers may edit shared text documents; other task assignments do not transfer code ownership. An explicitly owner-authorized sub-agent may edit code within its recorded exception. Native permissions remain authoritative.
 
 ## 1.10 session settings and independent assessments
 
@@ -83,9 +83,9 @@ Use labels from session context or status. Claude session evidence takes precede
 
 ## Executor authority
 
-- Codex performs project edits through the canonical SDK thread.
+- Codex uses the canonical SDK thread for its assigned work. Only the selected Coding AI edits code; documentation writers may share text documents.
 - Claude may perform reviewed owner-authorized Git delivery directly in work mode under host permissions. The verified fabex-operational agent is optional; if used, pass effective models.operational explicitly.
-- Claude coordinates and verifies. Codex retains source authorship. Routine authorized development effects defer to the host after target/effect review, not a general command allowlist. Generated artifacts, installs and reviewed development DB effects are not automatically source authorship. Never use scripts or MCP to evade the role. Destructive resets, production changes and unrelated privilege remain outside scope.
+- Claude coordinates and verifies. Source authorship belongs to the selected Coding AI. Routine authorized development effects defer to the host after target/effect review, not a general command allowlist. Generated artifacts, installs and reviewed development DB effects are not automatically source authorship. Never use scripts or MCP to evade the role. Destructive resets, production changes and unrelated privilege remain outside scope.
 - Only an owner-typed Fabex mode slash command may change route or participants. Claude, Codex, and subagents must not invoke a mode skill or fabricate a grant.
 
 Owner approval does not change the prescribed executor. An exception is valid only when the owner explicitly names the alternate executor. Record it with `control.mjs executor-exception authorize`; clear it with `executor-exception reconcile`. Decision prose never grants permission.
@@ -116,6 +116,25 @@ work; it is not a pair of strategy assessments.
 
 Existing single-writer preferences stay effective. Role assignment covers the
 agreed documentation task; it does not authorize unrelated coding or publication.
+Only the selected Coding AI edits application code, tests, scripts and configuration.
+The documentation exception covers text documents (.md, .markdown, .txt, .rst,
+.adoc and ordinary extensionless README/HANDOFF/PLAN files), not executable MDX,
+agent instruction files or source files under a docs folder. Use normal Edit/Write
+for shared documents; do not bypass the boundary through shell scripts or MCP.
+Testing assignments select responsibility for checks and findings, not permission
+for a second AI to edit test code. Send required code changes to the selected coder.
+Sub-agents get code-editing authority only through an explicit owner-named exception.
+Main partners change authority through Coding settings, not executor exceptions.
+
+Claude's direct edits are checked by the host guard. Codex is read-only when Claude
+is the selected coder, except on Codex document-writing turns. Those turns require
+workspace-write for direct shared-document edits: their document-only boundary is
+instructional, not enforced by the native SDK sandbox. Do not describe it as a
+complete technical lock. The controller compares project files before and after
+non-coding Codex work turns and relays non-document changes as a warning. Include
+that warning for the owner and resolve the changes with the Coding AI before
+delivery; do not automatically revert existing work. Detection is not prevention
+or proof of which process wrote a file. Arbitrary program effects remain a review obligation.
 Native permissions remain authoritative. Claude keeps its host-selected model;
 Codex's independent answer uses its main model and its working reconciliation
 uses any Codex Documentation model/effort override. There is no shared model

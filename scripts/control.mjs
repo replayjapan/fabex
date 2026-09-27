@@ -221,6 +221,7 @@ async function executorException(root, args) {
     const scope = exactOption(args, '--scope');
     const reason = exactOption(args, '--reason');
     if (![executor, scope, reason].every((value) => typeof value === 'string' && value.trim())) throw new ValidationError('executor exception values must be non-empty');
+    if (['claude', 'claude-main', 'codex', 'codex-main', 'main-session'].includes(executor.trim().toLowerCase()) && ['project file edits', 'all edits', 'all writes', 'write', 'edit', 'notebookedit', 'bash'].includes(scope.trim().toLowerCase())) throw new ValidationError('Choose the main code editor through Coding settings. File-editing exceptions are for explicitly authorized sub-agents.');
     await mutate(root, 'executor-exception-authorize', (state) => {
       state.executorException = { executor: executor.trim(), scope: scope.trim(), reason: reason.trim(), authorizedAt: new Date().toISOString() };
     });

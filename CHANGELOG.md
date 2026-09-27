@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.10.6
+
+- Make Coding the source-editing assignment, independent of AI name or task role.
+  Test-writing and documentation assignments no longer grant Claude general source
+  editing. Named sub-agent exceptions remain separate; old main-session file
+  exceptions no longer bypass the Coding selection.
+- Limit the non-coding Claude author's direct document edits to ordinary text
+  documents; reject executable/configuration files, ambiguous targets and links.
+- Pass the same assignment rule to Codex. Use read-only for non-document Codex
+  turns when Claude owns Coding; retain direct shared document editing, with its
+  native workspace-write limitation stated explicitly. Compare project files after
+  non-coding Codex turns and relay non-document changes, including on failure or
+  cancellation. This is detection, not prevention.
+- Clarify Testing as who runs checks; the selected Coding AI writes test code.
+
+
 ## 1.10.5
 
 - Correct Docs Both to collaborative updates of the existing handoff or document.

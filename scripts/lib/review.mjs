@@ -42,7 +42,7 @@ export function validSummary(value) {
 
 export function relayBlock(operation, { full = false } = {}) {
   const answer = operation.result.finalResponse;
-  if (typeof answer !== 'string') return null;
+  if (typeof answer !== 'string') return operation.result.warning ? `Fabex warning: ${operation.result.warning}` : null;
   const label = operation.result.relay?.label ?? 'Codex:';
   const phase = operation.request.phase === 'independent' ? 'Phase 1 — independent' : operation.request.phase === 'reconcile' ? 'Phase 2 — reconciliation/corrections' : 'Answer';
   const fields = operation.result.structured;
@@ -75,9 +75,10 @@ export function missingRelays(state, input) {
   return pending.filter(op => {
     // Only new-format cycles can collapse their independent reading. Legacy records
     // retain their full-answer obligation even when a newer child exists.
-    if (op.request.phase === 'independent' && validSummary(op.result.structured?.ownerSummary)
+    if (op.request.phase === 'independent' && !op.result.warning && validSummary(op.result.structured?.ownerSummary)
       && pending.some(child => child.request.phase === 'reconcile' && child.request.parentOperationId === op.id && validSummary(child.result.structured?.ownerSummary))) return false;
     const required = validSummary(op.result.structured?.ownerSummary) ? op.result.structured.ownerSummary : op.result.finalResponse;
-    return !visible.includes(normalizeRelay(required)) || !visible.includes(op.result.relay.label);
+    return !visible.includes(normalizeRelay(required)) || !visible.includes(op.result.relay.label)
+      || Boolean(op.result.warning && !visible.includes(normalizeRelay(op.result.warning)));
   });
 }

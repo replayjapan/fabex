@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { authorshipPolicy, isDocumentationTarget } from './lib/authorship.mjs';
 import { recordWorkspaceQuestion } from './lib/workspace.mjs';
 import { resolveSettings, executionPlan, ROLE_NAMES } from './lib/workspace-settings.mjs';
 import { basename, dirname, isAbsolute, relative, resolve, join } from 'node:path';
@@ -263,8 +264,10 @@ function executorNames(executor) {
 }
 
 function activeExecutorException(state, toolName, executor) {
+  // Main partners change authority through Coding; exceptions are for named helpers.
+  if (typeof executor?.agentId !== 'string' || !executor.agentId.trim()) return false;
   const active = state.executorException;
-  if (!active || !executorNames(executor).has(active.executor.toLowerCase())) return false;
+  if (!active || ['claude', 'claude-main', 'codex', 'codex-main', 'main-session'].includes(active.executor.toLowerCase()) || !executorNames(executor).has(active.executor.toLowerCase())) return false;
   return ['project file edits', 'all edits', toolName.toLowerCase(), 'all writes'].includes(active.scope.toLowerCase());
 }
 
@@ -647,11 +650,13 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const main = !executor.agentId && !executor.agentType;
   const bound = Boolean(executor.sessionId && executor.sessionId === state.workspace?.activeSessionId && state.workspace?.sessions[executor.sessionId]?.milestoneId === state.workspace?.activeMilestoneId);
   const task = executionPlan(config, state, executor.sessionId);
-  // Both uses the existing Documentation author lane, with serial edits.
-  // Role assignment governs the task, not a filename extension; native permissions still apply.
-  const sharedDocs = task.role === 'docs' && task.executor === 'both' && state.participants === 'both';
-  const claudeEdits = bound && main && (['implementation', 'testWriting', 'docs'].includes(task.role) && task.executor === 'claude'
-    || sharedDocs && !state.controller.activeOperationId && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt);
+  const authorship = authorshipPolicy(profile, task);
+  const documentTarget = isDocumentationTarget(writeTarget(toolInput), paths.canonicalRoot);
+  const claudeEdits = bound && main && authorship.coder === 'claude'
+    && !(task.role === 'docs' && documentTarget && state.controller.activeOperationId);
+  const claudeDocuments = bound && main && authorship.claudeDocuments
+    && !state.controller.activeOperationId && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt;
+  const documentEdit = claudeDocuments && documentTarget;
   const claudeImages = bound && main && profile['roles.imageReview.executor'] === 'claude';
   if (toolName === 'Skill' && /^(?:fabex:)?(?:settings|milestone)$/.test(toolInput.skill ?? '') && (toolInput.args ?? '').trim()) return deny('settings changes require an owner-typed slash command');
   if (toolName.split('__')[0] === 'mcp' && toolName.split('__')[1] === 'codex') return deny('Codex turns must use the canonical Fabex SDK controller');
@@ -730,8 +735,8 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   }
   if (state.route === 'normal') {
     if (protectedOperation) return defer();
-    if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !claudeEdits && !activeExecutorException(state, toolName, executor)) {
-      return deny('normal Fabex mode reserves workstream edits for Codex; every Claude executor requires a structured owner-named exception');
+    if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !claudeEdits && !documentEdit && !activeExecutorException(state, toolName, executor)) {
+      return deny('Only the selected Coding AI may edit code. Documentation writers may edit text documents; other executors need a recorded owner-named exception');
     }
     if (WRITE_TOOLS.has(toolName)) return defer();
     if (READ_TOOLS.has(toolName) || isPluginSkill(toolName, toolInput)) return defer();
@@ -742,7 +747,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       const rule = workCommandDenial(toolInput.command, paths.canonicalRoot, invocationCwd, config);
       if (rule && !rule.startsWith('project source authorship')) return deny(`work policy: ${rule}`);
       if (activeExecutorException(state, toolName, executor)) return defer();
-      if (rule && !claudeEdits) return deny(`work policy: ${rule}; Codex authors project source`);
+      if (rule && !claudeEdits) return deny(`work policy: ${rule}; only the selected Coding AI authors project source`);
       return defer();
     }
     if (toolName.startsWith('mcp__')) {
@@ -753,7 +758,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       }
       if (/(?:^|_)(?:commit|push|publish|deploy|drop_database|reset_database)(?:_|$)/i.test(toolName.split('__').at(-1))) return deny('delivery, deployment or destructive MCP effects are not routine development');
       const target = writeTarget(toolInput);
-      if (/(?:write|edit|create|delete|move|patch)/i.test(toolName.split('__').at(-1)) && target && insideRoot(target, paths.canonicalRoot) && !claudeEdits && !activeExecutorException(state, toolName, executor)) return deny('work policy: project source authorship through MCP remains with Codex');
+      if (/(?:write|edit|create|delete|move|patch)/i.test(toolName.split('__').at(-1)) && (target || /(?:file|filesystem|apply_patch)/i.test(toolName)) && insideRoot(target, paths.canonicalRoot) && !claudeEdits && !documentEdit && !activeExecutorException(state, toolName, executor)) return deny('work policy: only the selected Coding AI may edit code through MCP; documentation access does not grant source edits');
       return defer();
     }
     return defer();

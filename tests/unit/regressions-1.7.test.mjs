@@ -172,7 +172,7 @@ test('1.7 item 4: incompatible permission profiles are documented, not silently 
   const { config } = await fixture(t);
   assert.equal('codexDeniedPaths' in config.guard, false);
   const source = await readFile(join(root, 'scripts/lib/sdk-controller.mjs'), 'utf8');
-  assert.match(source, /sandboxMode: operation.request.sandbox/); assert.doesNotMatch(source, /default_permissions|configOverrides/);
+  assert.match(source, /sandboxMode: sandbox/); assert.doesNotMatch(source, /default_permissions|configOverrides/);
   const readme = await readFile(join(root, 'README.md'), 'utf8');
   assert.match(readme, /Permission-profile compatibility/); assert.match(readme, /do not combine/);
 });

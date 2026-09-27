@@ -23,7 +23,9 @@ test('normal mode preserves Codex edit authority and the structured owner-named 
   assert.equal((await classify(ctx, 'Write', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'deny');
   assert.equal((await classify(ctx, 'Read', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'defer');
   ctx.state.executorException = { executor: 'claude-main', scope: 'project file edits', reason: 'owner named', authorizedAt: new Date().toISOString() };
-  assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'defer');
+  assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'deny', 'legacy main exception cannot bypass Coding');
+  ctx.state.executorException.executor = 'named-helper';
+  assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') }, { agentId: 'named-helper' })).decision, 'defer');
   ctx.state.executorException = null;
   assert.equal((await classify(ctx, 'Edit', { file_path: join(ctx.paths.canonicalRoot, 'x') })).decision, 'deny');
 });

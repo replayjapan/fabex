@@ -25,7 +25,7 @@ changes. You stay in control of modes and settings.
 Fabex is beta software. It adds coordination, not infallibility: review important
 changes, keep backups and expect the host's normal permission checks. VS Code's
 Claude Code integration is the primary workflow; host-specific checks are listed
-in the [acceptance notes](docs/acceptance-1.10.5.md).
+in the [acceptance notes](docs/acceptance-1.10.6.md).
 
 ### Install
 
@@ -56,7 +56,7 @@ is below.
 
 ### What's new?
 
-- **1.10.5:** Documentation defaults to Both updating one shared handoff, including an existing file. No hidden drafts or companion documents. Tabbed settings and account-reported model choices remain. [Details](CHANGELOG.md)
+- **1.10.6:** Coding selects the code editor; Docs Both shares text documents without granting source-editing authority. Codex document-only enforcement has a native sandbox limitation, described below. [Details](CHANGELOG.md)
 - **1.10.3:** the full, simple settings menu: Models, Who does what, and Weekly usage. Milestones follow your plan; the cumulative continuation cutoff is removed. [Details](CHANGELOG.md)
 
 - **1.10.2:** discoverable tracking controls, automatic tracker discovery and milestone preferences. [Details](CHANGELOG.md)
@@ -90,11 +90,22 @@ current choices. Opening it saves nothing. Choose one of three sections:
   no extra document or separate author sections are required.
   Existing explicit writer choices stay intact. Coding and Testing have one writer.
   Testing updates writing and running preferences together; either partner may
-  still run a check. Optional task model/effort choices apply to Codex working
+  run a check, but only the AI selected for Coding edits code, including test code.
+  Documentation writers may edit text documents, not source files. Explicitly
+  authorized sub-agents keep their recorded exceptions. Optional task model/effort choices apply to Codex working
   turns; Claude's main model remains host-controlled. With Both these are separate
   author controls, never a shared model override.
 - **Weekly usage:** On or Off. Fabex finds the separate tracker and offers setup
   help when needed. Reporting frequency stays automatic.
+
+Claude's direct file edits are checked against the Coding and Documentation
+selections. Codex uses a read-only sandbox when Claude owns Coding, except when
+Codex is writing documents. The current SDK integration uses workspace-write for those
+direct document edits, so that document-only boundary relies on instructions and
+review, not a native file-type restriction. After a non-coding Codex work turn,
+Fabex compares project files and relays a warning naming non-document changes.
+This detects changes after execution; it does not prevent them or prove which
+process made them. Neither this rule nor the shell guard proves arbitrary program effects.
 
 Related choices appear as clickable tabs. **Keep current** leaves that choice
 alone. **Apply to** offers **Only this conversation**, **This milestone** (only
@@ -423,7 +434,7 @@ not evicted. Heavy status/diagnose expose a saved lock-recovery warning.
 
 Within owner-authorized work, review actual targets and effects, then perform necessary dependency installs, generated lockfile updates, reviewed development migrations, scoped fixtures, diagnostics, local HTTP checks and server management. No handwritten command exceptions or repeated owner approvals are required for those routine steps. Do not send the owner to a terminal to compensate for Fabex restrictions.
 
-Codex authors project source; Claude coordinates and may perform reviewed operational work through an authorized host executor. Generated development artifacts and database effects are not automatically source authorship. Since 1.9.1, Claude may deliver reviewed authorized Git changes directly under host permissions or use the optional operational agent. Never use scripts or MCP to evade these roles. Destructive resets, production changes and unrelated privileged access remain outside scope.
+The selected Coding AI authors project source; Claude coordinates and may perform reviewed operational work through an authorized host executor. Generated development artifacts and database effects are not automatically source authorship. Since 1.9.1, Claude may deliver reviewed authorized Git changes directly under host permissions or use the optional operational agent. Never use scripts or MCP to evade these roles. Destructive resets, production changes and unrelated privileged access remain outside scope.
 
 The 1.5.0 normal Bash/MCP allowlists and exception-driven repairs exceeded the requested workflow. 1.9.0 removes that general work gate, retaining targeted source-writing, destructive-effect, privilege, deployment and unverified-process-termination checks. A deny list is mechanically looser: it cannot prove arbitrary program effects or identify every production target. Executor review is mandatory, not a new per-command approval ritual. Host permissions remain authoritative.
 
@@ -483,7 +494,7 @@ There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hoo
 | `/askClaude` | ask-once | Claude | none | none |
 | `/askCodex` | ask-once | Codex relay | One owner question | `read-only` |
 
-Questions authorize answers only. Codex performs project edits. Claude coordinates and verifies. Direct source authorship remains Codex’s role. File-tool and recognized shell/MCP source writes are guarded; general work execution uses targeted checks plus mandatory target/effect review, not an allowlist. Main-session or optional verified operational-agent delivery is available in work mode under host permissions; other subagents and read-only routes remain denied.
+Questions authorize answers only. The selected Coding AI performs code edits. Both partners review as required by the selected mode. Documentation writers may share text documents; documentation and test-role preferences do not transfer code-editing authority. File-tool and recognized shell/MCP source writes are guarded; general work execution uses targeted checks plus mandatory target/effect review, not an allowlist. Main-session or optional verified operational-agent delivery is available in work mode under host permissions; other subagents and read-only routes remain denied.
 
 Mode commands are owner-only. Typing a Fabex mode slash command fires `UserPromptExpansion`, which issues a grant bound to that session, project, route, and participant set. Optional same-line or multiline text is captured byte-for-byte in private grant state; it is not interpolated into Fable's expanded prompt. The atomic mode command validates the grant, applies the route, consumes the grant, and only then exposes or submits the owner text. Both-participant text becomes a fresh independent Phase 1; Codex-only text becomes one read-only relay turn; Claude-only text is printed to Fable only after the transition. No text means no empty operation. AI-issued mode skills, missing grants, mismatches, and replays fail closed.
 
@@ -675,7 +686,7 @@ Continuation records open work, required owner action and blockers. Legacy
 
 The complete recovery seed—including title, framing, serialized checkpoint, and stale-repository warning—has a hard 48 KiB UTF-8 limit. Updates that would exceed 49,152 bytes are rejected atomically. `checkpoint capacity` reports counts and bytes, `checkpoint export` is the sanctioned full-text export, `checkpoint replace` and `compact` maintain arrays atomically, and `checkpoint snapshot` updates any subset of the five progress fields in one validated transaction. Tool/notification payloads are rejected. Status exposes only `updatedAt` and bounded warnings, never checkpoint text.
 
-Array replacement and progress snapshots read JSON from guarded quoted heredocs. Executor exceptions use `executor-exception authorize --executor <name> --scope <scope> --reason <text>` and `executor-exception reconcile --outcome <text>`; their structured state remains authoritative even if accepted decisions are compacted.
+Array replacement and progress snapshots read JSON from guarded quoted heredocs. Executor exceptions use `executor-exception authorize --executor <name> --scope <scope> --reason <text>` and `executor-exception reconcile --outcome <text>`; named sub-agent file-editing exceptions survive decision compaction. Main partners change source authorship through Coding settings; old main-session file exceptions no longer bypass that choice.
 
 ## Requirements and dependency installation
 

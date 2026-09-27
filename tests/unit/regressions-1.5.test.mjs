@@ -84,20 +84,21 @@ test('item 3: structured executor exceptions survive decision compaction and pro
   const paths = { canonicalRoot: project };
   state.partner.thread.checkpoint.acceptedDecisions.push('Executor exception authorized: executor=claude-main; scope=project file edits; reason=prose only');
   assert.equal((await classifyToolUse({ toolName: 'Edit', toolInput: { file_path: join(project, 'x') }, state, paths })).decision, 'deny');
-  state.executorException = { executor: 'claude-main', scope: 'project file edits', reason: 'structured', authorizedAt: new Date().toISOString() };
+  state.executorException = { executor: 'named-helper', scope: 'project file edits', reason: 'structured', authorizedAt: new Date().toISOString() };
   state.partner.thread.checkpoint.acceptedDecisions = [];
-  assert.equal((await classifyToolUse({ toolName: 'Edit', toolInput: { file_path: join(project, 'x') }, state, paths })).decision, 'defer');
+  assert.equal((await classifyToolUse({ toolName: 'Edit', toolInput: { file_path: join(project, 'x') }, state, paths, executor: { agentId: 'named-helper' } })).decision, 'defer');
   const initialized = await initializeState(project, env); const legacy = structuredClone(initialized.state);
   legacy.schemaVersion = 5; delete legacy.executorException; delete legacy.partner.thread.checkpoint.updatedAt; delete legacy.partner.thread.checkpoint.fieldUpdatedAt;
   legacy.partner.thread.checkpoint.acceptedDecisions = ['Executor exception authorized: executor=claude-main; scope=project file edits; reason=migrated'];
   await writeFile(initialized.paths.stateFile, JSON.stringify(legacy));
   assert.equal((await readState(project, env)).state.executorException.executor, 'claude-main');
   assert.equal((await run(control, ['executor-exception', 'reconcile', '--outcome', 'migration checked'], { cwd: project, env })).code, 0);
-  assert.equal((await run(control, ['executor-exception', 'authorize', '--executor', 'claude-main', '--scope', 'project file edits', '--reason', 'owner named'], { cwd: project, env })).code, 0);
+  assert.notEqual((await run(control, ['executor-exception', 'authorize', '--executor', 'claude-main', '--scope', 'project file edits', '--reason', 'owner named'], { cwd: project, env })).code, 0);
+  assert.equal((await run(control, ['executor-exception', 'authorize', '--executor', 'named-helper', '--scope', 'project file edits', '--reason', 'owner named'], { cwd: project, env })).code, 0);
   assert.equal((await run(control, ['checkpoint', 'replace', 'decision'], { cwd: project, env, input: '[]' })).code, 0);
   const persisted = (await readState(project, env)).state;
   assert.equal(persisted.executorException.reason, 'owner named');
-  assert.equal((await classifyToolUse({ toolName: 'Edit', toolInput: { file_path: join(project, 'y') }, state: persisted, paths })).decision, 'defer');
+  assert.equal((await classifyToolUse({ toolName: 'Edit', toolInput: { file_path: join(project, 'y') }, state: persisted, paths, executor: { agentId: 'named-helper' } })).decision, 'defer');
 });
 
 test('item 4: abandon then submit then complete clears sticky partner-unavailable state', async (t) => {
