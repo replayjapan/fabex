@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.9
+
+- Add Both to Image review: both partners inspect the selected images through the
+  existing review flow. Codex remains the default; Documentation and code-editing
+  ownership are unchanged. Existing open settings dialogs remain valid.
+
 ## 1.10.8
 
 - Recognize the current SDK “no rollout found” resume failure as well as the

@@ -18,7 +18,7 @@ export function validateSettings(values) {
   for (const [key, value] of Object.entries(values)) {
     if (!Object.hasOwn(SETTING_DEFAULTS, key)) throw new Error(`unknown setting ${key}; choices: ${Object.keys(SETTING_DEFAULTS).join(', ')}`);
     let valid;
-    if (key.endsWith('.executor')) valid = ['claude', 'codex'].includes(value) || key === 'roles.docs.executor' && value === 'both';
+    if (key.endsWith('.executor')) valid = ['claude', 'codex'].includes(value) || ['roles.docs.executor', 'roles.imageReview.executor'].includes(key) && value === 'both';
     else if (key.endsWith('.effort')) valid = value === null || ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent'].includes(value);
     else if (key.endsWith('.model')) valid = value === null || typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value);
     else if (key === 'partners.codex.helperServers') valid = ['inherit', 'off'].includes(value);

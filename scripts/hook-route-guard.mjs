@@ -657,7 +657,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const claudeDocuments = bound && main && authorship.claudeDocuments
     && !state.controller.activeOperationId && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt;
   const documentEdit = claudeDocuments && documentTarget;
-  const claudeImages = bound && main && profile['roles.imageReview.executor'] === 'claude';
+  const claudeImages = bound && main && ['claude', 'both'].includes(profile['roles.imageReview.executor']);
   if (toolName === 'Skill' && /^(?:fabex:)?(?:settings|milestone)$/.test(toolInput.skill ?? '') && (toolInput.args ?? '').trim()) return deny('settings changes require an owner-typed slash command');
   if (toolName.split('__')[0] === 'mcp' && toolName.split('__')[1] === 'codex') return deny('Codex turns must use the canonical Fabex SDK controller');
   if (modeSkillTarget(toolName, toolInput)) return deny('Fabex mode skills are owner-only; invoke the slash command directly to mint a single-use grant');

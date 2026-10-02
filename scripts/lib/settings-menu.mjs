@@ -17,14 +17,15 @@ function choices(values, page, more) {
   return [keep(), reset(), ...selected, ...(values.length > 1 ? [option(more, 'Show the next available choice; keep pending selections.')] : [])];
 }
 export function startSettingsMenu(args, context) {
-  const flow = { version: 2, stage: args ? 'tracking' : 'section', scope: 'session', task: null, draft: args ? { tracking: args.split('=')[1] } : {}, pages: { model: 0, effort: 0 }, context };
+  const flow = { version: 3, stage: args ? 'tracking' : 'section', scope: 'session', task: null, draft: args ? { tracking: args.split('=')[1] } : {}, pages: { model: 0, effort: 0 }, context };
   return { flow, questions: menuQuestions(flow), selection: null, questionToolId: null };
 }
+// Version 2 grants retain their original questions until consumed or expired.
 function screenQuestions(f) {
   const c = f.context;
   if (f.stage === 'section') return [q('Settings', 'What would you like to view or change?', [option('Models', 'Choose Codex’s model and reasoning effort; see Claude controls.'), option('Who does what', 'Coding, Testing, Image review, or Documentation.'), option('Weekly usage', 'Turn optional usage reports on or off.'), option('Cancel', 'Close without saving.')])];
   if (f.stage === 'tasks') return [q('Task', 'Which task would you like to set up?', Object.keys(TASKS).map(label => option(label, label === 'Documentation' ? 'Both is the default: share documents, not code-editing permission.' : label === 'Coding' ? 'Choose the only code editor; owner-authorized sub-agents remain exceptions.' : label === 'Testing' ? 'Choose who handles testing; only the Coding AI edits test code.' : 'Choose who does this task.'))), q('Navigation', 'Open this task or return to the settings sections.', [option('Continue', 'Open the selected task.'), option('Back', 'Return without saving.'), option('Cancel', 'Close without saving.')])];
-  if (f.stage === 'task') return [q('Writer', `${Object.keys(TASKS).find(k => TASKS[k] === f.task)}: who does it? Current: ${keyValue(f, `roles.${f.task}.executor`) ?? c.values['roles.testWriting.executor']}.`, [keep(), option('Claude', 'Claude does the work; independent review remains.'), option('Codex', 'Codex does the work; independent review remains.'), ...(f.task === 'docs' ? [option('Both', 'Both read and update the same document, taking turns and checking accuracy together.')] : [reset()])]), scopeQuestion(f), q('Defaults', 'Use the project or milestone writer instead? Default overrides the Writer tab; model and effort are unchanged.', [keep(), reset()]), actions('Model options', f)];
+  if (f.stage === 'task') return [q('Writer', `${Object.keys(TASKS).find(k => TASKS[k] === f.task)}: who does it? Current: ${keyValue(f, `roles.${f.task}.executor`) ?? c.values['roles.testWriting.executor']}.`, [keep(), option('Claude', 'Claude does the work; independent review remains.'), option('Codex', 'Codex does the work; independent review remains.'), ...((f.task === 'docs' || f.task === 'imageReview' && f.version >= 3) ? [option('Both', f.task === 'docs' ? 'Both read and update the same document, taking turns and checking accuracy together.' : 'Claude and Codex each inspect the same selected images and give their own review.')] : [reset()])]), scopeQuestion(f), q('Defaults', 'Use the project or milestone writer instead? Default overrides the Writer tab; model and effort are unchanged.', [keep(), reset()]), actions('Model options', f)];
   if (f.stage === 'tracking') return [q('Weekly usage', `Weekly usage reports. Current: ${f.draft.tracking ?? c.values['usageTracker.mode']}.`, [keep(), option('On', 'Record and report usage when the tracker is available.'), option('Off', 'No tracking calls or ordinary usage reminders.'), reset()]), scopeQuestion(f), actions(null, f)];
   if (['models', 'taskModels'].includes(f.stage)) {
     const executor = f.stage === 'models' ? 'codex' : keyValue(f, `roles.${f.task}.executor`);
@@ -99,7 +100,7 @@ export function menuSummary(f) {
 export function validateSettingsMenu(g) {
   const f = g.flow;
   if (f && f.version === undefined) return; // Read pre-upgrade grants; applying them requires reopening settings.
-  if (!f || f.version !== 2 || !f.context || !Array.isArray(f.context.models) || f.context.models.length > 200 || !f.draft || typeof f.draft !== 'object' || !['session','milestone','project'].includes(f.scope) || f.scope === 'milestone' && !f.context.milestone || !isDeepStrictEqual(g.questions, menuQuestions(f)) || g.selection !== null && g.selection !== menuSelection(f) || g.questionToolId !== null && typeof g.questionToolId !== 'string') throw new Error('invalid settings menu grant');
+  if (!f || ![2, 3].includes(f.version) || !f.context || !Array.isArray(f.context.models) || f.context.models.length > 200 || !f.draft || typeof f.draft !== 'object' || !['session','milestone','project'].includes(f.scope) || f.scope === 'milestone' && !f.context.milestone || !isDeepStrictEqual(g.questions, menuQuestions(f)) || g.selection !== null && g.selection !== menuSelection(f) || g.questionToolId !== null && typeof g.questionToolId !== 'string') throw new Error('invalid settings menu grant');
 }
 export function typedSettingsReference() {
   return {

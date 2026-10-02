@@ -116,7 +116,9 @@ current choices. Opening it saves nothing. Choose one of three sections:
   Codex account. If the list cannot load, Fabex says so and keeps your settings.
   Claude's model is shown here; use its native `/model` picker and effort control
   for the models available to Claude. Fabex never silently substitutes a model.
-- **Who does what:** Coding, Testing, Image review and Documentation. Documentation
+- **Who does what:** Coding, Testing, Image review and Documentation. Image review
+  offers Claude, Codex, or **Both**: both inspect the same selected images and give
+  their own observations. Codex remains the default. Documentation
   defaults to **Both**: Claude and Codex read and update the same handoff or document,
   taking turns and checking accuracy together. Existing files are updated in place;
   no extra document or separate author sections are required.
@@ -474,7 +476,7 @@ The optional control.mjs dev start/status/logs/restart/stop helper remains avail
 
 Discussion and ask permit read-only searches, transformations, bounded loopback GET/HEAD probes, status/logs and delegated research under the same route guard. Mutations stay denied. Legacy command exceptions are not automatically read-only. Arbitrary database diagnostic scripts without independently read-only execution remain unresolved, rather than silently receiving mutation authority.
 
-Image filenames in Bash/MCP no longer trigger blanket rejection: metadata and capture need not perform visual review. Direct image Read/WebFetch remains denied to Fable. Use Codex or the configured lower-model helper for visual review; host-injected image context remains a platform limitation.
+Image filenames in Bash/MCP no longer trigger blanket rejection: metadata and capture need not perform visual review. Direct image Read/WebFetch remains denied to Fable unless the owner selects Claude or Both for Image review. Use Codex or the configured lower-model helper for visual review; host-injected image context remains a platform limitation.
 
 Schema 14 and the network-off default are unchanged. Diagnose identifies the network default's agent-proposed provenance and unresolved disposition. See [restriction provenance](docs/provenance-1.9.0.md) and [live acceptance](docs/acceptance-1.9.0.md). Real database/install/fixture/server/browser/turn-boundary verification is pending; classifier and mock-process passes alone do not prove restoration.
 
@@ -542,7 +544,7 @@ Claude Code was observed appending an `ARGUMENTS` section itself in 1.6.1, expos
 
 #### Phone uploads through Remote Control
 
-When the host supplies a saved-photo reference, Fable forwards that exact current-message path in Phase 1 `attachments` without opening or describing it. The bare owner message stays verbatim; the host note is not appended to it. No computer path entry should be needed for an ordinary phone-upload message whose host reference is available. Fabex does not scan directories or guess the newest image.
+When the host supplies a saved-photo reference, Fable forwards that exact current-message path in Phase 1 `attachments`; it may also inspect it when Image review includes Claude. The bare owner message stays verbatim; the host note is not appended to it. No computer path entry should be needed for an ordinary phone-upload message whose host reference is available. Fabex does not scan directories or guess the newest image.
 
 The dedicated read allowance is `<Claude config directory>/uploads/<hook-recorded session id>/` only. It honors `CLAUDE_CONFIG_DIR` and otherwise uses the default `.claude` directory. Missing or ambiguous matching prompt evidence, sibling-session uploads, files directly under uploads, and resolved symlink escapes are denied even if a broad scratch root covers them. This does not add the uploads folder to `guard.externalWriteRoots` or grant any write permission. Phase 2 uses its stored Phase 1 session binding. Validation repeats before SDK execution.
 
@@ -556,9 +558,9 @@ Every JSON submission may carry a unique UUID `requestId`. Keep it unchanged whe
 
 Submit reports each supplied path as `selected` after validation and queueing. Validation errors exit nonzero, return `operationId: null` with per-path selection/failure information when available, and queue nothing. Status/result retain only zero-based image indexes in `attachments`: `selected` (queued), `submitted` (SDK submission attempted), `delivered` (that image-bearing turn emitted SDK completion), or `failed` (delivery not confirmed, including cancellation). An attempted submission is not receipt; completion is not proof of an accurate image description. Historical metadata can be null/unknown. Terminal attachment paths are erased; indexed delivery metadata remains. Photo files themselves are not deleted by Fabex.
 
-Both strict JSON phase envelopes accept an optional `attachments` array, for example `"attachments": ["/absolute/workspace/app/review.png"]`. The owner or Fable may supply approved image paths; Phase 1 must not include current Fable annotations or opinions disguised as screenshots. Fable forwards approved paths without reviewing the images itself. Current Fable text belongs only in Phase 2. This semantic boundary remains instructional: path validation cannot prove who authored an image.
+Both strict JSON phase envelopes accept an optional `attachments` array, for example `"attachments": ["/absolute/workspace/app/review.png"]`. The owner or Fable may supply approved image paths; Phase 1 must not include current Fable annotations or opinions disguised as screenshots. Fable forwards approved paths; it reviews the images itself only when Image review includes Claude. Current Fable text belongs only in Phase 2. This semantic boundary remains instructional: path validation cannot prove who authored an image.
 
-**Codex is the default image reviewer.** Fable uses Codex's description, not its own image inspection. The guard denies main-session and non-operational subagent Read and WebFetch image access by extension; Bash/MCP filename metadata and capture are not visual review. Recognized extensions include (PNG, JPG/JPEG, WebP, GIF, BMP, TIF/TIFF, SVG, HEIC/HEIF, AVIF, ICO). Validated controller attachment envelopes remain allowed. This is an extension-based routing boundary, not content inspection: disguised or extensionless files cannot reliably be recognized, and the host may still place an image directly in Fable's context.
+**Codex is the default image reviewer.** Unless the owner selects Claude or Both for Image review, Fable uses Codex's description. With Both, each partner inspects the same selected images and gives its own first assessment. The guard allows the bound main Claude session image access for Claude or Both; other non-operational subagents remain denied Read and WebFetch image access by extension; Bash/MCP filename metadata and capture are not visual review. Recognized extensions include (PNG, JPG/JPEG, WebP, GIF, BMP, TIF/TIFF, SVG, HEIC/HEIF, AVIF, ICO). Validated controller attachment envelopes remain allowed. This is an extension-based routing boundary, not content inspection: disguised or extensionless files cannot reliably be recognized, and the host may still place an image directly in Fable's context.
 
 If an additional description is needed, Fable may explicitly spawn `fabex:fabex-operational` using the effective `models.operational` value, including in discussion and ask. In those read-only routes one supported image-only prompt is `FABEX IMAGE DESCRIPTION ONLY`, a newline, then a JSON object containing only `attachments` (one to six validated image paths). Other bounded read-only delegation is allowed; no mode change or mutation is implied. The helper reads only the selected images and returns a description; it performs no Git delivery, project writes, or shell chores. The model option selects the configured helper, not a guaranteed lower cost or verified served model.
 
