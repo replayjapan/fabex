@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { authorshipPolicy, isDocumentationTarget } from './lib/authorship.mjs';
+import { authorshipPolicy, isDocumentationTarget, isTestTarget } from './lib/authorship.mjs';
 import { recordWorkspaceQuestion, matchesWorkspaceQuestion } from './lib/workspace.mjs';
 import { resolveSettings, executionPlan, ROLE_NAMES } from './lib/workspace-settings.mjs';
 import { basename, dirname, isAbsolute, relative, resolve, join } from 'node:path';
@@ -652,6 +652,10 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const task = executionPlan(config, state, executor.sessionId);
   const authorship = authorshipPolicy(profile, task);
   const documentTarget = isDocumentationTarget(writeTarget(toolInput), paths.canonicalRoot);
+  const testTarget = isTestTarget(writeTarget(toolInput), paths.canonicalRoot);
+  const claudeTestEdits = bound && main && authorship.testWriter === 'claude'
+    && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt && !state.controller.activeOperationId;
+  const testEdit = claudeTestEdits && testTarget;
   const claudeEdits = bound && main && authorship.coder === 'claude'
     && !(task.role === 'docs' && documentTarget && state.controller.activeOperationId);
   const claudeDocuments = bound && main && authorship.claudeDocuments
@@ -736,8 +740,8 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   }
   if (state.route === 'normal') {
     if (protectedOperation) return defer();
-    if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !claudeEdits && !documentEdit && !activeExecutorException(state, toolName, executor)) {
-      return deny('Only the selected Coding AI may edit code. Documentation writers may edit text documents; other executors need a recorded owner-named exception');
+    if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !(claudeEdits && !testTarget) && !testEdit && !documentEdit && !activeExecutorException(state, toolName, executor)) {
+      return deny('Application edits belong to Coding; recognized test files belong to Test Writing. Documentation permits text documents only. Ambiguous targets and helpers require their existing permissions');
     }
     if (WRITE_TOOLS.has(toolName)) return defer();
     if (READ_TOOLS.has(toolName) || isPluginSkill(toolName, toolInput)) return defer();
@@ -748,6 +752,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       const rule = workCommandDenial(toolInput.command, paths.canonicalRoot, invocationCwd, config);
       if (rule && !rule.startsWith('project source authorship')) return deny(`work policy: ${rule}`);
       if (activeExecutorException(state, toolName, executor)) return defer();
+      if (bound && main && authorship.coder !== 'claude' && task.role === 'testWriting' && !allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot)) return deny('Test Writing uses Write/Edit on recognized test files. Select Test Running for assigned execution; application-writing shell commands remain denied.');
       if (rule && !claudeEdits) return deny(`work policy: ${rule}; only the selected Coding AI authors project source`);
       return defer();
     }
@@ -759,7 +764,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       }
       if (/(?:^|_)(?:commit|push|publish|deploy|drop_database|reset_database)(?:_|$)/i.test(toolName.split('__').at(-1))) return deny('delivery, deployment or destructive MCP effects are not routine development');
       const target = writeTarget(toolInput);
-      if (/(?:write|edit|create|delete|move|patch)/i.test(toolName.split('__').at(-1)) && (target || /(?:file|filesystem|apply_patch)/i.test(toolName)) && insideRoot(target, paths.canonicalRoot) && !claudeEdits && !documentEdit && !activeExecutorException(state, toolName, executor)) return deny('work policy: only the selected Coding AI may edit code through MCP; documentation access does not grant source edits');
+      if (/(?:write|edit|create|delete|move|patch)/i.test(toolName.split('__').at(-1)) && (target || /(?:file|filesystem|apply_patch)/i.test(toolName)) && insideRoot(target, paths.canonicalRoot) && !(claudeEdits && (!testTarget || authorship.testWriter === 'claude')) && !documentEdit && !activeExecutorException(state, toolName, executor)) return deny('work policy: Coding owns application files; Test Writing owns recognized tests; ambiguous or mixed MCP targets are not authorized');
       return defer();
     }
     return defer();

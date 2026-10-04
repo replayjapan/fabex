@@ -53,10 +53,10 @@ export async function captureAuthorship(root) {
   return snapshot;
 }
 
-export function authorshipWarning(before, after) {
+export function authorshipWarning(before, after, appliedTests = new Set()) {
   const changed = [...new Set([...before.files.keys(), ...after.files.keys()])].sort().filter(name => {
     const a = before.files.get(name), b = after.files.get(name);
-    return a?.hash !== b?.hash && (a && !a.document || b && !b.document);
+    return !appliedTests.has(name) && a?.hash !== b?.hash && (a && !a.document || b && !b.document);
   });
   if (!changed.length && !before.incomplete && !after.incomplete) return null;
   const shown = [];

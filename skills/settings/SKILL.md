@@ -63,9 +63,7 @@ it. Follow the shared-document workflow in `jointly/SKILL.md`: both partners rea
 and update the existing handoff in turn, each contributing what it knows. No
 private drafts, compulsory author sections or extra companion document are needed.
 Both main partners retain independent review of the owner's request. Only the
-selected Coding AI edits code, including test code and configuration. Documentation
-access does not grant source edits; Testing responsibility does not change the
-Coding selection. Explicit owner-named sub-agent exceptions remain available.
+selected Coding AI edits application code and configuration. Test Writing permits recognized test files only. Test Running is a separate assignment. Documentation access does not grant source edits. Explicit owner-named sub-agent exceptions remain available.
 
 The current main Claude model is host-managed. A requested preference is not
 proof it is applied; verify host `/model` and effort support. Codex partner

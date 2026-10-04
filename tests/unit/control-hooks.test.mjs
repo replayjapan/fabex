@@ -78,7 +78,7 @@ test('session contexts describe SDK queue continuity and mechanical read-only di
   const config = { collaboration: { jointByDefault: true }, display: { replyModeBadge: 'always' } };
   const work = renderSessionContext('normal', 'both', config);
   assert.match(work, /canonical Codex SDK thread/);
-  assert.match(work, /Claude project writes are denied/);
+  assert.match(work, /Coding, Test Writing and Test Running assignments/);
   assert.match(work, /thread\.started/);
   assert.ok(Buffer.byteLength(work, 'utf8') <= 2000);
   const discussion = renderSessionContext('discussion', 'both', config);

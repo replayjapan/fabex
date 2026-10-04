@@ -46,9 +46,9 @@ test('1.10.4 Testing assignments are atomic; only named milestones are offered',
   const current = (await readState(f.root, f.env)).state.workspace.grants[g.id];
   assert.equal(current.questions.length, 4);
   assert.ok(current.questions.every(q => q.header.length <= 12));
-  assert.ok(!current.questions[1].options.some(o => o.label === 'This milestone'));
+  assert.ok(!current.questions[2].options.some(o => o.label === 'This milestone'));
   assert.deepEqual((await workspaceStatus(f.root, f.env)).values, before);
-  await choose(f, g.id, ['Codex','Whole project','Keep current','Apply']);
+  await choose(f, g.id, ['Codex','Codex','Whole project','Apply']);
   await applyWorkspaceGrant(f.root, g.id, f.env);
   for (const r of ['testWriting','testRunning']) assert.equal((await workspaceStatus(f.root, f.env)).values[`roles.${r}.executor`], 'codex');
   await apply(f, 'Named plan stage', 'a', 'milestone');

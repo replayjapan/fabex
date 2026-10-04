@@ -187,7 +187,7 @@ export async function recordWorkspaceSelection(root, input, env = process.env) {
       if (!grant.questions || grant.questionToolId !== input.tool_use_id || grant.sessionId !== input.session_id || grant.expiresAt < Date.now() || grant.selection || !isDeepStrictEqual(input.tool_input?.questions, grant.questions)) continue;
       if (state.workspace.sessions[grant.sessionId]?.milestoneId !== grant.milestoneId) continue;
       if (grant.flow) {
-        if (![2, 3].includes(grant.flow.version)) continue;
+        if (![2, 3, 4].includes(grant.flow.version)) continue;
         const next = advanceSettingsMenu(grant, response.answers);
         if (next) { selected = { grantId: grant.id, ...next }; if (next.cancelled) delete state.workspace.grants[grant.id]; }
         continue;
@@ -233,7 +233,7 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
   const grant = before.state.workspace.grants[grantId];
   if (!grant || grant.expiresAt < Date.now()) throw new Error('owner settings grant missing or expired');
   if (cycleBusy(before.state)) throw new Error('Apply settings between completed review cycles.');
-  if (grant.flow && (![2, 3].includes(grant.flow.version) || !grant.selection)) throw new Error('Choose and apply a setting in the owner dialog, or type an explicit scoped command.');
+  if (grant.flow && (![2, 3, 4].includes(grant.flow.version) || !grant.selection)) throw new Error('Choose and apply a setting in the owner dialog, or type an explicit scoped command.');
   if (grant.options && (!grant.selection || !grant.options.includes(grant.selection))) throw new Error('Choose an offered setting in the owner dialog, or type an explicit scoped settings command.');
   const parsed = grant.command === 'settings' ? parseSettingsArgs(grant.selection ?? grant.args) : null;
   const state = await mutate(root, 'workspace-apply-owner-grant', async state => {

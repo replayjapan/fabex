@@ -1,3 +1,4 @@
+import { testEditInstructions, testEditSchema, splitTestEdits, applyTestEdits } from './test-edits.mjs';
 import { authorshipPolicy } from './authorship.mjs';
 import { captureAuthorship, authorshipWarning, mergeWarnings } from './authorship-audit.mjs';
 import { randomUUID } from 'node:crypto';
@@ -829,11 +830,11 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
   let usage = null;
   let verifiedId = null;
   let expectedId = null;
-  let attachmentDelivered = false;
-  let authorshipBefore = null, auditWarning = null, auditFinished = false;
+  let attachmentDelivered = false, turnCompleted = false;
+  let authorshipBefore = null, auditWarning = null, auditFinished = false, appliedTestFiles = [];
   const finishAudit = async () => {
     if (authorshipBefore && !auditFinished) {
-      auditWarning = authorshipWarning(authorshipBefore, await captureAuthorship(authorshipBefore.root));
+      auditWarning = authorshipWarning(authorshipBefore, await captureAuthorship(authorshipBefore.root), new Set(appliedTestFiles));
       auditFinished = true;
     }
     return auditWarning;
@@ -853,6 +854,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     // is instructional while this launch uses the workspace-wide sandbox.
     const sandbox = operation.request.sandbox === 'workspace-write' && authorship.coder !== 'codex' && !authorship.codexDocuments
       ? 'read-only' : operation.request.sandbox;
+    const limitedTests = authorship.codexTestEdits && operation.request.route === 'normal';
     const docsBoth = plan.role === 'docs' && plan.executor === 'both' && operation.request.participants === 'both' && operation.request.route === 'normal';
     const roleExecution = operation.request.phase !== 'independent' && ['codex', 'both'].includes(plan.executor);
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
@@ -861,7 +863,7 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       workingDirectory: before.paths.canonicalRoot,
       skipGitRepoCheck: true,
       sandboxMode: sandbox,
-      approvalPolicy: 'on-request',
+      approvalPolicy: limitedTests ? 'never' : 'on-request',
       model: (roleExecution ? plan.model : null) ?? profile['partners.codex.model'] ?? undefined,
       modelReasoningEffort: (roleExecution ? plan.effort : null) ?? profile['partners.codex.effort'] ?? config.models.codex.reasoningEffort,
       networkAccessEnabled: sandbox === 'workspace-write' && config.models.codex.networkAccessEnabled === true,
@@ -879,8 +881,9 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
     const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. A wait timeout is not task completion. Preserve required review/relay. Never bypass an occupied queue. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork until complete, interrupted, or genuinely blocked; a review-cycle completion is not task completion.`;
     let initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling + ` Active task assignment: ${JSON.stringify(plan)}. Preserve independent review by both main partners. During Phase 1 do not read Claude's current sealed assessment, chat transcript or scratch notes; use the original message and agreed prior context. Sanctioned status controls omit sealed readings. When the active task is assigned to Claude, do not perform competing task work; review independently. Model/effort role preferences not supported by the executing host must be reported, not silently claimed applied.`;
     initialInstructions += ` ${authorship.instructions}`;
+    if (limitedTests) initialInstructions += ` ${testEditInstructions}`;
     if (docsBoth) initialInstructions += ' Shared handoff and documentation files are collaborative sources, not sealed assessments; both partners may read and update them in turn.';
-    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: profile['partners.codex.helperServers'] });
+    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: limitedTests ? 'off' : profile['partners.codex.helperServers'] });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox, instructionProfile: 'continuous-canonical-v1' };
@@ -891,9 +894,9 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
       if (stored?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK submission'), { name: 'AbortError' });
       stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
     }, env);
-    const outputSchema = reviewSchema(operation.request.phase);
+    const outputSchema = limitedTests ? testEditSchema(operation.request.phase) : reviewSchema(operation.request.phase);
     if (authorship.coder !== 'codex' && operation.request.route === 'normal') authorshipBefore = await captureAuthorship(before.paths.canonicalRoot);
-    const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' ? { outputSchema } : {}) });
+    const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' || limitedTests ? { outputSchema } : {}) });
     let first = true;
     for await (const event of streamed.events) {
       if (typeof event.model === 'string') await mutate(root, 'sdk-model-observation', state => {
@@ -918,22 +921,34 @@ export async function runOperation(root, operation, { createCodex, signal } = {}
         }
       }
       const response = finalResponseFromEvent(event);
-      if (event.type === 'turn.completed') { usage = boundedUsage(event.usage); attachmentDelivered = attachments.length > 0; }
+      if (event.type === 'turn.completed') { turnCompleted = true; usage = boundedUsage(event.usage); attachmentDelivered = attachments.length > 0; }
       if (response !== null) finalResponse = response;
       await recordLifecycle(root, operation.id, lifecycleUpdate(event), env);
       if (event.type === 'turn.failed') throw new Error(event.error?.message ?? 'Codex turn failed');
       if (event.type === 'error') throw new Error(event.message ?? 'Codex stream failed');
     }
     if (!verifiedId) throw new ThreadMismatchError(expectedId, null);
+    if (limitedTests) {
+      const output = splitTestEdits(finalResponse, operation.request.phase);
+      if (!turnCompleted) throw new Error('Test-writing turn ended without completion; no edits applied.');
+      await mutate(root, 'sdk-apply-test-edits', async now => {
+        const sessionId = operation.result.relay?.sessionId;
+        const effective = (await loadEffectiveConfig(root, env)).config;
+        const currentPlan = executionPlan(effective, now, sessionId);
+        if (signal?.aborted || now.route !== 'normal' || now.ownerSelectedMode?.route !== 'normal' || now.modeGrant?.pausedAt || now.controller.activeOperationId !== operation.id || now.operations.find(op => op.id === operation.id)?.lifecycle.cancelRequested || now.workspace.activeSessionId !== sessionId || now.workspace.activeMilestoneId !== before.state.workspace.activeMilestoneId || !authorshipPolicy(resolveSettings(effective, now, sessionId).values, currentPlan).codexTestEdits) throw new Error('Test-writing assignment or operation changed; no test edits applied.');
+        appliedTestFiles = applyTestEdits(before.paths.canonicalRoot, output.edits);
+      }, env);
+      finalResponse = output.review;
+    }
     const fingerprint = await repositoryFingerprint(before.paths.canonicalRoot, config);
     const completedAt = new Date().toISOString();
     const version = await sourceVersion();
-    const review = operation.request.participants === 'both' ? parseReview(finalResponse, operation.request.phase) : { finalResponse, structured: null, warning: null };
+    const review = operation.request.participants === 'both' || limitedTests ? parseReview(finalResponse, operation.request.phase) : { finalResponse, structured: null, warning: null };
 
     const unbounded = review.finalResponse;
     finalResponse = boundedFinalResponse(unbounded);
     if (finalResponse !== unbounded) review.warning = 'Codex answer exceeded the 32 KiB storage bound and was truncated; this is not the complete original answer.';
-    review.warning = mergeWarnings(await finishAudit(), review.warning);
+    review.warning = mergeWarnings(await finishAudit(), review.warning, appliedTestFiles.length ? `Controller applied ${appliedTestFiles.length} validated test-file edit(s). Test execution remains assigned separately.` : null);
     const model = options.model ? { id: options.model, source: 'requested SDK model', verified: false } : await codexModelSource(config, env);
     const relay = finalResponse ? { label: speakerLabels(null, model.id).codex, sessionId: operation.result.relay?.sessionId ?? '', status: 'pending' } : null;
     await finishOperation(root, operation.id, 'completed', { finalResponse, structured: review.structured, warning: review.warning, relay, threadId: verifiedId, fingerprint, completedAt, version, usage, attachmentDelivered }, env);

@@ -57,7 +57,7 @@ test('1.10.6 the Coding selection applies across roles and named helper exceptio
   const f = await fixture(t);
   await settings(f, 'roles.testWriting.executor=claude');
   await selectTaskRole(f.root, 'testWriting', f.env);
-  const edit = { file_path: join(f.root, 'app.test.js') };
+  const edit = { file_path: join(f.root, 'app.js') };
   assert.equal((await classify(f, 'Edit', edit)).decision, 'deny');
   await settings(f, 'roles.implementation.executor=claude');
   assert.equal((await classify(f, 'Edit', edit)).decision, 'defer');
@@ -84,10 +84,10 @@ test('1.10.6 Codex receives assignment-based authority and read-only non-documen
       assert.equal(options.sandboxMode, sandbox);
       assert.match(input, new RegExp(`sandbox=${sandbox}`));
       assert.ok(config.config.developer_instructions.includes(`selected Coding AI: ${coder}`));
-      assert.match(config.config.developer_instructions, /Other task assignments do not transfer code-editing authority/);
+      assert.match(config.config.developer_instructions, /without gaining application-code access/);
       return { events: (async function* () {
         yield { type: 'thread.started', thread_id: 'authority-thread' };
-        yield { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ scopeMismatch: null, parityConcern: null, answer: 'Reviewed.', ownerSummary: 'Reviewed.', evidence: [], assumptions: [], uncertainties: [], recommendation: null, changedFiles: [], tests: [] }) } };
+        yield { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ ...(config.config.developer_instructions.includes('TEST WRITING:') ? { testEdits: [] } : {}), scopeMismatch: null, parityConcern: null, answer: 'Reviewed.', ownerSummary: 'Reviewed.', evidence: [], assumptions: [], uncertainties: [], recommendation: null, changedFiles: [], tests: [] }) } };
         yield { type: 'turn.completed' };
       })() };
     } }) });
@@ -162,15 +162,14 @@ test('1.10.6 controller flags non-coding Codex changes on completion, failure an
   }
 });
 
-test('1.10.6 Testing describes the runner and Coding ownership even when legacy writing preference differs', async t => {
+test('Testing shows the independently selected writer and runner', async t => {
   const f = await fixture(t);
   await settings(f, 'roles.testRunning.executor=claude');
   for (const coder of ['codex', 'claude']) {
     await settings(f, `roles.implementation.executor=${coder}`);
     const view = await settingsView(await workspaceStatus(f.root, f.env, 'a'), f.env);
-    const line = view.split('\n').find(line => line.startsWith('Testing:'));
-    assert.match(line, /Claude .* runs tests/);
-    assert.ok(line.includes(`test code is written by the Coding AI (${coder === 'codex' ? 'Codex' : 'Claude'})`));
-    assert.doesNotMatch(line, /writing:/);
+    assert.match(view, /Test Running: Claude/);
+    assert.match(view, /Test Writing: Codex/);
+    assert.doesNotMatch(view, /test code is written by the Coding AI/);
   }
 });

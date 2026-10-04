@@ -11,7 +11,7 @@ Phone uploads (1.8.0): when the host supplies an upload file reference for the c
 
 Relay attachment status accurately: submit lists each path as `selected` (validated and queued). Controller status/result use the same order's zero-based indexes: `submitted` means SDK submission attempted, `delivered` means an image-bearing SDK turn reported completion, and `failed` means delivery was not confirmed (including cancellation). Old records may report null/unknown. Do not say Codex received or reviewed an image merely because it was queued. Paths are erased at terminal state; index/status metadata remains. Report delivery failures without replacing Codex's complete answer.
 
-Both means both on every owner cycle. Questions authorize answers only. Only the AI selected for Coding edits code (Codex by default). Documentation writers may edit shared text documents; other task assignments do not transfer code ownership. An explicitly owner-authorized sub-agent may edit code within its recorded exception. Native permissions remain authoritative.
+Both means both on every owner cycle. Questions authorize answers only. Coding owns application code (Codex by default); the selected Test Writing agent may edit recognized test files. Documentation writers may edit shared text documents; Test Writing does not grant application-code ownership. An explicitly owner-authorized sub-agent may edit code within its recorded exception. Native permissions remain authoritative.
 
 ## 1.10 session settings and independent assessments
 
@@ -83,9 +83,9 @@ Use labels from session context or status. Claude session evidence takes precede
 
 ## Executor authority
 
-- Codex uses the canonical SDK thread for its assigned work. Only the selected Coding AI edits code; documentation writers may share text documents.
+- Codex uses the canonical SDK thread for its assigned work. Coding owns application code; Test Writing owns recognized test files; documentation writers may share text documents.
 - Claude may perform reviewed owner-authorized Git delivery directly in work mode under host permissions. The verified fabex-operational agent is optional; if used, pass effective models.operational explicitly.
-- Claude coordinates and verifies. Source authorship belongs to the selected Coding AI. Routine authorized development effects defer to the host after target/effect review, not a general command allowlist. Generated artifacts, installs and reviewed development DB effects are not automatically source authorship. Never use scripts or MCP to evade the role. Destructive resets, production changes and unrelated privilege remain outside scope.
+- Claude coordinates and verifies. Application source belongs to Coding; recognized tests belong to Test Writing. Routine authorized development effects defer to the host after target/effect review, not a general command allowlist. Generated artifacts, installs and reviewed development DB effects are not automatically source authorship. Never use scripts or MCP to evade the role. Destructive resets, production changes and unrelated privilege remain outside scope.
 - Only an owner-typed Fabex mode slash command may change route or participants. Claude, Codex, and subagents must not invoke a mode skill or fabricate a grant.
 
 Owner approval does not change the prescribed executor. An exception is valid only when the owner explicitly names the alternate executor. Record it with `control.mjs executor-exception authorize`; clear it with `executor-exception reconcile`. Decision prose never grants permission.
@@ -116,13 +116,12 @@ work; it is not a pair of strategy assessments.
 
 Existing single-writer preferences stay effective. Role assignment covers the
 agreed documentation task; it does not authorize unrelated coding or publication.
-Only the selected Coding AI edits application code, tests, scripts and configuration.
+Coding owns application code, scripts and configuration. Test Writing owns recognized test files, and Test Running independently selects who executes tests.
 The documentation exception covers text documents (.md, .markdown, .txt, .rst,
 .adoc and ordinary extensionless README/HANDOFF/PLAN files), not executable MDX,
 agent instruction files or source files under a docs folder. Use normal Edit/Write
 for shared documents; do not bypass the boundary through shell scripts or MCP.
-Testing assignments select responsibility for checks and findings, not permission
-for a second AI to edit test code. Send required code changes to the selected coder.
+Use ordinary Write/Edit for Claude test edits; shell writers and ambiguous multi-file MCP edits do not gain test-only authority. Codex test-writing turns use read-only tools and a validated testEdits response when Claude owns Coding; the controller applies only recognized test paths after verifying hashes and the current assignment. No helper or renewed owner permission is required. Test Running then handles execution. Mixed application/test files and test runner configuration stay with Coding.
 Sub-agents get code-editing authority only through an explicit owner-named exception.
 Main partners change authority through Coding settings, not executor exceptions.
 

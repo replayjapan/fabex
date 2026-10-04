@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.10
+
+- Restore independent Test Writing and Test Running assignments in settings and
+  instructions. Test writers receive recognized test-file access without general
+  application-code access; split Codex test writers use read-only execution and
+  controller-validated test edits. Existing milestone scopes and old dialogs remain.
+
 ## 1.10.9
 
 - Add Both to Image review: both partners inspect the selected images through the

@@ -123,8 +123,8 @@ current choices. Opening it saves nothing. Choose one of three sections:
   taking turns and checking accuracy together. Existing files are updated in place;
   no extra document or separate author sections are required.
   Existing explicit writer choices stay intact. Coding and Testing have one writer.
-  Testing updates writing and running preferences together; either partner may
-  run a check, but only the AI selected for Coding edits code, including test code.
+  Testing has separate Test Writing and Test Running choices. The test writer can
+  edit recognized test files; application code remains assigned to Coding.
   Documentation writers may edit text documents, not source files. Explicitly
   authorized sub-agents keep their recorded exceptions. Optional task model/effort choices apply to Codex working
   turns; Claude's main model remains host-controlled. With Both these are separate
@@ -132,12 +132,26 @@ current choices. Opening it saves nothing. Choose one of three sections:
 - **Weekly usage:** On or Off. Fabex finds the separate tracker and offers setup
   help when needed. Reporting frequency stays automatic.
 
-Claude's direct file edits are checked against the Coding and Documentation
+Test-only access recognizes source files in `test/`, `tests/`, `__tests__/`,
+`spec/` and `specs/`, plus colocated `.test`/`.spec` files, `test_*.py`,
+`*_test.go` and `*Test`/`*Tests` class files. Links, hidden/tooling paths,
+runner configuration and files mixing application code with tests stay outside
+that grant. An unusual layout is reported as unsupported rather than allowing
+application writes. Milestone overrides still end at that milestone.
+
+When Claude owns Coding and Codex is selected for Test Writing, Codex stays
+read-only with helper servers disabled. It returns bounded `testEdits` with
+project-relative paths, original SHA-256 hashes and replacement text. The controller
+validates the whole batch and current assignment before applying those tests;
+stale content, unrelated paths and cancelled/failed turns are rejected. This is
+not a new helper or owner approval. Tests run afterward under Test Running.
+
+Claude's direct file edits are checked against Coding, Test Writing and Documentation
 selections. Codex uses a read-only sandbox when Claude owns Coding, except when
 Codex is writing documents. The current SDK integration uses workspace-write for those
 direct document edits, so that document-only boundary relies on instructions and
 review, not a native file-type restriction. After a non-coding Codex work turn,
-Fabex compares project files and relays a warning naming non-document changes.
+Fabex compares project files and relays a warning naming unexpected non-document changes; validated controller-applied test edits are excluded.
 This detects changes after execution; it does not prevent them or prove which
 process made them. Neither this rule nor the shell guard proves arbitrary program effects.
 
@@ -191,7 +205,8 @@ uses the main/default model. Replace `MODEL_ID` with the requested model name.
 /fabex:settings partners.codex.model=MODEL_ID scope=session
 /fabex:settings partners.codex.effort=high scope=session
 /fabex:settings roles.implementation.executor=claude scope=session
-/fabex:settings roles.testing.executor=codex scope=milestone
+/fabex:settings roles.testWriting.executor=claude scope=milestone
+/fabex:settings roles.testRunning.executor=codex scope=milestone
 /fabex:settings roles.imageReview.executor=claude scope=session
 /fabex:settings roles.docs.executor=both scope=project
 /fabex:settings roles.testing.model=MODEL_ID scope=milestone
@@ -202,8 +217,7 @@ uses the main/default model. Replace `MODEL_ID` with the requested model name.
 /fabex:settings tracking=inherit scope=milestone
 ```
 
-Each of the four role keys accepts `.executor`, `.model`, or `.effort`; Testing
-sets both underlying testing roles together. Executor values are `claude|codex`.
+Each role key accepts `.executor`, `.model`, or `.effort`. Prefer `roles.testWriting` and `roles.testRunning` independently; the legacy `roles.testing` shortcut intentionally changes both. Testing executor values are `claude|codex`.
 Other existing explicit keys remain available. Stored
 `milestones.newChatMeansNewMilestone` remains readable, but new assignments are
 rejected: milestones follow the plan, not chats. Its old override can be cleared
@@ -528,7 +542,7 @@ There is no MCP compatibility lane. The old `.mcp.json`, MCP adapter, result hoo
 | `/askClaude` | ask-once | Claude | none | none |
 | `/askCodex` | ask-once | Codex relay | One owner question | `read-only` |
 
-Questions authorize answers only. The selected Coding AI performs code edits. Both partners review as required by the selected mode. Documentation writers may share text documents; documentation and test-role preferences do not transfer code-editing authority. File-tool and recognized shell/MCP source writes are guarded; general work execution uses targeted checks plus mandatory target/effect review, not an allowlist. Main-session or optional verified operational-agent delivery is available in work mode under host permissions; other subagents and read-only routes remain denied.
+Questions authorize answers only. Coding owns application edits; Test Writing owns recognized test edits; Test Running selects the executor. Both partners review as required by the selected mode. Documentation writers may share text documents; documentation access never grants source edits, and Test Writing never grants application-code access. File-tool and recognized shell/MCP source writes are guarded; general work execution uses targeted checks plus mandatory target/effect review, not an allowlist. Main-session or optional verified operational-agent delivery is available in work mode under host permissions; other subagents and read-only routes remain denied.
 
 Mode commands are owner-only. Typing a Fabex mode slash command fires `UserPromptExpansion`, which issues a grant bound to that session, project, route, and participant set. Optional same-line or multiline text is captured byte-for-byte in private grant state; it is not interpolated into Fable's expanded prompt. The atomic mode command validates the grant, applies the route, consumes the grant, and only then exposes or submits the owner text. Both-participant text becomes a fresh independent Phase 1; Codex-only text becomes one read-only relay turn; Claude-only text is printed to Fable only after the transition. No text means no empty operation. AI-issued mode skills, missing grants, mismatches, and replays fail closed.
 
