@@ -37,6 +37,17 @@
       "author": {
         "name": "rePlay, LLC"
       }
+    },
+    {
+      "name": "publish-guard",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/replayjapan/publish-guard.git"
+      },
+      "description": "Reviews supported Git and GitHub actions for private information before they are published. Works alone or with Fabex.",
+      "author": {
+        "name": "rePlay, LLC"
+      }
     }
   ]
 }

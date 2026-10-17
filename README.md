@@ -196,7 +196,8 @@ plugin does not enable tracking, and Off stays silent in ordinary replies.
 | All together | Modes sets activity limits; Fabex coordinates partners and assignments; Design Loop guides design research and review. |
 
 Each plugin installs separately. From this marketplace, optional installs are
-`/plugin install modes@fabex` and `/plugin install design-loop@fabex`.
+`/plugin install modes@fabex`, `/plugin install design-loop@fabex` and
+`/plugin install publish-guard@fabex`.
 AI Usage Tracker is also independent and optional.
 
 **Changing from older versions:** Fabex activity commands, including their Claude
@@ -226,6 +227,7 @@ These plugins work together, and each one also works on its own.
 | [Modes](https://github.com/replayjapan/modes) | Choose what your AI may do right now: build, research and plan, or just answer a question. |
 | [Design Loop](https://github.com/replayjapan/design-loop) | Research before UI choices, then review the real page at desktop and phone widths. |
 | [AI Usage Tracker](https://github.com/replayjapan/ai-usage-tracker) | See your remaining Claude and Codex allowance and where a project's tokens went. |
+| [Publish Guard](https://github.com/replayjapan/publish-guard) | Reviews supported Git and GitHub actions for private information before they are published. |
 
 ## FOR AI BROTHREN
 
