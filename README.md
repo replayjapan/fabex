@@ -98,6 +98,11 @@ will be reported rather than silently starting over.
 
 ### What's new?
 
+- **1.13.0:** Common settings show current assignments first. Documentation and
+  image review use a short choice-and-scope dialog. Agreed unfinished work is
+  recorded automatically, and informational notices no longer stop continuation.
+  New instructions are reviewed before work resumes. [Details](CHANGELOG.md)
+
 - **1.12.0:** Work, Discussion and Ask move to the separate Modes plugin; Fabex alone
   follows Claude Code's permissions (plan mode = discussion). Simpler settings that open
   directly. `/fabex:session` for Codex conversations, and a new Claude chat starts a fresh
@@ -133,12 +138,14 @@ data and credentials do not belong in this public repository.
 
 Name a choice to open it directly, for example `/fabex:settings coding`.
 Choose its value and where it applies in one dialog. A bare `/fabex:settings`
-opens a short picker first. Models are optional advanced choices. Current values
-are shown; Default removes the override and uses the broader preference.
+shows current assignments with Documentation, Image review, Coding and More
+buttons. Choose Who (Reviewer for images) and Where, then submit both answers to
+save. More includes Who answers, testing, sessions and advanced model settings.
+Current values are shown; Default removes the override and uses the broader preference.
 
 | Choice | What it controls |
 | --- | --- |
-| `participants` | Both AIs, Claude only or Codex only. |
+| `participants` (Who answers) | Who answers your messages: both AIs, Claude alone, or Codex through Claude. |
 | `coding` | Who edits application code. |
 | `testing` | Test writing and test running, assigned separately. |
 | `images` | Claude, Codex or Both reviewing images. |
@@ -150,8 +157,10 @@ are shown; Default removes the override and uses the broader preference.
 Apply to this conversation, a named project milestone, or the whole project.
 The most specific choice wins. Milestone scope is hidden until you name a plan
 stage. Choose Whole project for preferences that should affect future chats.
-Nothing saves until Apply. Cancel leaves settings unchanged. Participant selection
-does not change coding assignments or permission to edit.
+Common assignment choices save when both answers are submitted. Type Cancel in
+either answer to discard the dialog; incomplete answers save nothing. Advanced
+settings retain an explicit Apply action. Who answers is separate from task
+assignments and permission to edit.
 
 You can also type a single command:
 
@@ -674,8 +683,29 @@ FABEX_PHASE1_7F3A2C91
 The controller stores Codex's Phase 1 answer as the independent reading. Only then may Fable submit its current owner-visible response in a separate Phase 2 operation, linked to the exact Phase 1 UUID:
 
 ```json
-{"phase":"reconcile","phase1OperationId":"00000000-0000-4000-8000-000000000000","ownerMessage":"owner words verbatim","fableResponse":"current owner-visible Fable response verbatim"}
+{"phase":"reconcile","phase1OperationId":"00000000-0000-4000-8000-000000000000","ownerMessage":"owner words verbatim","fableResponse":"current owner-visible Fable response verbatim","workDisposition":{"status":"remaining","remainingWork":["Validate the authorized change."],"reason":"Validation remains."}}
 ```
+
+In work mode, both Claude's envelope and Codex's structured result must include
+`workDisposition`: `status` (`remaining`, `done`, `blocked`, or `owner-decision`),
+`remainingWork` (up to 16 concise authorized steps) and a specific `reason`.
+For question-only turns that do not change task scope, both partners explicitly
+use `workDisposition: null`. This preserves existing work, blockers and owner
+decisions; it does not declare completion or authorize a new task. Discussion and
+ask-only reconciliations do not require task dispositions. An omitted field is
+not the explicit question-only exemption.
+Completion requires an explicitly empty list and `done`; missing bookkeeping
+never means completion. Matching outcomes update the checkpoint atomically;
+newer instructions, changed sessions and cancellation prevent stale rearming.
+A status question preserves the ongoing task unless the owner changes it.
+
+`controller.mjs continue --operation-id <review-id>` endorses the last recorded
+Codex disposition and resumes the same task. If outcomes differ or a disposition
+is missing, Claude supplies `--disposition '<JSON disposition>'` to reconcile the
+corrected outcome on the same cycle. This command never grants a new task or
+bypasses pending owner review. A blocking integrity failure still requires repair.
+Informational permission notices remain visible but do not fail delivery; unknown
+or incomplete-review diagnostics remain blocking.
 
 The controller retrieves the stored independent answer itself; callers cannot substitute it. It verifies the same owner-message digest and rejects missing, failed, cancelled, mismatched, or already-used parents. Later owner cycles may queue, but a completed Phase 1 creates a barrier until its Phase 2 completes or is explicitly abandoned. This preserves owner-cycle FIFO ordering.
 

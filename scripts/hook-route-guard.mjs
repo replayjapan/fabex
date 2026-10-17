@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { reviewSessionMatches } from './lib/work-disposition.mjs';
 import { activityDecision, observeActivity, activitySnapshot, researchAuthorAllowed } from './lib/activity.mjs';
 import { simpleTokens, safeCommandSegments, readOnlyGithub, readOnlySed, readOnlyGit, readOnlyTagArgs } from './vendor/modes/shell.mjs';
 export { readOnlyGithub, readOnlySed };
@@ -21,7 +22,7 @@ import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 import { developmentProbe } from './lib/development.mjs';
 import { beginHeavy, heavyShape, wrappedHeavyInput } from './lib/heavy.mjs';
-import { ownerDeliveries, deliveryObligations, ownsResearchHelper } from './lib/owner-delivery.mjs';
+import { ownerDeliveries, deliveryObligations, ownsResearchHelper, blockingReviewWarning } from './lib/owner-delivery.mjs';
 import { refreshState } from './lib/conversation-refresh.mjs';
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
@@ -192,7 +193,7 @@ export function parseControllerCommand(command, { participants = null } = {}) {
   if (!tokens || basename(tokens[0] ?? '') !== 'node' || resolve(tokens[1] ?? '') !== CONTROLLER_PATH) return null;
   const args = tokens.slice(2);
   if ((args.length === 0 || args.length === 1 && ['--help', 'help'].includes(args[0]))) return { kind: 'controller-help' };
-  if (args[0] === 'continue' && args.length === 3 && args[1] === '--operation-id' && UUID_RE.test(args[2])) return { kind: 'controller-continue', operationId: args[2] };
+  if (args[0] === 'continue' && (args.length === 3 || args.length === 5 && args[3] === '--disposition') && args[1] === '--operation-id' && UUID_RE.test(args[2])) return { kind: 'controller-continue', operationId: args[2] };
   if (args[0] === 'submit' && args.length === 3 && args[1] === '--message' && typeof args[2] === 'string' && args[2].length > 0 && Buffer.byteLength(args[2], 'utf8') <= 192 * 1024) return acceptedSubmit(args[2]);
   if (['status', 'result', 'relay', 'cancel'].includes(args[0]) && args.length === 3 && args[1] === '--operation-id' && UUID_RE.test(args[2])) return { kind: `controller-${args[0]}` };
   if (args[0] === 'relay' && args.length === 4 && args[1] === '--operation-id' && UUID_RE.test(args[2]) && args[3] === '--full') return { kind: 'controller-relay' };
@@ -605,7 +606,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   }
   if (control?.kind === 'workspace-view') return defer();
   const activeSession = executor.sessionId === state.workspace?.activeSessionId;
-  if (controller?.kind === 'controller-continue') return main && activeSession && state.route === 'normal' && state.operations.some(op => op.id === controller.operationId && op.result.relay?.sessionId === executor.sessionId) ? defer() : deny('Continuation requires the originating main session in work mode.');
+  if (controller?.kind === 'controller-continue') return main && state.route === 'normal' && state.operations.some(op => op.id === controller.operationId && op.result.relay?.sessionId === executor.sessionId && reviewSessionMatches(state, op)) ? defer() : deny('Continuation requires the originating main session in work mode.');
   if (control?.kind === 'task-role') return activeSession && main && state.route !== 'recovery-read-only' ? defer() : deny('task role selection requires the bound main session');
   if (control?.kind === 'usage-report') return activeSession ? defer() : deny('bind this session before reading its usage settings');
   if (control?.kind === 'milestone-checkpoint') return main && activeSession && state.route !== 'recovery-read-only' ? defer() : deny('milestone checkpoint requires the bound main session and healthy state');
@@ -720,7 +721,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     const testValidation = toolName === 'Bash' && bound && main && authorship.testRunner === 'claude'
       && checkpoint.continuation.armed && checkpoint.openWork.length > 0 && !checkpoint.blocker && !checkpoint.ownerActionRequired
       && !awaitingReceipt && !state.modeGrant?.pausedAt
-      && state.operations.some(op => op.request.phase === 'reconcile' && op.status === 'completed' && op.result.relay?.sessionId === executor.sessionId && !op.result.warning)
+      && state.operations.some(op => op.request.phase === 'reconcile' && op.status === 'completed' && op.result.relay?.sessionId === executor.sessionId && !blockingReviewWarning(op))
       && !state.operations.some(op => op.status === 'working' && op.request.phase !== 'independent' && op.request.sandbox === 'workspace-write')
       && assignedTestCommand(toolInput.command, paths.canonicalRoot, invocationCwd);
     if ((pending.length || independent || awaitingReceipt) && (WRITE_TOOLS.has(toolName) || toolName === 'Bash' && !control && !controller && !testValidation && !allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot) || toolName.startsWith('mcp__') && !readOnlyMcpTool(toolName, config))) return deny('Owner message assessment, reconciliation and any pending handoff receipt must finish before affected implementation. Continue the existing partner cycle.');

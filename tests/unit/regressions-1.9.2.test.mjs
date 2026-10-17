@@ -13,7 +13,7 @@ import { stopDecision } from '../../scripts/hook-stop.mjs';
 import { classifyToolUse, classifyUnhealthyToolUse } from '../../scripts/hook-route-guard.mjs';
 import { initializeState, readState, updateState } from '../../scripts/lib/state.mjs';
 import { recordOwnerPromptEvidence, recentOwnerPromptEvidence, issueModeGrant, resolveRecordedPrompt, textDigest, closePrompt } from '../../scripts/lib/hook-evidence.mjs';
-import { submitOperation, submissionEnvelope, applyOwnerModeTransition, updateCheckpoint, claimNextOperation, runOperation, reconciliationEnvelope } from '../../scripts/lib/sdk-controller.mjs';
+import { submitOperation, submissionEnvelope, applyOwnerModeTransition, updateCheckpoint, claimNextOperation, runOperation, reconciliationEnvelope, continueOperation } from '../../scripts/lib/sdk-controller.mjs';
 import { sidecar } from '../../scripts/lib/private-store.mjs';
 import { relayBlock } from '../../scripts/lib/review.mjs';
 
@@ -198,6 +198,7 @@ test('1.9.2 host stop errors and unknown responses cannot discard a live task re
 test('1.9.2 recorded mode task runs two complete linked cycles and observes SDK command lifetime', async t => {
   const { root, env } = await fixture(t);
   const text = 'Complete the approved isolated checks';
+  const workDisposition = { status: 'remaining', remainingWork: ['Finish the isolated checks'], reason: 'The authorized checks are unfinished.' };
   const grant = await issueModeGrant(root, { sessionId: 's', route: 'normal', participants: 'both', ownerMessage: text }, env);
   await applyOwnerModeTransition(root, { grantId: grant.id, route: 'normal', participants: 'both' }, env, { spawnRunner: false });
   await updateCheckpoint(root, 'openWork', 'Finish the isolated checks', env);
@@ -208,20 +209,27 @@ test('1.9.2 recorded mode task runs two complete linked cycles and observes SDK 
       assert.equal((await heavyStatus(root, env)).jobs.length, 1);
       yield { type: 'item.completed', item: { type: 'command_execution', id: 'command-1', command: 'node --test example.test.mjs', exit_code: 0 } };
       assert.equal((await heavyStatus(root, env)).jobs.length, 0);
-      yield { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ scopeMismatch: null, parityConcern: null, answer: 'Fixture phase completed.', ownerSummary: 'Fixture checked.', evidence: [], assumptions: [], uncertainties: [], recommendation: null, changedFiles: [], tests: [], ...(phase === 'reconcile' ? { disagreements: [] } : {}) }) } };
+      yield { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ scopeMismatch: null, parityConcern: null, answer: 'Fixture phase completed.', ownerSummary: 'Fixture checked.', evidence: [], assumptions: [], uncertainties: [], recommendation: null, changedFiles: [], tests: [], ...(phase === 'reconcile' ? { disagreements: [], workDisposition } : {}) }) } };
       yield { type: 'turn.completed' };
     })() }) });
     return { startThread: thread, resumeThread: thread };
   } });
+  let lastReviewId;
   for (let cycle = 0; cycle < 2; cycle++) {
     if (cycle) await submitOperation(root, JSON.stringify({ phase: 'independent', ownerMessageStatus: 'recorded', ownerMessageDigest: textDigest(text), previousReplyStatus: 'none', requestId: randomUUID() }), env, { spawnRunner: false });
     const parent = await claimNextOperation(root, env);
     assert.equal(parent.request.ownerMessage, text);
     await runOperation(root, parent, fakeSdk('independent'), env);
-    await submitOperation(root, JSON.stringify({ phase: 'reconcile', phase1OperationId: parent.id, ownerMessageStatus: 'recorded', ownerMessageDigest: textDigest(text), ownerSessionId: 's', fableResponse: 'Fixture agrees.' }), env, { spawnRunner: false });
+    await submitOperation(root, JSON.stringify({ phase: 'reconcile', phase1OperationId: parent.id, ownerMessageStatus: 'recorded', ownerMessageDigest: textDigest(text), ownerSessionId: 's', fableResponse: 'Fixture agrees.', workDisposition }), env, { spawnRunner: false });
     const child = await claimNextOperation(root, env);
+    lastReviewId = child.id;
     await runOperation(root, child, fakeSdk('reconcile'), env);
     const current = await readState(root, env);
+    assert.equal(current.state.workspace.activeSessionId, null, 'legacy mode grants do not register a workspace session');
+    assert.equal(current.state.contextEvidence.ownerPrompt.sessionId, 's');
+    assert.equal(current.state.partner.thread.checkpoint.continuation.ownerDigest, textDigest(text));
+    assert.equal(current.state.partner.thread.checkpoint.continuation.armed, true, 'matching dispositions must rearm this legacy flow');
+    assert.deepEqual(current.state.partner.thread.checkpoint.openWork, workDisposition.remainingWork);
     assert.equal(current.state.partner.thread.checkpoint.continuation.used, 0);
     const last = current.state.operations.find(op => op.id === child.id);
     const result = spawnSync(process.execPath, [join(plugin, 'scripts/hook-stop.mjs')], { cwd: root, env, encoding: 'utf8', input: JSON.stringify({ cwd: root, session_id: 's', last_assistant_message: current.state.operations.filter(op => op.result.relay?.status === 'pending').map(op => relayBlock(op)).join('\n') }) });
@@ -229,7 +237,13 @@ test('1.9.2 recorded mode task runs two complete linked cycles and observes SDK 
     assert.match(JSON.parse(result.stdout).reason, /Continue authorized feasible work/);
     assert.ok(last.result.structured.ownerSummary);
   }
-  assert.equal((await readState(root, env)).state.partner.thread.threadId, 'continued-thread');
+  const continued = await continueOperation(root, lastReviewId, env, { spawnRunner: false });
+  const next = await claimNextOperation(root, env);
+  assert.equal(next.id, continued.operationId);
+  await runOperation(root, next, fakeSdk('reconcile'), env);
+  const final = (await readState(root, env)).state;
+  assert.equal(final.partner.thread.checkpoint.continuation.armed, true);
+  assert.equal(final.partner.thread.threadId, 'continued-thread');
 });
 
 test('1.9.2 schema-15 migration preserves old fields and defers byte-for-byte for a live runner', async t => {

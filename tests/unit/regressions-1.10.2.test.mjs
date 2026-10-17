@@ -90,7 +90,7 @@ test('1.10.2 only exact owner dialog answers select a one-use scoped grant', asy
 });
 test('1.10.2 bare settings offers tracked choices and preserves human/JSON CLI views', async t => {
   const f = await fixture(t), g = await grant(f, '');
-  assert.deepEqual(g.questions[0].options.map(o => o.label), ['Coding', 'Participants', 'Sessions', 'Cancel']);
+  assert.deepEqual(g.questions[0].options.map(o => o.label), ['Documentation', 'Image review', 'Coding', 'More']);
   const invokeHook = (name, input) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [new URL(`../../scripts/${name}`, import.meta.url).pathname], { cwd: f.root, env: f.env, stdio: ['pipe', 'pipe', 'pipe'] }); let out = '', err = '';
     child.stdout.on('data', chunk => out += chunk); child.stderr.on('data', chunk => err += chunk);

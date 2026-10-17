@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { blockingReviewWarning } from './lib/review-warnings.mjs';
+import { partnerNextAction, dispositionProblem } from './lib/work-disposition.mjs';
 import { usageLifecycle } from './lib/usage-integration.mjs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,11 +16,22 @@ export function stopDecision(input, stateResult, deliveries = []) {
   const obligations = deliveryObligations(deliveries, stateResult.state, input.session_id);
   const pending = obligations.filter(item => item.status !== 'failed');
   if (pending.length) {
+    const next = partnerNextAction(stateResult.state);
+    if (next) return { decision: 'block', reason: next };
     const recovery = pending.map(item => {
       const target = stateResult.state.operations.findLast(op => op.request.parentOperationId === item.id)?.id ?? item.id;
+      const operation = stateResult.state.operations.find(op => op.id === target);
+      if (operation && ['queued', 'working'].includes(operation.status)) return `message ${item.id}: controller.mjs wait --operation-id ${target} --timeout 60; then controller.mjs result --operation-id ${target}. Keep waiting after a timeout; do not repeat unchanged status replies`;
       return `message ${item.id}: controller.mjs result --operation-id ${target}; if unrecoverable, control.mjs recover abandon --operation-id ${target}`;
     }).join('; ');
     return { decision: 'block', reason: `Owner messages still require partner assessment and reconciliation: ${pending.map(item => item.id).join(', ')}. Continue their existing cycles; do not submit duplicate owner tasks. If a cycle cannot be reconciled, cancel any queued/working target with controller.mjs cancel --operation-id <target-id> and wait for its outcome, then ${recovery}. Report the interrupted delivery with its message ID and any partial edits; preserve unfinished work, never claim completion.` };
+  }
+  const current = stateResult.state;
+  const latest = current.operations.findLast(op => op.status === 'completed' && op.request.phase === 'reconcile' && op.request.route === 'normal' && op.result.relay?.sessionId === input.session_id);
+  if (latest && (Object.hasOwn(latest.request, 'workDisposition') || latest.result.warning?.includes('Work disposition requires reconciliation:')) && current.route === 'normal' && !current.modeGrant
+    && !hasBlockingPartnerWork(current) && (!current.contextEvidence.ownerPrompt || latest.request.ownerMessageDigest === current.contextEvidence.ownerPrompt.digest)) {
+    const problem = dispositionProblem(latest.request.workDisposition, latest.result.structured?.workDisposition);
+    if (problem && (!blockingReviewWarning(latest) || blockingReviewWarning(latest).split('\n').every(line => line.startsWith('Work disposition requires reconciliation:')))) return { decision: 'block', reason: `${problem} Use controller.mjs continue --operation-id ${latest.id} --disposition '<JSON disposition>' to reconcile the corrected outcome. Preserve remaining work; no new owner go-ahead is required.` };
   }
   const failures = obligations.filter(item => item.status === 'failed');
   if (failures.length && !failures.every(item => (input.last_assistant_message ?? '').includes(item.id) && /unavailable|failed|cancelled|interrupted/i.test(input.last_assistant_message ?? ''))) return { decision: 'block', reason: `Partner delivery failed. Report temporary unavailability or interruption with these message IDs, preserve unfinished work, and do not claim completion: ${failures.map(item => `${item.id}: ${item.error}`).join('; ')}` };
@@ -26,12 +39,12 @@ export function stopDecision(input, stateResult, deliveries = []) {
   if (missing.length) return { decision: 'block', reason: `Relay the missing Codex summaries and labels verbatim: ${missing.map(op => `controller.mjs relay --operation-id ${op.id}`).join('; ')}. Retrieve full records with controller.mjs result --operation-id <id>. A completed Phase 2 summary replaces its new-format Phase 1 display. Preserve unfinished work; do not resubmit these cycles.` };
   // Task completion never waives an in-flight partner-cycle obligation.
   if (input?.stop_hook_active !== true && hasBlockingPartnerWork(stateResult.state)) {
-    return { decision: 'block', reason: 'A Codex partner cycle is queued, working, or awaiting Phase 2. Wait for the active phase, submit its matching Phase 2, or explicitly cancel/recover before stopping.' };
+    return { decision: 'block', reason: partnerNextAction(stateResult.state) };
   }
   const state = stateResult.state, checkpoint = state.partner?.thread?.checkpoint;
   if (!failures.length && state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant && checkpoint?.continuation?.armed && checkpoint.openWork?.length && !checkpoint.ownerActionRequired?.trim() && !checkpoint.blocker?.trim()) {
     const preview = checkpoint.openWork.slice(0, 3).map(item => item.slice(0, 160)).join('; ') + (checkpoint.openWork.length > 3 ? `; and ${checkpoint.openWork.length - 3} more checkpoint items` : '');
-    return { decision: 'block', reason: `Continue authorized feasible work: ${preview}. Do not ask the owner to say continue. Update open-work as steps finish; record a genuine blocker or owner-action-required when necessary.` };
+    return { decision: 'block', reason: `Continue authorized feasible work: ${preview}. ${latest ? `Run controller.mjs continue --operation-id ${latest.id} to continue the reviewed task; supply --disposition JSON when correcting its outcome.` : 'Reconcile an explicit workDisposition for the current task.'} Do not ask the owner to say continue.` };
   }
   if (input?.stop_hook_active === true) return {};
   return {};
@@ -58,7 +71,7 @@ export async function main() {
       if (latest) {
         usage = await usageLifecycle(root, 'checkpoint', latest.id, input.session_id, process.env);
         const cp = stateResult.state.partner.thread.checkpoint;
-        if (!cp.openWork.length && !cp.blocker && !cp.ownerActionRequired) usage = await usageLifecycle(root, 'end', latest.id, input.session_id, process.env);
+        if (latest.result.structured?.workDisposition?.status === 'done' && !dispositionProblem(latest.request.workDisposition, latest.result.structured.workDisposition) && !blockingReviewWarning(latest) && !cp.openWork.length && !cp.blocker && !cp.ownerActionRequired) usage = await usageLifecycle(root, 'end', latest.id, input.session_id, process.env);
       }
     }
     // Collection can advance generation or overlap a new owner message. Recheck

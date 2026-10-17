@@ -1,3 +1,5 @@
+import { blockingReviewWarning } from './review-warnings.mjs';
+import { dispositionSchema, validDisposition } from './work-disposition.mjs';
 // Only owner-facing output is retained here; reasoning and tool events are excluded.
 const text = { type: 'string' };
 const nullableText = { type: ['string', 'null'] };
@@ -6,7 +8,7 @@ export function reviewSchema(phase) {
   const properties = {
     scopeMismatch: nullableText, parityConcern: nullableText, answer: text, ownerSummary: text,
     evidence: texts, assumptions: texts, uncertainties: texts,
-    ...(phase === 'reconcile' ? { disagreements: texts } : {}),
+    ...(phase === 'reconcile' ? { disagreements: texts, workDisposition: { anyOf: [dispositionSchema, { type: 'null' }] } } : {}),
     recommendation: nullableText, changedFiles: texts,
     tests: { type: 'array', items: { type: 'object', additionalProperties: false,
       properties: { command: text, exitCode: { type: ['integer', 'null'] } }, required: ['command', 'exitCode'] } }
@@ -18,6 +20,8 @@ export function validReview(value, phase, { allowLegacy = true } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(reviewSchema(phase).properties).sort();
   if (allowLegacy && !Object.hasOwn(value, 'ownerSummary')) keys.splice(keys.indexOf('ownerSummary'), 1);
+  if (allowLegacy && phase === 'reconcile' && !Object.hasOwn(value, 'workDisposition')) keys.splice(keys.indexOf('workDisposition'), 1);
+  if (Object.hasOwn(value, 'workDisposition') && value.workDisposition !== null && !validDisposition(value.workDisposition)) return false;
   if (Object.keys(value).sort().join(',') !== keys.join(',')) return false;
   if (Object.hasOwn(value, 'ownerSummary') && !validSummary(value.ownerSummary)) return false;
   if (typeof value.answer !== 'string' || !value.answer.trim() || Buffer.byteLength(value.answer) > 32768) return false;
@@ -75,8 +79,8 @@ export function missingRelays(state, input) {
   return pending.filter(op => {
     // Only new-format cycles can collapse their independent reading. Legacy records
     // retain their full-answer obligation even when a newer child exists.
-    if (op.request.phase === 'independent' && !op.result.warning && validSummary(op.result.structured?.ownerSummary)
-      && pending.some(child => child.request.phase === 'reconcile' && child.request.parentOperationId === op.id && validSummary(child.result.structured?.ownerSummary))) return false;
+    if (op.request.phase === 'independent' && !blockingReviewWarning(op) && validSummary(op.result.structured?.ownerSummary)
+      && pending.some(child => child.request.phase === 'reconcile' && child.request.parentOperationId === op.id && validSummary(child.result.structured?.ownerSummary) && (!op.result.warning || normalizeRelay(child.result.warning).includes(normalizeRelay(op.result.warning))))) return false;
     const required = validSummary(op.result.structured?.ownerSummary) ? op.result.structured.ownerSummary : op.result.finalResponse;
     return !visible.includes(normalizeRelay(required)) || !visible.includes(op.result.relay.label)
       || Boolean(op.result.warning && !visible.includes(normalizeRelay(op.result.warning)));

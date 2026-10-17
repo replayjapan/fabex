@@ -11,23 +11,35 @@ const keyPrefix = f => f.stage === 'models' ? 'partners.codex' : `roles.${select
 const keyValue = (f, key) => f.draft[key] === 'inherit' ? null : f.draft[key] ?? f.context.values[key];
 function modelFor(f) { const requested = keyValue(f, `${keyPrefix(f)}.model`) ?? keyValue(f, 'partners.codex.model') ?? f.context.defaultModel; return requested ? f.context.models.find(m => m.id === requested) : f.context.models.find(m => m.isDefault); }
 function scopeQuestion(f) {
-  return q('Apply to', `Where should these changes apply? Current choice: ${f.scope === 'project' ? f.context.project : f.scope === 'milestone' ? f.context.milestone : 'only this conversation'}.`, [keep(), ...Object.entries(scopes).filter(([,v]) => v !== 'milestone' || f.context.milestone).map(([label, value]) => option(label, value === 'project' ? f.context.project : value === 'milestone' ? f.context.milestone : 'Overrides the milestone or project in this conversation.'))]);
+  return q(f.version >= 6 ? 'Where' : 'Apply to', `Where should these changes apply? Current choice: ${f.scope === 'project' ? f.context.project : f.scope === 'milestone' ? f.context.milestone : 'only this conversation'}.`, [keep(), ...Object.entries(scopes).filter(([,v]) => v !== 'milestone' || f.context.milestone).map(([label, value]) => option(label, value === 'project' ? f.context.project : value === 'milestone' ? f.context.milestone : 'Overrides the milestone or project in this conversation.'))]);
 }
 function choices(values, page, more) {
   const selected = values.length ? [option(values[page % values.length], 'Reported by the current Codex account’s model list.')] : [];
   return [keep(), reset(), ...selected, ...(values.length > 1 ? [option(more, 'Show the next available choice; keep pending selections.')] : [])];
 }
-const DIRECT = { coding: ['task','implementation'], testing: ['task','testing'], 'image review': ['task','imageReview'], images: ['task','imageReview'], documentation: ['task','docs'], docs: ['task','docs'], models: ['models'], tracking: ['tracking'], 'weekly usage': ['tracking'], participants: ['participants'], sessions: ['sessions'] };
+const DIRECT = { coding: ['task','implementation'], testing: ['task','testing'], 'image review': ['task','imageReview'], images: ['task','imageReview'], documentation: ['task','docs'], docs: ['task','docs'], models: ['models'], tracking: ['tracking'], 'weekly usage': ['tracking'], participants: ['participants'], 'who answers': ['participants'], sessions: ['sessions'] };
 export function isSettingsMenuRequest(args) { return !args || Object.hasOwn(DIRECT, args.toLowerCase()) || /^tracking=(on|off|inherit)$/.test(args); }
 export function startSettingsMenu(args, context) {
   const target = DIRECT[args.toLowerCase()] ?? (/^tracking=/.test(args) ? ['tracking'] : ['picker']);
-  const flow = { version: 5, stage: target[0], scope: target[0] === 'sessions' ? 'project' : 'session', task: target[1] ?? null,
+  const flow = { version: 6, stage: target[0], scope: target[0] === 'sessions' ? 'project' : 'session', task: target[1] ?? null,
     draft: /^tracking=/.test(args) ? { tracking: args.split('=')[1] } : {}, pages: { model: 0, effort: 0 }, context };
   return { flow, questions: menuQuestions(flow), selection: null, questionToolId: null };
 }
 // Version 2 grants retain their original questions until consumed or expired.
 function screenQuestions(f) {
   const c = f.context;
+  if (f.version >= 6) {
+    const cancelNote = ' Submit both answers to save. Type Cancel in either answer or dismiss without submitting to leave settings unchanged.';
+    if (f.stage === 'picker') return [q('Setting', `Current assignments — Documentation: ${keyValue(f, 'roles.docs.executor')}; Image review: ${keyValue(f, 'roles.imageReview.executor')}; Coding: ${keyValue(f, 'roles.implementation.executor')}. Choose a setting, or type Cancel.`, [option('Documentation', 'Who writes documentation.'), option('Image review', 'Who reviews selected images.'), option('Coding', 'Who edits application code.'), option('More', 'Who answers, testing, sessions and advanced settings.')])];
+    if (f.stage === 'more') return [q('More', 'Choose another setting, or type Back or Cancel.', [option('Who answers', 'Who answers your messages; separate from task assignments.'), option('Testing', 'Separate test writers and test runners.'), option('Sessions', 'Choose fresh or continuing Codex conversations.'), option('Advanced', 'Models, task model options and weekly usage.')])];
+    if (f.stage === 'section') return [q('Advanced', 'Choose an advanced setting.', [option('Models', 'Codex model and effort.'), option('Task models', 'Model and effort for a task.'), option('Weekly usage', 'Optional usage reporting.'), option('Back', 'Return to common settings; type Cancel to close.')])];
+    if (f.stage === 'modelTasks') return [q('Task model', 'Which task? Type Back or Cancel to leave.', Object.entries(TASKS).map(([label]) => option(label, 'Set Codex model and effort for this task.')))];
+    if (f.stage === 'task' && f.task !== 'testing') {
+      const label = Object.keys(TASKS).find(k => TASKS[k] === f.task);
+      return [q(f.task === 'imageReview' ? 'Reviewer' : 'Who', `${label}: current assignment is ${keyValue(f, `roles.${f.task}.executor`)}.${cancelNote}`, [option('Claude', 'Assign this task to Claude.'), option('Codex', 'Assign this task to Codex.'), ...(['docs', 'imageReview'].includes(f.task) ? [option('Both', 'Both partners perform this task.')] : [keep()]), reset()]), scopeQuestion(f)];
+    }
+    if (f.stage === 'participants') return [q('Who answers', `Who answers your messages? Current: ${keyValue(f, 'participants')}. This does not change who writes documents or reviews images.${cancelNote}`, [option('Both', 'Both partners review and answer.'), option('Claude', 'Claude answers alone.'), option('Codex', 'Codex answers through Claude.'), reset()]), scopeQuestion(f)];
+  }
   if (f.stage === 'picker') return [q('Setting', 'Choose a setting. You can also type Testing, Image review, Documentation, Weekly usage, Sessions or Models (advanced).', [option('Coding', 'Who edits application code.'), option('Participants', 'Both partners, Claude only or Codex only.'), option('Sessions', 'Fresh Codex conversation with a new Claude chat.'), option('Cancel', 'Close without changes.')])];
   if (f.stage === 'participants') return [q('Participants', `Who takes part? Current: ${keyValue(f, 'participants')}. Default: Both.`, [keep(), option('Both', 'Claude and Codex review together.'), option('Claude', 'Claude only; coding assignments still apply.'), option('Codex', 'Codex answers; Claude relays.')]), scopeQuestion(f), q('Defaults', 'Restore the inherited participant choice?', [keep(), reset()]), actions(null, f)];
   if (f.stage === 'sessions') return [q('New chats', `Start Codex fresh when a new Claude chat starts? Current: ${keyValue(f, 'sessions.freshOnNewChat') ? 'fresh' : 'continue'}. Default: fresh. Resume and compaction keep the existing chat.`, [keep(), option('Fresh', 'Save the previous conversation and start a new one.'), option('Continue', 'Keep using the existing Codex conversation.'), reset()]), scopeQuestion(f), actions(null, f)];
@@ -60,6 +72,18 @@ export function advanceSettingsMenu(grant, answers) {
   const f = grant.flow, labels = grant.questions.map(question => answers[question.question]);
   if (labels.includes('Cancel')) return { cancelled: true };
   if (!labels.every(label => typeof label === 'string')) return null;
+  if (f.version >= 6 && labels.length === 1) {
+    const label = labels[0];
+    if (label === 'Back') { f.stage = 'picker'; return move(grant); }
+    if (f.stage === 'picker' && label === 'More') { f.stage = 'more'; return move(grant); }
+    if (f.stage === 'more') {
+      if (label === 'Advanced') { f.stage = 'section'; return move(grant); }
+      const target = DIRECT[label.toLowerCase()];
+      if (target) { f.stage = target[0]; f.task = target[1] ?? null; if (f.stage === 'sessions') f.scope = 'project'; return move(grant); }
+    }
+    if (f.stage === 'section' && label === 'Task models') { f.stage = 'modelTasks'; return move(grant); }
+    if (f.stage === 'modelTasks' && TASKS[label]) { f.task = TASKS[label]; f.stage = f.task === 'testing' ? 'testModelRole' : 'taskModels'; return move(grant); }
+  }
   const modelTabs = ['models', 'taskModels'].includes(f.stage);
   const codexChoices = modelTabs && (f.stage === 'models' || keyValue(f, `roles.${selectedTask(f)}.executor`) !== 'claude');
   // Validate effort against the model chosen in this same tabbed submission,
@@ -112,13 +136,13 @@ export function advanceSettingsMenu(grant, answers) {
 }
 export function menuSelection(f) { return Object.entries(f.draft).map(([key,value]) => `${key}=${value === 'inherit' ? 'inherit' : JSON.stringify(value)}`).join(' ') + ` scope=${f.scope}`; }
 export function menuSummary(f) {
-  const labels = { ...Object.fromEntries(['testWriting', 'testRunning'].flatMap(role => ['executor', 'model', 'effort'].map(field => [`roles.${role}.${field}`, `${role === 'testWriting' ? 'Test Writing' : 'Test Running'} ${field === 'executor' ? 'agent' : field}`]))), tracking: 'Weekly usage', 'partners.codex.model': 'Codex model', 'partners.codex.effort': 'Codex effort', ...Object.fromEntries(Object.entries(TASKS).flatMap(([label, role]) => [['executor', 'writer'], ['model', 'Codex model'], ['effort', 'Codex effort']].map(([key, name]) => [`roles.${role}.${key}`, `${label} ${name}`]))) };
+  const labels = { ...Object.fromEntries(['testWriting', 'testRunning'].flatMap(role => ['executor', 'model', 'effort'].map(field => [`roles.${role}.${field}`, `${role === 'testWriting' ? 'Test Writing' : 'Test Running'} ${field === 'executor' ? 'agent' : field}`]))), tracking: 'Weekly usage', 'partners.codex.model': 'Codex model', 'partners.codex.effort': 'Codex effort', ...Object.fromEntries(Object.entries(TASKS).flatMap(([label, role]) => [['executor', role === 'imageReview' ? 'reviewer' : 'writer'], ['model', 'Codex model'], ['effort', 'Codex effort']].map(([key, name]) => [`roles.${role}.${key}`, `${label} ${name}`]))) };
   return Object.entries(f.draft).map(([key,v]) => `${labels[key] ?? key.replace(/^roles\./, '').replace(/\.executor$/, ' writer').replace(/\./g, ' ')}: ${v === 'inherit' ? 'use the broader setting' : v}`).join('; ') + ` — ${f.scope === 'project' ? 'project ' + f.context.project : f.scope === 'milestone' ? 'milestone ' + f.context.milestone : 'only this conversation'}.`;
 }
 export function validateSettingsMenu(g) {
   const f = g.flow;
   if (f && f.version === undefined) return; // Read pre-upgrade grants; applying them requires reopening settings.
-  if (!f || ![2, 3, 4, 5].includes(f.version) || !f.context || !Array.isArray(f.context.models) || f.context.models.length > 200 || !f.draft || typeof f.draft !== 'object' || !['session','milestone','project'].includes(f.scope) || f.scope === 'milestone' && !f.context.milestone || !isDeepStrictEqual(g.questions, menuQuestions(f)) || g.selection !== null && g.selection !== menuSelection(f) || g.questionToolId !== null && typeof g.questionToolId !== 'string') throw new Error('invalid settings menu grant');
+  if (!f || ![2, 3, 4, 5, 6].includes(f.version) || !f.context || !Array.isArray(f.context.models) || f.context.models.length > 200 || !f.draft || typeof f.draft !== 'object' || !['session','milestone','project'].includes(f.scope) || f.scope === 'milestone' && !f.context.milestone || !isDeepStrictEqual(g.questions, menuQuestions(f)) || g.selection !== null && g.selection !== menuSelection(f) || g.questionToolId !== null && typeof g.questionToolId !== 'string') throw new Error('invalid settings menu grant');
 }
 export function typedSettingsReference() {
   return {

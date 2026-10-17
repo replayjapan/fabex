@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { initializeState, readState, updateState } from '../../scripts/lib/state.mjs';
 import { registerSession, sealReading, milestoneHandoff, issueWorkspaceGrant, applyWorkspaceGrant, selectTaskRole } from '../../scripts/lib/workspace.mjs';
 import { captureOwnerDelivery, ownerDeliveries, ownerDeliveryReplay, deliveryObligations, syncOwnerDeliveries, recordResearchHelper } from '../../scripts/lib/owner-delivery.mjs';
-import { dispatchOwnerDeliveries, applyOwnerModeTransition, claimNextOperation, claimRunner, runOperation, submitOperation, reconciliationEnvelope, continueOperation, updateCheckpoint, confirmedCapacityRefusal, cancelOperation, CONTROLLER_PATH } from '../../scripts/lib/sdk-controller.mjs';
+import { dispatchOwnerDeliveries, applyOwnerModeTransition, claimNextOperation, claimRunner, runOperation, submitOperation, reconciliationEnvelope as rawReconciliationEnvelope, continueOperation, updateCheckpoint, confirmedCapacityRefusal, cancelOperation, CONTROLLER_PATH } from '../../scripts/lib/sdk-controller.mjs';
 import { waitForOperation } from '../../scripts/controller.mjs';
 import { readPrivate, changePrivate, sidecar } from '../../scripts/lib/private-store.mjs';
 import { resolveRecordedPrompt, recordOwnerPromptEvidence, recentOwnerPromptEvidence } from '../../scripts/lib/hook-evidence.mjs';
@@ -20,6 +20,8 @@ import { classifyToolUse, classifyUnhealthyToolUse, parseControllerCommand } fro
 import { refreshAtSafePoint, refreshState, acknowledgeHandoff, refreshDue } from '../../scripts/lib/conversation-refresh.mjs';
 import { usageControl, validatedUsageStorage, usageLine, usageLifecycle } from '../../scripts/lib/usage-integration.mjs';
 
+const remainingDisposition = { status: 'remaining', remainingWork: ['Finish approved work.'], reason: 'Authorized work remains.' };
+const reconciliationEnvelope = (id, message, response) => rawReconciliationEnvelope(id, message, response, remainingDisposition);
 async function fixture(t) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'fabex-111-'))), root = join(dir, 'project');
   await mkdir(root);
@@ -29,7 +31,7 @@ async function fixture(t) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { root, env, dir };
 }
-const review = (phase, fields = {}) => ({ scopeMismatch: null, parityConcern: null, answer: 'Reviewed.', ownerSummary: 'Reviewed.', evidence: [], assumptions: [], uncertainties: [], ...(phase === 'reconcile' ? { disagreements: [] } : {}), recommendation: null, changedFiles: [], tests: [], ...fields });
+const review = (phase, fields = {}) => ({ scopeMismatch: null, parityConcern: null, answer: 'Reviewed.', ownerSummary: 'Reviewed.', evidence: [], assumptions: [], uncertainties: [], ...(phase === 'reconcile' ? { disagreements: [], workDisposition: remainingDisposition } : {}), recommendation: null, changedFiles: [], tests: [], ...fields });
 async function capture(f, prompt = 'Implement the approved task.', extra = {}) {
   return captureOwnerDelivery(f.root, { session_id: 'a', prompt, ...extra }, (await readState(f.root, f.env)).state, f.env);
 }
@@ -50,12 +52,12 @@ async function execute(f, phase, inspect = () => {}, fields = {}) {
   assert.ok(operation);
   return runOperation(f.root, operation, { createCodex }, f.env);
 }
-async function cycle(f) {
+async function cycle(f, workDisposition = remainingDisposition) {
   const entry = await capture(f); await dispatch(f);
   await sealReading(f.root, entry.id, 'Independent assessment.', f.env);
   await execute(f, 'independent');
-  const second = await submitOperation(f.root, reconciliationEnvelope(entry.id, entry.text, 'Agreed: implement the authorized task.'), f.env, { spawnRunner: false });
-  await execute(f, 'reconcile');
+  const second = await submitOperation(f.root, rawReconciliationEnvelope(entry.id, entry.text, 'Agreed: implement the authorized task.', workDisposition), f.env, { spawnRunner: false });
+  await execute(f, 'reconcile', () => {}, { review: { workDisposition } });
   return { entry, second };
 }
 async function guard(f, toolName, toolInput, executor = { sessionId: 'a' }) {
@@ -356,7 +358,8 @@ test('diagnose never calls activation verified when registry and source differ',
 test('abandoning an assessed delivery retains a visible failure instead of an impossible assessment obligation', async t => {
   const f = await fixture(t), entry = await capture(f); await dispatch(f); await sealReading(f.root, entry.id, 'Independent.', f.env); await execute(f, 'independent');
   const pending = stopDecision({ session_id: 'a' }, await readState(f.root, f.env), await ownerDeliveries(f.root, f.env));
-  assert.ok(pending.reason.includes(`recover abandon --operation-id ${entry.id}`));
+  assert.ok(pending.reason.includes(`result --operation-id ${entry.id}`));
+  assert.match(pending.reason, /awaits reconciliation/);
   const output = spawnSync(process.execPath, [resolve('scripts/control.mjs'), 'recover', 'abandon', '--operation-id', entry.id], { cwd: f.root, env: f.env, encoding: 'utf8' });
   assert.equal(output.status, 0, output.stderr);
   const current = await readState(f.root, f.env); await syncOwnerDeliveries(f.root, current.state, f.env);
@@ -511,10 +514,10 @@ test('1.11.1 restoration retains work but requires scope revalidation before con
   const state = (await readState(f.root, f.env)).state;
   assert.equal(state.partner.thread.threadId, 'test-thread');
   assert.equal(state.partner.thread.checkpoint.continuation.armed, false);
-  assert.deepEqual(state.partner.thread.checkpoint.openWork, ['Finish approved work.']);
+  assert.deepEqual(state.partner.thread.checkpoint.openWork, ['Finish approved work.', 'Finish approved work.']);
   assert.equal(state.workspace.milestones.legacy.parts.at(-1).threadId, 'brief-thread');
   assert.equal(await refreshState(f.root, f.env), null);
-  await assert.rejects(continueOperation(f.root, second.operationId, f.env, { spawnRunner: false }), /authorized unfinished work/);
+  await assert.rejects(continueOperation(f.root, second.operationId, f.env, { spawnRunner: false }), /not been revalidated/);
   assert.deepEqual((await readState(f.root, f.env)).state, state);
   await assert.rejects(continueOperation(f.root, randomUUID(), f.env, { spawnRunner: false }), /this session’s completed reconciliation/);
   assert.deepEqual((await readState(f.root, f.env)).state, state);
@@ -643,12 +646,15 @@ test('1.11.1 Stop displays usage success or failure without forcing a second rep
     { totals: { codex: { input: 1, cache_read: 0, cache_write: 0, output: 2 } } },
     { available: false, reason: 'collector unavailable' }
   ]) {
-    const f = await fixture(t), { second } = await cycle(f);
+    const f = await fixture(t), { second } = await cycle(f, { status: 'done', remainingWork: [], reason: 'The approved task and checks are complete.' });
     await mkdir(join(f.root, '.fabex'));
     await writeFile(join(f.root, '.fabex/config.json'), JSON.stringify({ schemaVersion: 1, settings: { 'usageTracker.mode': 'on' } }));
     // Seed the real lifecycle cache; Stop must consume it without running an add-on.
     for (const event of ['checkpoint', 'end']) await usageLifecycle(f.root, event, second.operationId, 'a', f.env, async () => result);
     const state = (await readState(f.root, f.env)).state;
+    assert.deepEqual(state.partner.thread.checkpoint.openWork, []);
+    assert.equal(state.partner.thread.checkpoint.continuation.armed, false);
+    assert.equal(state.operations.find(op => op.id === second.operationId).result.structured.workDisposition.status, 'done');
     const reply = state.operations.filter(op => op.result.relay?.status === 'pending').map(op => relayBlock(op)).join('\n');
     const input = { cwd: f.root, session_id: 'a', hook_event_name: 'Stop', last_assistant_message: reply };
     const invoke = body => {

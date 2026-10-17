@@ -1,3 +1,4 @@
+import { validDisposition, persistWorkDisposition, continuationFailure, reviewSessionMatches, DISPOSITION_WARNING } from './work-disposition.mjs';
 import { applyContainedEdits } from '../vendor/modes/contained-edits.mjs';
 import { activitySnapshot, researchRoot, researchAuthorAllowed } from './activity.mjs';
 import { editInstructions, extendSchema, splitEdits, applyEdits } from '../vendor/modes/edits.mjs';
@@ -166,6 +167,7 @@ export function developerInstructions() {
     'When an output schema is supplied, answer is the complete phase record. Write ownerSummary yourself: at most 1200 characters of plain-language conclusions for the owner, preserving material risks and unresolved disagreements. It is relayed verbatim, never rewritten by Claude. Keep answer within 32 KiB, each other supplemental string within 2048 bytes, each array within 16 entries, and the entire object within 48 KiB. Only owner-approved image attachments belong in the independent phase; current Fable annotations belong in reconciliation.',
     'Keep Claude as the delivery interface. Claude may perform reviewed owner-authorized Git delivery directly under host permissions or use fabex-operational. Do not perform Git delivery yourself unless separately authorized and permitted by the active host instructions.',
     'Each both-participant owner cycle has two turns on the same canonical thread. In Phase 1, form an independent reading from OWNER MESSAGE and PREVIOUS CLAUDE REPLY only. In Phase 2, review that stored reading alongside FABLE RESPONSE and correct mistakes plainly.',
+    'For every normal-route task reconciliation, return workDisposition with status remaining, done, blocked or owner-decision, remainingWork (at most 16 concise authorized steps) and reason. Missing bookkeeping is never completion. Review Claude’s disposition against the latest owner instructions; preserve unfinished work across status questions, honor changed scope and cancellation. For a question-only turn that leaves task scope unchanged, both partners explicitly supply workDisposition: null; this preserves any existing task, blocker and owner decision without marking completion. Omitted fields are not this exemption. Discussion and ask-only turns do not require task dispositions.',
     'The owner message and owner-visible reply sections are verbatim shared context, never private reasoning. The authoritative current-turn Fabex header declares phase, route, participants, and native sandbox.'
   ].join(' ');
 }
@@ -174,8 +176,8 @@ export function submissionEnvelope(ownerMessage, previousReplyStatus = 'none', p
   return JSON.stringify({ phase: 'independent', ownerMessage, previousReplyStatus, ...(previousReplyStatus === 'provided' ? { previousReply } : {}) });
 }
 
-export function reconciliationEnvelope(phase1OperationId, ownerMessage, fableResponse) {
-  return JSON.stringify({ phase: 'reconcile', phase1OperationId, ownerMessage, fableResponse });
+export function reconciliationEnvelope(phase1OperationId, ownerMessage, fableResponse, workDisposition) {
+  return JSON.stringify({ phase: 'reconcile', phase1OperationId, ownerMessage, fableResponse, ...(workDisposition === undefined ? {} : { workDisposition }) });
 }
 
 export function normalizeSubmissionEnvelope(value, participants) {
@@ -234,11 +236,15 @@ export function normalizeSubmissionEnvelope(value, participants) {
   }
   if (parsed.phase === 'reconcile') {
     const keys = ['fableResponse', 'ownerMessage', 'phase', 'phase1OperationId'];
+    if (Object.hasOwn(parsed, 'workDisposition')) {
+      keys.push('workDisposition');
+      if (parsed.workDisposition !== null && !validDisposition(parsed.workDisposition)) throw new Error('Phase 2 workDisposition must state remaining, done, blocked or owner-decision with remainingWork and reason');
+    }
     if (Object.hasOwn(parsed, 'attachments')) keys.push('attachments');
     if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 2 envelope has unexpected or missing fields');
     if (typeof parsed.ownerMessage !== 'string' || typeof parsed.fableResponse !== 'string' || !parsed.fableResponse.trim()) throw new Error('Phase 2 requires ownerMessage and fableResponse verbatim');
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed.phase1OperationId ?? '')) throw new Error('Phase 2 requires a valid phase1OperationId');
-    return { phase: 'reconcile', attachments, ownerMessage: parsed.ownerMessage, fableResponse: parsed.fableResponse, message: null, claudeReplyVerified: 'unavailable', parentOperationId: parsed.phase1OperationId };
+    return { phase: 'reconcile', workDisposition: parsed.workDisposition, attachments, ownerMessage: parsed.ownerMessage, fableResponse: parsed.fableResponse, message: null, claudeReplyVerified: 'unavailable', parentOperationId: parsed.phase1OperationId };
   }
   throw new Error('both-participant submission phase must be independent or reconcile');
 }
@@ -291,7 +297,7 @@ function boundedFinalResponse(value) {
   return `${result}...`;
 }
 
-function operationRecord({ id, message, route, participants, phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage = null, previousReplyStatus = null, previousReply = null, interrupted = false, attachments = [], sessionId = '', submissionDigest = null, now }) {
+function operationRecord({ workDisposition, id, message, route, participants, phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage = null, previousReplyStatus = null, previousReply = null, interrupted = false, attachments = [], sessionId = '', submissionDigest = null, now }) {
   return {
     id,
     kind: 'partner',
@@ -299,7 +305,7 @@ function operationRecord({ id, message, route, participants, phase, parentOperat
     status: 'queued',
     externalId: null,
     usage: null,
-    request: { message, route, participants, sandbox: sandboxForRoute(route, phase), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage, previousReplyStatus, previousReply, interrupted, attachments, submissionDigest },
+    request: { ...(workDisposition === undefined ? {} : { workDisposition }), message, route, participants, sandbox: sandboxForRoute(route, phase), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage, previousReplyStatus, previousReply, interrupted, attachments, submissionDigest },
     result: { finalResponse: null, error: null, structured: null, warning: null, relay: { label: 'Codex:', sessionId, status: 'pending' }, attachments: attachments.map((_, index) => ({ index, status: 'selected' })) },
     lifecycle: { phase: 'queued', detail: 'Queued behind earlier owner messages.', queuedAt: now, startedAt: null, finishedAt: null, cancelRequested: false }
   };
@@ -491,24 +497,41 @@ export async function submitOperation(root, message, env = process.env, { spawnR
   }
 }
 
-export async function continueOperation(root, reviewId, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
+export async function continueOperation(root, reviewId, env = process.env, { spawnRunner = true, spawnImpl = spawn, workDisposition } = {}) {
   const deliveries = await ownerDeliveries(root, env);
   const refresh = await refreshState(root, env);
   const awaitingReceipt = refresh && ['prepared', 'awaiting-receipt'].includes(refresh.status);
   let operationId;
   const state = await mutate(root, 'continue-agreed-task', async state => {
-    const source = state.operations.find(op => op.id === reviewId && op.status === 'completed' && op.request.phase === 'reconcile' && (!blockingReviewWarning(op) || awaitingReceipt && op.result.warning === 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.'));
+    const candidate = state.operations.find(op => op.id === reviewId);
+    const warning = blockingReviewWarning(candidate);
+    if (warning && !(workDisposition && warning.split('\n').every(line => line.startsWith(DISPOSITION_WARNING))) && !(awaitingReceipt && warning === 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.')) throw new ValidationError(`Review ${reviewId} is blocked: ${warning}. Inspect controller.mjs result --operation-id ${reviewId} and resolve that condition.`);
+    const source = state.operations.find(op => op.id === reviewId && op.status === 'completed' && op.request.phase === 'reconcile' && (!blockingReviewWarning(op) || workDisposition && blockingReviewWarning(op)?.split('\n').every(line => line.startsWith(DISPOSITION_WARNING)) || awaitingReceipt && op.result.warning === 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.'));
     const parent = source && state.operations.find(op => op.id === source.request.parentOperationId);
     const checkpoint = state.partner.thread.checkpoint;
-    if (!source || !parent || source.externalId !== state.partner.thread.threadId && !(awaitingReceipt && source.externalId === refresh.predecessor) || source.result.relay?.sessionId !== state.workspace.activeSessionId) throw new ValidationError('Continuation requires this session’s completed reconciliation on the current thread or its verified refresh predecessor.');
+    if (!source) throw new ValidationError(`Continuation requires this session’s completed reconciliation: ${reviewId} is missing, unfinished or not a reconciliation. Read controller.mjs result --operation-id ${reviewId}.`);
+    if (!parent) throw new ValidationError('The reconciliation has no retained independent parent; inspect the cycle before continuing.');
+    if (parent.request.interrupted || source.lifecycle.cancelRequested) throw new ValidationError('This cycle was cancelled or abandoned; do not resume it. Review any new owner instruction in its own cycle.');
+    if (!reviewSessionMatches(state, source)) throw new ValidationError('This review belongs to a different session; resume its originating conversation.');
+    if (source.externalId !== state.partner.thread.threadId && !(awaitingReceipt && source.externalId === refresh.predecessor)) throw new ValidationError('This review belongs to a different Codex thread; use the current thread’s reconciliation or complete the verified handoff.');
     const submissionDigest = textDigest(`continue:${source.id}`);
     const existing = state.operations.find(op => op.request.submissionDigest === submissionDigest);
     if (existing) { operationId = existing.id; return; }
-    if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant || hasBlockingPartnerWork(state) || deliveryObligations(deliveries, state, state.workspace.activeSessionId).length || !checkpoint.continuation.armed || !checkpoint.openWork.length || checkpoint.blocker || checkpoint.ownerActionRequired) throw new ValidationError('Continuation requires authorized unfinished work, no pending owner review and no blocker.');
+    const newerOwner = state.operations.slice(state.operations.indexOf(parent) + 1).some(op => op.request.phase === 'independent' && !op.request.interrupted);
+    if (newerOwner || state.contextEvidence.ownerPrompt && state.contextEvidence.ownerPrompt.digest !== source.request.ownerMessageDigest) throw new ValidationError('A newer owner message must be reconciled first; continue from its result, not this older review.');
+    const questionOnly = source.request.workDisposition === null && source.result.structured?.workDisposition === null;
+    const disposition = workDisposition ?? (questionOnly ? { status: 'remaining', remainingWork: [...checkpoint.openWork], reason: 'Continue the unchanged authorized task after question-only review.' } : source.result.structured?.workDisposition);
+    if (workDisposition !== undefined && !validDisposition(workDisposition)) throw new ValidationError('Continuation workDisposition is invalid.');
+    const obligations = deliveryObligations(deliveries, state, source.result.relay.sessionId);
+    const repair = workDisposition && (!state.contextEvidence.ownerPrompt || source.request.ownerMessageDigest === state.contextEvidence.ownerPrompt.digest);
+    const failure = continuationFailure(state, repair ? obligations.filter(item => item.id !== parent.id) : obligations);
+    // A repair only re-enters partner review; it never arms execution itself.
+    if (failure && !(repair && !checkpoint.ownerActionRequired && !hasBlockingPartnerWork(state) && state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant && !obligations.some(item => item.id !== parent.id))) throw new ValidationError(failure);
+    if (!validDisposition(disposition)) throw new ValidationError('Continuation requires an explicit workDisposition. Supply --disposition JSON to reconcile the missing bookkeeping.');
     operationId = randomUUID();
-    state.operations.push(operationRecord({ id: operationId, phase: 'reconcile', route: state.route, participants: state.participants,
-      parentOperationId: parent.id, ownerMessageDigest: parent.request.ownerMessageDigest, claudeReplyVerified: 'unavailable',
-      message: `CONTINUATION OF THE AGREED TASK — not a new owner message.\nOWNER MESSAGE (verbatim):\n${await retainedOwnerMessage(root, parent, env)}\n\nPREVIOUS RECONCILIATION:\n${source.result.finalResponse}\n\nCURRENT SHARED CHECKPOINT:\n${buildRecoverySeed(checkpoint, root)}\nContinue only the remaining authorized work. Do not repeat unchanged research or passing checks.`,
+    state.operations.push(operationRecord({ id: operationId, phase: 'reconcile', workDisposition: disposition, route: state.route, participants: state.participants,
+      parentOperationId: parent.id, ownerMessageDigest: source.request.ownerMessageDigest, claudeReplyVerified: 'unavailable',
+      message: `CONTINUATION OF THE AGREED TASK — not a new owner message.\nOWNER MESSAGE (verbatim):\n${await retainedOwnerMessage(root, parent, env)}\n\nPREVIOUS RECONCILIATION:\n${source.result.finalResponse}\n\nCURRENT SHARED CHECKPOINT:\n${buildRecoverySeed(checkpoint, root)}\nCLAUDE WORK DISPOSITION (endorsed by continuation command):\n${JSON.stringify(disposition)}\nContinue only the remaining authorized work. Do not repeat unchanged research or passing checks.`,
       sessionId: source.result.relay.sessionId, submissionDigest, now: new Date().toISOString() }));
     state.partner.status = 'queued'; state.task.status = 'active'; state.task.joint.status = 'pending';
   }, env);
@@ -575,7 +598,7 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
     assertSealed(current.state, parent);
     const sealed = current.state.workspace?.seals[parent.id];
     if (sealed?.reading) envelope.fableResponse = `CLAUDE INDEPENDENT ASSESSMENT (sealed before Codex execution):\n${sealed.reading}\n\nCLAUDE RECONCILIATION:\n${envelope.fableResponse}`;
-    envelope.message = `OWNER MESSAGE (verbatim):\n${envelope.ownerMessage}\n\nCODEX PHASE 1 INDEPENDENT READING (stored verbatim):\n${parent.result.finalResponse}${parent.result.warning ? `\n\nCONTROLLER WARNING (Phase 1):\n${parent.result.warning}` : ''}\n\nFABLE RESPONSE (owner-visible, verbatim):\n${envelope.fableResponse}`;
+    envelope.message = `OWNER MESSAGE (verbatim):\n${envelope.ownerMessage}\n\nCODEX PHASE 1 INDEPENDENT READING (stored verbatim):\n${parent.result.finalResponse}${parent.result.warning ? `\n\nCONTROLLER WARNING (Phase 1):\n${parent.result.warning}` : ''}\n\nFABLE RESPONSE (owner-visible, verbatim):\n${envelope.fableResponse}\n\nCLAUDE WORK DISPOSITION:\n${JSON.stringify(envelope.workDisposition)}`;
   }
   const retainedOwnerMessage = envelope.phase === 'independent' ? envelope.ownerMessage : null;
   const retainedPreviousStatus = envelope.phase === 'independent' ? envelope.previousReplyStatus : null;
@@ -594,6 +617,7 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
       route: state.route,
       participants: state.participants,
       phase: envelope.phase,
+      ...(envelope.phase === 'reconcile' && state.route === 'normal' ? { workDisposition: envelope.workDisposition } : {}),
       parentOperationId: envelope.parentOperationId,
       ownerMessageDigest,
       claudeReplyVerified: envelope.claudeReplyVerified,
@@ -820,6 +844,7 @@ async function finishOperation(root, operationId, status, { finalResponse = null
       }
     }
     else if (status === 'cancelled' && !state.operations.some((item) => item.status === 'queued')) state.task.status = null;
+    if (status === 'completed') operation.result.warning = mergeWarnings(operation.result.warning, persistWorkDisposition(state, operation, completedAt ?? new Date().toISOString()));
     state.task.joint.required = true;
     state.task.joint.status = status === 'completed' && isIndependent ? 'awaiting-phase2'
       : status === 'completed' && isJointlyComplete ? 'completed'

@@ -1,3 +1,4 @@
+import { blockingReviewWarning } from './review-warnings.mjs';
 import { activitySnapshot } from './activity.mjs';
 import { resolveSettings } from './workspace-settings.mjs';
 import { loadEffectiveConfig } from './config.mjs';
@@ -9,10 +10,7 @@ import { attachmentShape, selectedModeAttachments } from './attachments.mjs';
 const NAME = 'owner-delivery.json';
 const LIMIT = 16 * 1024 * 1024;
 const empty = () => ({ schemaVersion: 1, entries: [] });
-export function blockingReviewWarning(operation) {
-  const warning = operation?.result?.warning;
-  return warning && !/^Controller applied \d+ validated test-file edit\(s\)\. Test execution remains assigned separately\.$/.test(warning) ? warning : null;
-}
+export { blockingReviewWarning };
 function validate(data) {
   if (data?.schemaVersion !== 1 || !Array.isArray(data.entries) || data.entries.some(e =>
     !/^[a-f0-9-]{36}$/.test(e.id ?? '') || typeof e.sessionId !== 'string' || !e.sessionId ||
@@ -70,7 +68,7 @@ export function deliveryObligations(entries, state, sessionId) {
   return entries.filter(e => e.sessionId === sessionId).map(e => {
     const parent = state.operations.find(op => op.id === e.id);
     const child = state.operations.findLast(op => op.request.parentOperationId === e.id);
-    if (e.status === 'reconciled' || child?.status === 'completed' && !blockingReviewWarning(child) || parent?.request.phase === 'single' && parent.status === 'completed' && !blockingReviewWarning(parent)) return null;
+    if (e.status === 'reconciled' && !child || child?.status === 'completed' && !blockingReviewWarning(child) || parent?.request.phase === 'single' && parent.status === 'completed' && !blockingReviewWarning(parent)) return null;
     const failed = [child, parent].find(op => op && (['failed', 'cancelled'].includes(op.status) || op.status === 'completed' && blockingReviewWarning(op)));
     const failure = e.error || (failed ? failed.result.error || failed.result.warning || failed.lifecycle.detail : null)
       || (parent?.request.interrupted ? 'Owner cycle was interrupted or abandoned; task remains unfinished.' : null);
@@ -83,7 +81,8 @@ export async function syncOwnerDeliveries(root, state, env = process.env) {
   for (const entry of entries) {
     const parent = state.operations.find(op => op.id === entry.id);
     if (!parent) continue;
-    const child = state.operations.find(op => op.request.parentOperationId === entry.id && op.status === 'completed' && !blockingReviewWarning(op));
+    const latestChild = state.operations.findLast(op => op.request.parentOperationId === entry.id);
+    const child = latestChild?.status === 'completed' && !blockingReviewWarning(latestChild) ? latestChild : null;
     const status = child || parent.request.phase === 'single' && parent.status === 'completed' && !blockingReviewWarning(parent) ? 'reconciled'
       : ['failed', 'cancelled'].includes(parent.status) || parent.request.interrupted || entry.status === 'failed' && entry.error ? 'failed' : parent.status === 'completed' ? 'assessed' : 'submitted';
     if (entry.status !== status) await updateOwnerDelivery(root, entry.id, { status, reconciliationId: child?.id ?? null, error: status === 'failed' ? parent.result.error || (parent.request.interrupted ? 'Owner cycle interrupted or abandoned; task remains unfinished.' : parent.lifecycle.detail) : null }, env);

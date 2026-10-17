@@ -26,7 +26,7 @@ function option(args, name) {
 
 const terminal = (status) => ['completed', 'failed', 'cancelled'].includes(status);
 const boundedStatus = (result) => ({ id: result.id, status: result.status, externalId: result.externalId, phase: result.request?.phase, parentOperationId: result.request?.parentOperationId, lifecycle: result.lifecycle, usage: result.usage ?? null, attachments: result.result?.attachments ?? null, ...(result.observationHealth ? { observationHealth: result.observationHealth } : {}) });
-const USAGE = 'Usage: controller.mjs submit < envelope.json | continue|status|result|cancel --operation-id <uuid> | relay --operation-id <uuid> [--full] | wait --operation-id <uuid> --timeout <1..120>';
+const USAGE = 'Usage: controller.mjs submit < envelope.json | continue --operation-id <uuid> [--disposition JSON] | status|result|cancel --operation-id <uuid> | relay --operation-id <uuid> [--full] | wait --operation-id <uuid> --timeout <1..120>';
 
 export async function waitForOperation(root, operationId, timeoutSeconds, env = process.env, pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds))) {
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > 120) throw new ValidationError('wait timeout must be positive and at most 120 seconds');
@@ -98,8 +98,8 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     return runQueue(resolve(args[1]), env);
   }
   const root = await rootFromControlCwd(cwd, env);
-  if (command === 'continue' && args.length === 2 && args[0] === '--operation-id') {
-    process.stdout.write(JSON.stringify(await continueOperation(root, assertUuid(args[1]), env)) + '\n'); return;
+  if (command === 'continue' && (args.length === 2 || args.length === 4 && args[2] === '--disposition') && args[0] === '--operation-id') {
+    process.stdout.write(JSON.stringify(await continueOperation(root, assertUuid(args[1]), env, args.length === 4 ? { workDisposition: JSON.parse(args[3]) } : {})) + '\n'); return;
   }
   if (command === 'seal' && args.length === 2 && args[0] === '--operation-id') {
     const id = assertUuid(args[1]);

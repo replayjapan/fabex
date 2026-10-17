@@ -15,22 +15,25 @@ An owner-typed `/fabex:settings` starts a five-minute grant for one atomic set o
 changes. The expansion hook supplies exact `AskUserQuestion` questions. Pass the
 whole questions array in one tool call: the host displays related questions as
 clickable tabs. Never split them into separate calls or ask the owner to type
-Back. Every screen has visible Cancel; Back is a button on follow-up screens.
+Back. Common assignment dialogs show Who (Reviewer for images) and Where.
+Their text explains that submitting both answers saves; typing Cancel in either
+answer discards the dialog. Incomplete answers save nothing. Never assume Escape
+behavior without verifying the host. Advanced dialogs retain Apply/Back/Cancel.
 Keep current leaves the existing/pending choice alone, even if scope changes.
 No milestone scope is offered until the owner has named a stage of the plan.
 
 The PostToolUse hook validates every answer and supplies the next screen or the
 final apply command. More models/effort levels pages through the live catalog,
-keeping pending choices. A named request (coding, testing, images, docs, participants, sessions, tracking or models) opens its choice and scope together; a bare request gets one short picker first. Model
-options opens model/effort tabs for that task. Claude uses its host controls;
+keeping pending choices. A named request (coding, testing, images, docs, participants, sessions, tracking or models) opens its choice and scope together; a bare request gets one short picker first. More → Advanced → Task models opens model/effort tabs for a task. Claude uses its host controls;
 with Both, the editable task model/effort are explicitly Codex's, never shared.
-Navigation displays any pending changes. Apply saves them together; Cancel or
+Common assignments save after the complete recorded submission; advanced
+Navigation displays pending changes and Apply saves them together. Cancel or
 expiry saves nothing. Do not invent answers, options, or a partial apply. Apply
 only the hook-confirmed `settings apply --grant <id>` between completed review
 cycles. Unknown host payloads fail closed. Pre-upgrade dialogs must be reopened.
 All named shortcuts open directly. Default removes the selected override. Sessions defaults to Whole project so the change reaches future chats. Without a native
 dialog, show only the relevant typed command from `settings --json` for the owner
-to type. Do not request a confirmation after an already recorded Apply.
+to type. Do not request another confirmation after a complete recorded assignment or Apply.
 
 An explicit owner command such as `/fabex:settings tracking=on scope=milestone`
 applies directly through the exact grant command supplied by the expansion hook.

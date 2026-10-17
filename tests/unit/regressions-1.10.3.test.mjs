@@ -1,3 +1,4 @@
+import { menuQuestions } from '../../scripts/lib/settings-menu.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, realpath, readFile, writeFile } from 'node:fs/promises';
@@ -12,7 +13,20 @@ async function fixture(t) {
   await initializeState(root, env); await registerSession(root, { session_id: 'a' }, env);
   t.after(() => rm(dir, { recursive: true, force: true })); return { root, env };
 }
-const grant = (f, args = '', session = 'a', command = 'settings') => issueWorkspaceGrant(f.root, { command_name: `fabex:${command}`, command_args: args, session_id: session, expansion_type: 'slash_command', command_source: 'plugin' }, f.env, { catalog: async () => ({ models: ['example-model','main-model','task-model','native-default'].map((id,i) => ({ id, efforts: id === 'main-model' ? ['high','ultra'] : ['medium','high','xhigh'], defaultEffort:'high', isDefault: i === 0 })), error: null }) });
+const issue = (f, args = '', session = 'a', command = 'settings') => issueWorkspaceGrant(f.root, { command_name: `fabex:${command}`, command_args: args, session_id: session, expansion_type: 'slash_command', command_source: 'plugin' }, f.env, { catalog: async () => ({ models: ['example-model','main-model','task-model','native-default'].map((id,i) => ({ id, efforts: id === 'main-model' ? ['high','ultra'] : ['medium','high','xhigh'], defaultEffort:'high', isDefault: i === 0 })), error: null }) });
+// Retain coverage of in-flight version 5 grants across an upgrade. Version 6
+// navigation and atomic choices are covered by regressions-1.13.
+async function grant(...args) {
+  const g = await issue(...args), f = args[0];
+  if (!g.flow) return g;
+  const updated = await updateState(f.root, state => {
+    const stored = state.workspace.grants[g.id];
+    stored.flow.version = 5; stored.questions = menuQuestions(stored.flow);
+    state.generation++; return state;
+  }, {}, f.env);
+  assert.equal(updated.ok, true, updated.error?.message);
+  return updated.state.workspace.grants[g.id];
+}
 const apply = async (f, args, session = 'a', command) => applyWorkspaceGrant(f.root, (await grant(f, args, session, command)).id, f.env);
 async function choose(f, id, label) {
   const g = (await readState(f.root, f.env)).state.workspace.grants[id];

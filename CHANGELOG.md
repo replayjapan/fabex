@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.13.0
+
+- Show Documentation, Image review and Coding assignments on the settings picker;
+  use choice-and-scope dialogs and describe conversation participants as Who answers.
+- Persist explicit reconciled work dispositions and resume still-authorized tasks
+  automatically after new instructions are reviewed. Missing bookkeeping never
+  counts as completion; cancellation and changed scope take precedence.
+- Report specific continuation conditions and operation-specific wait commands.
+- Keep informational permission notices visible without treating them as failed
+  reviews. Preserve blocking diagnostics for incomplete or unverified reviews.
+- Retain typed settings commands and previously opened settings grants.
+
 ## 1.12.0
 
 - Integrate Modes API 1; move activity commands to Modes and participants to Fabex settings.

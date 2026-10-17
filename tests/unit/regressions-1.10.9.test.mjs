@@ -38,7 +38,7 @@ test('1.10.9 Image review Both applies through recorded tabs and restores Codex;
   for (const role of ['implementation', 'testWriting', 'testRunning', 'gitDelivery']) assert.throws(() => validateSettings({ [`roles.${role}.executor`]: 'both' }), /invalid/);
   await choose(f, g.id, ['Image review']);
   const screen = (await readState(f.root, f.env)).state.workspace.grants[g.id];
-  assert.deepEqual(screen.questions[0].options.map(o => o.label), ['Keep current', 'Claude', 'Codex', 'Both']);
+  assert.deepEqual(screen.questions[0].options.map(o => o.label), ['Claude', 'Codex', 'Both', 'Default']);
   assert.equal((await workspaceStatus(f.root, f.env)).values['roles.imageReview.executor'], 'codex');
   await choose(f, g.id, ['Both', 'Only this conversation', 'Keep current', 'Apply']);
   assert.equal((await applyWorkspaceGrant(f.root, g.id, f.env)).values['roles.imageReview.executor'], 'both');

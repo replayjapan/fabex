@@ -195,7 +195,7 @@ Use `controller.mjs status --operation-id <uuid>` for a bounded snapshot or wait
 After Phase 1 is stored, Claude may read it, produce its current owner-visible response, and submit Phase 2 with the exact Phase 1 operation ID and identical owner message:
 
 ```json
-{"phase":"reconcile","phase1OperationId":"00000000-0000-4000-8000-000000000000","ownerMessage":"owner words verbatim","fableResponse":"current owner-visible Fable response verbatim"}
+{"phase":"reconcile","phase1OperationId":"00000000-0000-4000-8000-000000000000","ownerMessage":"owner words verbatim","fableResponse":"current owner-visible Fable response verbatim","workDisposition":{"status":"remaining","remainingWork":["Validate the authorized change."],"reason":"Validation remains."}}
 ```
 
 Phase 2 is a separate SDK turn on the same canonical thread. The controller—not the caller—adds the stored Phase 1 answer. It rejects a missing, failed, cancelled, already-used, or owner-message-mismatched parent. Wait for Phase 2, read the result, independently verify implementation work, and then give the owner the converged answer.
@@ -240,11 +240,37 @@ completion. Never kill by port or guessed PID, and never erase an old lease mere
 because time passed. Browser/MCP contexts outside tracked host tasks require their
 native cleanup; closing a page is not proof the tooling process exited.
 
-Set `checkpoint open-work <item>` only for required, authorized, feasible steps.
-Use `checkpoint replace open-work` with a JSON array on stdin to replace it, and
-`checkpoint clear open-work` when done. Record genuine `owner-action-required` or
-`blocker` reasons and clear resolved ones. New owner prompts disarm old work; revalidate scope,
-never resume from stale TODOs.
+Every work-mode task reconciliation envelope and Codex result must carry `workDisposition`:
+`status` is `remaining`, `done`, `blocked` or `owner-decision`; `remainingWork` is
+at most 16 concise authorized steps; `reason` states completion, remaining work,
+the real blocker or the specific owner decision. Both partners supply their own
+outcome. For a question-only turn that leaves task scope unchanged, both partners
+explicitly use `workDisposition: null`. Preserve existing work and prerequisites;
+never use null to cancel, change scope, claim completion or authorize new work.
+Omitting the field is missing bookkeeping, not the question-only exemption.
+Discussion and ask-only turns do not require a task disposition.
+Do not mark done until required validation and delivery are finished.
+If the owner cancels, explicitly record done with a cancellation reason and no
+remaining steps. A question about progress does not cancel ongoing work.
+
+The controller persists matching outcomes automatically. Missing or conflicting
+outcomes preserve the checkpoint and stop execution until reconciled. New owner
+messages retain the list but pause execution; reconcile their instructions first.
+Never infer completion from an empty list or invent work to populate it.
+
+Use `controller.mjs continue --operation-id <review-id>` to endorse the last Codex
+disposition and continue the authorized task. To correct missing or conflicting
+bookkeeping, append `--disposition '<JSON disposition>'` with Claude's explicit
+outcome; the next partner review must settle it before automatic continuation.
+No new owner go-ahead is needed for this repair. Never bypass a real review failure.
+Legacy checkpoint commands remain available for explicit maintenance, but are
+not a replacement for either partner's disposition.
+
+Use the operation-specific wait command in refusals, in bounded slices, and read
+the result when ready. A timeout requires another wait; avoid repeated unchanged
+“still waiting” replies. Informational host-permission notices must remain visible,
+but they do not establish a failed review or waive actual host restrictions.
+
 Continue on the recorded owner digest through both phases without another message
 until done, interrupted or genuinely blocked. A timeout is not
 completion. Report the exact rejection and remaining work if continuation fails.

@@ -65,16 +65,16 @@ test('named settings use one choice/scope dialog; bare settings adds only a pick
   for (const name of ['coding', 'testing', 'images', 'docs', 'participants', 'sessions', 'tracking', 'models']) {
     const g = startSettingsMenu(name, context);
     assert.notEqual(g.flow.stage, 'picker');
-    assert.ok(g.questions.some(q => q.header === 'Apply to'));
+    assert.ok(g.questions.some(q => ['Apply to', 'Where'].includes(q.header)));
     assert.ok(g.questions.length <= 4);
   }
   const g = startSettingsMenu('coding', context);
-  const answer = Object.fromEntries(g.questions.map(q => [q.question, q.header === 'Writer' ? 'Claude' : q.header === 'Apply to' ? 'Whole project' : q.header === 'Navigation' ? 'Apply' : 'Keep current']));
+  const answer = Object.fromEntries(g.questions.map(q => [q.question, ['Writer', 'Who'].includes(q.header) ? 'Claude' : ['Apply to', 'Where'].includes(q.header) ? 'Whole project' : q.header === 'Navigation' ? 'Apply' : 'Keep current']));
   assert.equal(advanceSettingsMenu(g, answer).selection, 'roles.implementation.executor="claude" scope=project');
   const bare = startSettingsMenu('', context);
   advanceSettingsMenu(bare, { [bare.questions[0].question]: 'Documentation' });
   assert.equal(bare.flow.task, 'docs');
-  const reset = Object.fromEntries(bare.questions.map(q => [q.question, q.header === 'Defaults' ? 'Default' : q.header === 'Navigation' ? 'Apply' : 'Keep current']));
+  const reset = Object.fromEntries(bare.questions.map(q => [q.question, ['Defaults', 'Who'].includes(q.header) ? 'Default' : q.header === 'Navigation' ? 'Apply' : 'Keep current']));
   assert.equal(advanceSettingsMenu(bare, reset).selection, 'roles.docs.executor=inherit scope=session');
 });
 
