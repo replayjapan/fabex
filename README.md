@@ -217,6 +217,16 @@ a documented rule, not a technical guarantee against remote submissions.
 submitting something to a website (a documented rule; they get none of your logins),
 and running commands in Discussion needs macOS.
 
+### Related plugins
+
+These plugins work together, and each one also works on its own.
+
+| Plugin | What it does |
+| --- | --- |
+| [Modes](https://github.com/replayjapan/modes) | Choose what your AI may do right now: build, research and plan, or just answer a question. |
+| [Design Loop](https://github.com/replayjapan/design-loop) | Research before UI choices, then review the real page at desktop and phone widths. |
+| [AI Usage Tracker](https://github.com/replayjapan/ai-usage-tracker) | See your remaining Claude and Codex allowance and where a project's tokens went. |
+
 ## FOR AI BROTHREN
 
 ### Typed settings reference
