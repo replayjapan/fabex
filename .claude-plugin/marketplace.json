@@ -1,0 +1,42 @@
+{
+  "name": "fabex",
+  "owner": {
+    "name": "rePlay, LLC"
+  },
+  "metadata": {
+    "description": "Beta \u2014 Claude and Codex work as partners: independent reviews, coordinated coding and saved conversations."
+  },
+  "plugins": [
+    {
+      "name": "fabex",
+      "source": "./",
+      "description": "Beta \u2014 Claude and Codex work as partners: independent reviews, coordinated coding and saved conversations.",
+      "author": {
+        "name": "rePlay, LLC"
+      },
+      "defaultEnabled": true
+    },
+    {
+      "name": "design-loop",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/replayjapan/design-loop.git"
+      },
+      "description": "Research before UI choices and review the implemented page at desktop and phone widths. Works alone or with Fabex.",
+      "author": {
+        "name": "rePlay, LLC"
+      }
+    },
+    {
+      "name": "modes",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/replayjapan/modes.git"
+      },
+      "description": "Work, Ask and Discussion permissions with contained research and text planning. Works alone or with Fabex.",
+      "author": {
+        "name": "rePlay, LLC"
+      }
+    }
+  ]
+}

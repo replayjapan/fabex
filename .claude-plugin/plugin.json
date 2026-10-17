@@ -1,0 +1,9 @@
+{
+  "name": "fabex",
+  "version": "1.12.0",
+  "description": "Beta \u2014 Claude and Codex work as partners: independent reviews, coordinated coding and saved conversations.",
+  "author": {
+    "name": "rePlay, LLC"
+  },
+  "license": "MIT"
+}

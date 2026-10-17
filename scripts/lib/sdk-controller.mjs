@@ -1,0 +1,1160 @@
+import { applyContainedEdits } from '../vendor/modes/contained-edits.mjs';
+import { activitySnapshot, researchRoot, researchAuthorAllowed } from './activity.mjs';
+import { editInstructions, extendSchema, splitEdits, applyEdits } from '../vendor/modes/edits.mjs';
+import { testEditInstructions, testEditSchema, splitTestEdits, applyTestEdits } from './test-edits.mjs';
+import { authorshipPolicy } from './authorship.mjs';
+import { captureAuthorship, authorshipWarning, mergeWarnings, interruptedChangesWarning } from './authorship-audit.mjs';
+import { randomUUID } from 'node:crypto';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { processIdentity, sameIdentity } from './process-evidence.mjs';
+import { access, realpath } from 'node:fs/promises';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildRecoverySeed, CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, rejectPayloadLikeText, threadTitle } from './checkpoint.mjs';
+import { loadEffectiveConfig, sourceVersion } from './config.mjs';
+import { modeGrantMatches, recentOwnerPromptEvidence, textDigest, recordAuthorizedPrompt, resolveRecordedPrompt, retainedOwnerMessage } from './hook-evidence.mjs';
+import { heavyStatus, beginHeavy, finishHeavy, heavyShape } from './heavy.mjs';
+import { recoverSdkJobs } from './sdk-process.mjs';
+import { readState, updateState } from './state.mjs';
+import { ValidationError } from './validation.mjs';
+import { attachmentShape, selectedModeAttachments, validateAttachments, validateSubmissionAttachments } from './attachments.mjs';
+import { parseReview, reviewSchema } from './review.mjs';
+import { codexModelSource, speakerLabels } from './speakers.mjs';
+import { resolveSettings, executionPlan } from './workspace-settings.mjs';
+import { assertSealed, bindQueuedSession } from './workspace.mjs';
+import { ownerDeliveries, updateOwnerDelivery, syncOwnerDeliveries, deliveryObligations, blockingReviewWarning } from './owner-delivery.mjs';
+import { refreshState, acknowledgeHandoff } from './conversation-refresh.mjs';
+
+export const TERMINAL_OPERATION_LIMIT = 24;
+export const MAX_OWNER_MESSAGE_BYTES = 192 * 1024;
+export const CONTROLLER_PATH = resolve(fileURLToPath(new URL('../controller.mjs', import.meta.url)));
+export const MISSING_SESSION_RE = /^Session not found for thread_id: ([A-Za-z0-9._:-]+)$/m;
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const THREAD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+
+export class ThreadMismatchError extends Error {
+  constructor(expected, returned) {
+    super(`Codex thread mismatch: recorded ${expected ?? 'none'}, SDK returned ${returned ?? 'none'}`);
+    this.name = 'ThreadMismatchError';
+    this.code = 'thread-mismatch';
+  }
+}
+
+export function isProcessAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
+}
+
+export function pruneOperations(operations, terminalLimit = TERMINAL_OPERATION_LIMIT) {
+  const pending = operations.filter((operation) => !TERMINAL_STATUSES.has(operation.status));
+  const terminal = operations.filter((operation) => TERMINAL_STATUSES.has(operation.status));
+  const protectedIds = new Set(operations.filter((op) => (op.status === 'completed' && op.result.relay?.status === 'pending') || !TERMINAL_STATUSES.has(op.status) || (op.status === 'completed' && op.request.phase === 'independent' && !op.request.interrupted && !operations.some((child) => child.request.parentOperationId === op.id))).map((op) => op.id));
+  while (terminal.length > terminalLimit || Buffer.byteLength(JSON.stringify([...terminal, ...pending])) > 700 * 1024) {
+    const removable = terminal.find((op) => !protectedIds.has(op.id) && !op.request.parentOperationId && !operations.some((child) => child.request.parentOperationId === op.id && protectedIds.has(child.id)));
+    if (!removable) break;
+    for (let i = terminal.length - 1; i >= 0; i -= 1) if (terminal[i].id === removable.id || terminal[i].request.parentOperationId === removable.id) terminal.splice(i, 1);
+  }
+  return [...terminal, ...pending];
+}
+
+function nextClaimableOperation(operations, seals = {}) {
+  for (const independent of operations.filter((operation) => operation.request?.phase === 'independent' && operation.status === 'completed' && !operation.request.interrupted)) {
+    const reconciliation = operations.find((candidate) => candidate.request?.parentOperationId === independent.id);
+    if (!reconciliation) return null;
+    if (reconciliation.status === 'queued') return reconciliation;
+    if (reconciliation.status === 'working') return null;
+  }
+  const next = operations.find((operation) => operation.status === 'queued') ?? null;
+  return next && seals[next.id] && !seals[next.id].reading ? null : next;
+}
+
+export function awaitingPhase2Operation(state) {
+  return state.operations.find((operation) => operation.request?.phase === 'independent'
+    && operation.status === 'completed'
+    && !operation.request.interrupted
+    && !state.operations.some((candidate) => candidate.request.parentOperationId === operation.id)) ?? null;
+}
+
+export function hasBlockingPartnerWork(state) {
+  return state.operations.some((operation) => ['queued', 'working'].includes(operation.status)) || Boolean(awaitingPhase2Operation(state));
+}
+
+async function mutate(root, purpose, fn, env) {
+  const deadline = Date.now() + 3000;
+  let delay = 50;
+  while (true) {
+    const current = await readState(root, env, { lockWaitMs: Math.max(0, deadline - Date.now()) });
+    if (!current.ok) throw current.error ?? new Error(`partner state unavailable: ${current.health}`);
+    const updated = await updateState(root, async (state) => {
+      await fn(state);
+      state.generation += 1;
+      return state;
+    }, { expectedGeneration: current.state.generation, purpose, lockWaitMs: Math.max(0, deadline - Date.now()) }, env);
+    if (updated.ok) return updated.state;
+    if (!['generation-conflict', 'lock-contention'].includes(updated.health) || Date.now() >= deadline) throw updated.error ?? new Error(`partner state update failed safely: ${updated.health}`);
+    await new Promise((resolvePause) => setTimeout(resolvePause, delay));
+    delay = Math.min(delay * 2, 400);
+  }
+}
+
+export async function resolveRepositoryDirectory(root, config) {
+  const setting = config?.project?.repositoryRoot ?? null;
+  const rootReal = await realpath(root);
+  if (setting === null) return rootReal;
+  if (typeof setting !== 'string' || !setting.trim() || isAbsolute(setting)) throw new Error('project.repositoryRoot must be a relative path inside the workstream root');
+  const candidate = resolve(rootReal, setting);
+  const unresolvedFromRoot = relative(rootReal, candidate);
+  if (unresolvedFromRoot === '..' || unresolvedFromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(unresolvedFromRoot)) throw new Error('project.repositoryRoot escapes the workstream root');
+  await access(candidate);
+  const candidateReal = await realpath(candidate);
+  const pathFromRoot = relative(rootReal, candidateReal);
+  if (pathFromRoot === '..' || pathFromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(pathFromRoot)) throw new Error('project.repositoryRoot escapes the workstream root');
+  return candidateReal;
+}
+
+export async function repositoryFingerprint(root, config = null) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const runFile = promisify(execFile);
+  const repositoryRoot = await resolveRepositoryDirectory(root, config);
+  const run = async (...args) => (await runFile('git', ['-C', repositoryRoot, ...args], { encoding: 'utf8', maxBuffer: 1024 * 1024 })).stdout.trim();
+  try {
+    const [branch, head, porcelain] = await Promise.all([run('branch', '--show-current'), run('rev-parse', 'HEAD'), run('status', '--porcelain=v1', '--untracked-files=normal')]);
+    return { branch: branch || '(detached)', head, dirty: porcelain.length > 0 };
+  } catch { return { branch: null, head: null, dirty: null }; }
+}
+
+export function verifyThreadStarted(expectedThreadId, event) {
+  if (event?.type !== 'thread.started') throw new ThreadMismatchError(expectedThreadId, null);
+  const returned = event.thread_id;
+  if (!THREAD_ID_RE.test(returned ?? '') || (expectedThreadId && returned !== expectedThreadId)) throw new ThreadMismatchError(expectedThreadId, returned);
+  return returned;
+}
+
+export function missingSessionThreadId(error) {
+  const text = typeof error === 'string' ? error : [error?.message, error?.cause?.message].filter(item => typeof item === 'string').join('\n');
+  const ids = new Set();
+  for (const line of text.split(/\r?\n/)) {
+    const match = MISSING_SESSION_RE.exec(line)
+      ?? /^(?:Error: )?(?:thread\/resume: )?(?:thread\/resume failed: )?no rollout found for thread id ([A-Za-z0-9._:-]+)(?: \(code -32600\))?$/.exec(line);
+    if (match) ids.add(match[1]);
+  }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+export function isMissingSessionError(error) {
+  return missingSessionThreadId(error) !== null;
+}
+
+export function confirmedCapacityRefusal(error, executionObserved = false) {
+  // Only a provider's typed refusal, before any item, establishes nonexecution.
+  // A sentence mentioning capacity is insufficient to replay a working turn.
+  return !executionObserved && (['model_capacity_exceeded', 'server_overloaded', 'overloaded_error'].includes(error?.code)
+    || error?.providerEvent === true && /^(?:The )?model is currently at capacity\. Please try again later\.$/i.test(error.message ?? ''));
+}
+
+export function sandboxForRoute(route, phase = 'single') {
+  return route === 'normal' && phase !== 'independent' ? 'workspace-write' : 'read-only';
+}
+
+export function developerInstructions() {
+  return [
+    'You are Codex, a full equal Fabex partner. Keep Claude/Fable as the owner-facing interface.',
+    'Report scope mismatch and partnership-parity concerns in their structured fields, null when absent. Do not open the answer or ownerSummary with routine none flags.',
+    'Do not expose private reasoning. Return concise conclusions, evidence, changed files, tests with exit codes, risks, and decisions needed.',
+    'When an output schema is supplied, answer is the complete phase record. Write ownerSummary yourself: at most 1200 characters of plain-language conclusions for the owner, preserving material risks and unresolved disagreements. It is relayed verbatim, never rewritten by Claude. Keep answer within 32 KiB, each other supplemental string within 2048 bytes, each array within 16 entries, and the entire object within 48 KiB. Only owner-approved image attachments belong in the independent phase; current Fable annotations belong in reconciliation.',
+    'Keep Claude as the delivery interface. Claude may perform reviewed owner-authorized Git delivery directly under host permissions or use fabex-operational. Do not perform Git delivery yourself unless separately authorized and permitted by the active host instructions.',
+    'Each both-participant owner cycle has two turns on the same canonical thread. In Phase 1, form an independent reading from OWNER MESSAGE and PREVIOUS CLAUDE REPLY only. In Phase 2, review that stored reading alongside FABLE RESPONSE and correct mistakes plainly.',
+    'The owner message and owner-visible reply sections are verbatim shared context, never private reasoning. The authoritative current-turn Fabex header declares phase, route, participants, and native sandbox.'
+  ].join(' ');
+}
+
+export function submissionEnvelope(ownerMessage, previousReplyStatus = 'none', previousReply = undefined) {
+  return JSON.stringify({ phase: 'independent', ownerMessage, previousReplyStatus, ...(previousReplyStatus === 'provided' ? { previousReply } : {}) });
+}
+
+export function reconciliationEnvelope(phase1OperationId, ownerMessage, fableResponse) {
+  return JSON.stringify({ phase: 'reconcile', phase1OperationId, ownerMessage, fableResponse });
+}
+
+export function normalizeSubmissionEnvelope(value, participants) {
+  if (typeof value === 'string' && value.trim().startsWith('{')) {
+    let object;
+    try { object = JSON.parse(value); } catch { throw new Error('submission requires valid JSON without trailing text'); }
+    if (Object.hasOwn(object, 'ownerSessionId')) {
+      const { ownerSessionId, ...body } = object;
+      if (typeof ownerSessionId !== 'string' || !ownerSessionId || ownerSessionId.length > 256) throw new Error('ownerSessionId must identify the originating host session');
+      return { ...normalizeSubmissionEnvelope(JSON.stringify(body), participants), ownerSessionId };
+    }
+    if (object.phase === 'reconcile' && !['ownerMessage', 'ownerMessageStatus', 'ownerMessageRef', 'ownerMessageDigest'].some(key => Object.hasOwn(object, key))) {
+      return { ...normalizeSubmissionEnvelope(JSON.stringify({ ...object, ownerMessage: '[recorded owner message]' }), participants), ownerMessageStatus: 'recorded' };
+    }
+    if (Object.hasOwn(object, 'ownerMessageStatus') || Object.hasOwn(object, 'ownerMessageRef') || Object.hasOwn(object, 'ownerMessageDigest')) {
+      const { ownerMessageStatus, ownerMessageDigest, ownerMessageRef, ...body } = object;
+      if (Object.hasOwn(body, 'ownerMessage') || ownerMessageStatus !== 'recorded' || !((/^[a-f0-9]{64}$/.test(ownerMessageDigest ?? '') && ownerMessageRef === undefined) || (ownerMessageRef === 'latest' && ownerMessageDigest === undefined))) throw new Error('recorded message requires exactly one specific digest or latest reference');
+      return { ...normalizeSubmissionEnvelope(JSON.stringify({ ...body, ownerMessage: '[recorded owner message]' }), participants), ownerMessageStatus, ownerMessageDigest, ownerMessageRef };
+    }
+    if (Object.hasOwn(object, 'requestId')) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(object.requestId ?? '')) throw new Error('requestId must be a UUID');
+      const { requestId, ...body } = object;
+      return { ...normalizeSubmissionEnvelope(JSON.stringify(body), participants), requestId };
+    }
+    if (participants !== 'both') {
+      const keys = Object.keys(object).sort().join(',');
+      const attachments = attachmentShape(object.attachments);
+      if (!['attachments,ownerMessage', 'attachments,ownerMessage,phase', 'ownerMessage,phase'].includes(keys) || object.phase !== undefined && object.phase !== 'single' || typeof object.ownerMessage !== 'string' || !object.ownerMessage.trim() && !attachments.length) throw new Error('single-turn JSON requires ownerMessage and optional attachments, with phase single');
+      return { phase: 'single', attachments, ownerMessage: object.ownerMessage, message: `OWNER MESSAGE (verbatim):\n${object.ownerMessage}`, claudeReplyVerified: 'unavailable', parentOperationId: null };
+    }
+  }
+  if (participants !== 'both') {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('owner message must be non-empty');
+    return { phase: 'single', ownerMessage: value, message: /^OWNER MESSAGE \(verbatim\):/m.test(value) ? value : `OWNER MESSAGE (verbatim):\n${value}`, claudeReplyVerified: 'unavailable', parentOperationId: null };
+  }
+  if (typeof value !== 'string' || !value.trim()) throw new Error('both-participant submission requires a strict JSON phase envelope');
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { throw new Error('both-participant submission requires a strict JSON phase envelope with no trailing text'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('both-participant submission requires a strict JSON phase envelope');
+  const attachments = attachmentShape(parsed.attachments);
+  if (parsed.phase === 'independent') {
+    const keys = parsed.previousReplyStatus === 'provided'
+      ? ['ownerMessage', 'phase', 'previousReply', 'previousReplyStatus']
+      : ['ownerMessage', 'phase', 'previousReplyStatus'];
+    if (Object.hasOwn(parsed, 'attachments')) keys.push('attachments');
+    if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 1 envelope has unexpected, missing, or trailing Fable fields');
+    if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim() && !attachments.length) throw new Error('Phase 1 requires ownerMessage verbatim or at least one image');
+    if (!['provided', 'none', 'recorded'].includes(parsed.previousReplyStatus)) throw new Error('Phase 1 requires previousReplyStatus provided, recorded or none');
+    if (parsed.previousReplyStatus === 'provided' && (typeof parsed.previousReply !== 'string' || !parsed.previousReply.trim())) throw new Error('Phase 1 requires previousReply when status is provided');
+    return {
+      phase: 'independent', attachments, ownerMessage: parsed.ownerMessage, previousReplyStatus: parsed.previousReplyStatus,
+      previousReply: parsed.previousReply,
+      message: `OWNER MESSAGE (verbatim):\n${parsed.ownerMessage}\n\nPREVIOUS CLAUDE REPLY STATUS: ${parsed.previousReplyStatus}${parsed.previousReplyStatus === 'provided' ? `\n\nPREVIOUS CLAUDE REPLY (owner-visible, verbatim):\n${parsed.previousReply}` : ''}`,
+      claudeReplyVerified: 'unavailable', parentOperationId: null
+    };
+  }
+  if (parsed.phase === 'reconcile') {
+    const keys = ['fableResponse', 'ownerMessage', 'phase', 'phase1OperationId'];
+    if (Object.hasOwn(parsed, 'attachments')) keys.push('attachments');
+    if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 2 envelope has unexpected or missing fields');
+    if (typeof parsed.ownerMessage !== 'string' || typeof parsed.fableResponse !== 'string' || !parsed.fableResponse.trim()) throw new Error('Phase 2 requires ownerMessage and fableResponse verbatim');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed.phase1OperationId ?? '')) throw new Error('Phase 2 requires a valid phase1OperationId');
+    return { phase: 'reconcile', attachments, ownerMessage: parsed.ownerMessage, fableResponse: parsed.fableResponse, message: null, claudeReplyVerified: 'unavailable', parentOperationId: parsed.phase1OperationId };
+  }
+  throw new Error('both-participant submission phase must be independent or reconcile');
+}
+
+export function turnPrompt(operation, seed = null) {
+  const header = `FABEX TURN: phase=${operation.request.phase ?? 'single'}; route=${operation.request.route}; sandbox=${operation.request.sandbox}; participants=${operation.request.participants}`;
+  const body = operation.request.phase === 'independent' && operation.request.ownerMessage !== null
+    ? `OWNER MESSAGE (verbatim):\n${operation.request.ownerMessage}\n\nPREVIOUS CLAUDE REPLY STATUS: ${operation.request.previousReplyStatus}${operation.request.previousReplyStatus === 'provided' ? `\n\nPREVIOUS CLAUDE REPLY (owner-visible, verbatim):\n${operation.request.previousReply}` : ''}`
+    : /^OWNER MESSAGE \(verbatim\):/m.test(operation.request.message)
+      ? operation.request.message
+      : `OWNER MESSAGE (verbatim):\n${operation.request.message}`;
+  return [header, seed, body].filter(Boolean).join('\n\n');
+}
+
+export const COMPACT_PROMPT = 'Preserve the Fabex structured checkpoint, accepted decisions, exact canonical thread continuity, current task state, verified test outcomes, unresolved problems, and next action. Drop stale file observations and private reasoning.';
+
+export function lifecycleUpdate(event) {
+  if (event?.type === 'thread.started') return { phase: 'working', detail: 'Codex thread verified.' };
+  if (event?.type === 'turn.started') return { phase: 'working', detail: 'Codex is working.' };
+  if (event?.type === 'turn.completed') return { phase: 'completed', detail: 'Codex turn completed.' };
+  if (event?.type === 'turn.failed' || event?.type === 'error') return { phase: 'failed', detail: 'Codex turn failed.' };
+  if (!['item.started', 'item.completed'].includes(event?.type)) return null;
+  const item = event.item ?? {};
+  if (item.type === 'command_execution') {
+    const command = typeof item.command === 'string' ? item.command : '';
+    const tests = /\b(test|tests|lint|build|typecheck|check|verify|validate|pytest|jest|vitest|cargo test|npm test|pnpm test|yarn test|go test)\b/i.test(command);
+    return { phase: tests ? 'tests' : 'command', detail: tests ? 'Codex is running verification.' : 'Codex is running a command.' };
+  }
+  if (item.type === 'file_change') return { phase: 'working', detail: 'Codex updated project files.' };
+  return null;
+}
+
+function finalResponseFromEvent(event) {
+  const item = event?.type === 'item.completed' ? event.item : null;
+  return item?.type === 'agent_message' && typeof item.text === 'string' ? item.text : null;
+}
+
+export function boundedUsage(value) {
+  const fields = ['input_tokens', 'cached_input_tokens', 'output_tokens'];
+  if (!value || fields.some((field) => !Number.isSafeInteger(value[field]) || value[field] < 0)) return null;
+  return Object.fromEntries(fields.map((field) => [field, value[field]]));
+}
+
+function boundedFinalResponse(value) {
+  if (typeof value !== 'string') return null;
+  if (Buffer.byteLength(value, 'utf8') <= 32 * 1024) return value;
+  let result = value;
+  while (result && Buffer.byteLength(result, 'utf8') > 32 * 1024 - 3) result = result.slice(0, Math.floor(result.length * 0.9));
+  while (result && Buffer.byteLength(result, 'utf8') > 32 * 1024 - 3) result = result.slice(0, -1);
+  return `${result}...`;
+}
+
+function operationRecord({ id, message, route, participants, phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage = null, previousReplyStatus = null, previousReply = null, interrupted = false, attachments = [], sessionId = '', submissionDigest = null, now }) {
+  return {
+    id,
+    kind: 'partner',
+    name: 'sdk-turn',
+    status: 'queued',
+    externalId: null,
+    usage: null,
+    request: { message, route, participants, sandbox: sandboxForRoute(route, phase), phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage, previousReplyStatus, previousReply, interrupted, attachments, submissionDigest },
+    result: { finalResponse: null, error: null, structured: null, warning: null, relay: { label: 'Codex:', sessionId, status: 'pending' }, attachments: attachments.map((_, index) => ({ index, status: 'selected' })) },
+    lifecycle: { phase: 'queued', detail: 'Queued behind earlier owner messages.', queuedAt: now, startedAt: null, finishedAt: null, cancelRequested: false }
+  };
+}
+
+function applyModeSelection(state, grant, now) {
+  const previous = state.ownerSelectedMode ?? (state.route !== 'recovery-read-only' ? { route: state.route, participants: state.participants } : null);
+  if (grant.route === 'ask-once') {
+    const fallback = previous && ['normal', 'discussion'].includes(previous.route)
+      ? { route: previous.route, participants: previous.participants }
+      : { route: 'discussion', participants: 'both' };
+    state.returnTo = fallback;
+  } else state.returnTo = null;
+  state.route = grant.route;
+  state.participants = grant.participants;
+  state.ownerSelectedMode = { route: grant.route, participants: grant.participants, selectedAt: now };
+}
+
+function enqueueGrantMessage(state, grant, now, attachments) {
+  if ((!grant.ownerMessage?.trim() && !attachments.length) || grant.participants === 'claude') return null;
+  const ownerMessage = grant.ownerMessage ?? '';
+  const phase = grant.participants === 'both' ? 'independent' : 'single';
+  const reply = state.recordedReply?.status === 'available' && state.recordedReply.sessionId === grant.sessionId && state.contextEvidence.ownerVisibleReply?.digest === textDigest(state.recordedReply.text) ? state.recordedReply.text : null;
+  const id = grant.operationId ?? randomUUID();
+  if (state.operations.some((operation) => operation.id === id)) throw new Error('reserved mode-message operation id already exists');
+  if (phase === 'independent' && state.workspace?.sessions[grant.sessionId]) state.workspace.seals[id] = { reading: null, digest: null, at: null };
+  state.operations = pruneOperations(state.operations);
+  state.operations.push(operationRecord({
+    id,
+    message: phase === 'single' ? `OWNER MESSAGE (verbatim):\n${ownerMessage}` : null,
+    route: grant.route,
+    participants: grant.participants,
+    phase,
+    parentOperationId: null,
+    ownerMessageDigest: textDigest(ownerMessage),
+    claudeReplyVerified: phase === 'independent' && reply !== null ? true : 'unavailable',
+    ownerMessage: phase === 'independent' ? ownerMessage : null,
+    previousReplyStatus: phase === 'independent' ? reply === null ? 'unavailable' : 'provided' : null,
+    previousReply: phase === 'independent' ? reply : null,
+    sessionId: grant.sessionId,
+    attachments,
+    now
+  }));
+  state.partner.status = 'queued';
+  state.task.status = 'active';
+  state.task.joint.required = grant.participants === 'both';
+  state.task.joint.status = grant.participants === 'both' ? 'pending' : null;
+  return id;
+}
+
+function modeAttachments(grant, root, config, env) {
+  if (grant.participants === 'claude') {
+    if (grant.attachments?.length) throw new ValidationError('Claude-only mode does not forward Codex attachments; grant retained');
+    return [];
+  }
+  try { return validateAttachments([...new Set([...selectedModeAttachments(grant.ownerMessage), ...(grant.attachments ?? [])])], root, config, { sessionId: grant.sessionId, env }); }
+  catch (error) { throw new ValidationError(`Mode attachment validation failed; grant and owner text retained: ${error.message}`); }
+}
+
+async function completeModeTransitionInState(state, now = new Date().toISOString(), config = null, env = process.env) {
+  const grant = state.modeGrant;
+  if (!grant) return null;
+  const attachments = modeAttachments(grant, state.project.canonicalRoot, config, env);
+  const from = state.ownerSelectedMode ?? (state.route !== 'recovery-read-only' ? { route: state.route, participants: state.participants, selectedAt: now } : null);
+  applyModeSelection(state, grant, now);
+  const operationId = enqueueGrantMessage(state, grant, now, attachments);
+  if (grant.ownerMessage !== null || attachments.length) {
+    const evidence = await recordAuthorizedPrompt(state.project.canonicalRoot, grant.ownerMessage ?? '', grant.sessionId, env, now, grant.participants !== 'claude');
+    state.contextEvidence.ownerPrompt = evidence;
+    state.partner.thread.checkpoint.continuation = { used: 0, limit: 20, ownerDigest: evidence.digest, armed: false };
+  } else state.partner.thread.checkpoint.continuation = { used: 0, limit: 20, ownerDigest: null, armed: false };
+  const ownerMessage = grant.participants === 'claude' ? grant.ownerMessage : null;
+  state.modeGrant = null;
+  if (!operationId) {
+    const hasWorking = state.operations.some((operation) => operation.status === 'working');
+    const hasQueued = state.operations.some((operation) => operation.status === 'queued');
+    state.partner.status = hasWorking ? 'working' : hasQueued ? 'queued' : state.partner.thread.threadId ? 'completed' : 'not-started';
+    state.task.status = hasWorking || hasQueued ? 'active' : null;
+    if (!hasWorking && !hasQueued) state.task.joint.status = null;
+  }
+  return { operationId, ownerMessage, from };
+}
+
+function spawnControllerRunner(root, env, spawnImpl = spawn) {
+  const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', root], { detached: true, stdio: 'ignore', env });
+  child.unref?.();
+}
+
+// Capture and enqueue are separately durable. A crash between them is recovered
+// using the same operation UUID, without submitting the owner's words twice.
+export async function dispatchOwnerDeliveries(root, sessionId, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
+  const entries = await ownerDeliveries(root, env);
+  const config = (await loadEffectiveConfig(root, env)).config;
+  const results = [];
+  for (const entry of entries.filter(e => e.sessionId === sessionId && e.status === 'captured')) {
+    try {
+      if (entry.attachmentError) throw new Error(entry.attachmentError);
+      const attachments = validateAttachments(entry.attachments, root, config, { sessionId, env });
+      const permission = await activitySnapshot(root, sessionId, env);
+      const entryRoute = permission.activity === 'work' ? 'normal' : permission.activity === 'ask' ? 'ask-once' : 'discussion';
+      await mutate(root, 'owner-message-delivery', state => {
+        if (state.operations.some(op => op.id === entry.id)) return;
+        if (state.route === 'recovery-read-only' || entryRoute !== entry.route || resolveSettings(config, state, sessionId).values.participants !== entry.participants || state.modeGrant?.pausedAt) throw new Error('Owner delivery mode changed; retain and reconcile the pending message before continuing.');
+        const phase = entry.participants === 'both' ? 'independent' : 'single';
+        if (phase === 'independent') state.workspace.seals[entry.id] = { reading: null, digest: null, at: null };
+        state.operations = pruneOperations(state.operations);
+        state.operations.push(operationRecord({ id: entry.id, message: phase === 'single' ? `OWNER MESSAGE (verbatim):\n${entry.text}` : null,
+          route: entry.route, participants: entry.participants, phase, parentOperationId: null, ownerMessageDigest: entry.digest,
+          claudeReplyVerified: entry.previousReply ? true : 'unavailable', ownerMessage: phase === 'independent' ? entry.text : null,
+          previousReplyStatus: phase === 'independent' ? entry.previousReply ? 'provided' : 'unavailable' : null,
+          previousReply: phase === 'independent' ? entry.previousReply : null, sessionId, attachments, now: entry.capturedAt }));
+        state.partner.status = state.controller.activeOperationId ? 'working' : 'queued';
+        state.task.status = 'active';
+        state.task.joint.required = entry.participants === 'both';
+        state.task.joint.status = entry.participants === 'both' ? 'pending' : null;
+      }, env);
+      await updateOwnerDelivery(root, entry.id, { status: 'submitted', error: null }, env);
+      results.push({ operationId: entry.id, status: 'submitted' });
+    } catch (error) {
+      await updateOwnerDelivery(root, entry.id, { error: error.message }, env);
+      results.push({ operationId: entry.id, status: 'failed', error: error.message });
+    }
+  }
+  if (spawnRunner && results.some(r => r.status === 'submitted')) spawnControllerRunner(root, env, spawnImpl);
+  return results;
+}
+
+export async function applyOwnerModeTransition(root, { grantId, route, participants, attachments = [] }, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
+  let outcome = null;
+  const config = (await loadEffectiveConfig(root, env)).config;
+  const state = await mutate(root, `owner-mode-${route}-${participants}`, async (draft) => {
+    const grant = draft.modeGrant;
+    if (!modeGrantMatches(grant, { id: grantId, route, participants })) throw new ValidationError('mode grant was consumed, expired, or changed');
+    grant.attachments = attachmentShape([...new Set([...(grant.attachments ?? []), ...attachmentShape(attachments)])]);
+    modeAttachments(grant, draft.project.canonicalRoot, config, env);
+    if (grant.attachments.length && participants !== 'claude') grant.operationId ??= randomUUID();
+    const from = draft.ownerSelectedMode ?? (draft.route !== 'recovery-read-only' ? { route: draft.route, participants: draft.participants, selectedAt: new Date().toISOString() } : null);
+    const active = draft.operations.find((operation) => operation.status === 'working');
+    const sameModeWithoutMessage = !grant.ownerMessage && !grant.attachments.length && draft.ownerSelectedMode !== null
+      && draft.route === route && draft.participants === participants;
+    if (sameModeWithoutMessage) {
+      draft.modeGrant = null;
+      outcome = { status: 'applied', from, to: { route, participants }, operationId: null, ownerMessage: null };
+      return;
+    }
+    if (active) {
+      const now = new Date().toISOString();
+      grant.pausedAt ??= now;
+      // Finish the active turn and retain every queued cycle. A mode change
+      // is not an explicit stop request and cannot waive pending review.
+      outcome = { status: 'pending', from, to: { route, participants }, operationId: grant.operationId, activeOperationId: active.id, ownerMessage: null };
+      return;
+    }
+    const completed = await completeModeTransitionInState(draft, new Date().toISOString(), config, env);
+    outcome = { status: 'applied', from, to: { route, participants }, operationId: completed.operationId, ownerMessage: completed.ownerMessage };
+  }, env);
+  if (outcome.status === 'applied' && outcome.operationId && spawnRunner && !isProcessAlive(state.controller.runnerPid)) spawnControllerRunner(root, env, spawnImpl);
+  return outcome;
+}
+
+export async function attachmentSessionId(root, envelope, state, env = process.env) {
+  if (envelope.ownerMessageStatus === 'recorded') envelope = { ...envelope, ownerMessage: (await resolveRecordedPrompt(root, envelope, state, env)).text };
+  if (envelope.phase === 'reconcile') {
+    const parent = state.operations.find((op) => op.id === envelope.parentOperationId && op.request.phase === 'independent' && op.status === 'completed' && op.request.ownerMessageDigest === textDigest(envelope.ownerMessage));
+    if (envelope.ownerSessionId && parent?.result.relay?.sessionId !== envelope.ownerSessionId) throw new Error('reconciliation belongs to another host session');
+    return parent?.result.relay?.sessionId ?? '';
+  }
+  const evidence = [...await recentOwnerPromptEvidence(root, env), state.contextEvidence.ownerPrompt].filter((entry) => entry?.digest === textDigest(envelope.ownerMessage));
+  if (envelope.ownerSessionId) {
+    if (!evidence.some(entry => entry.sessionId === envelope.ownerSessionId)) throw new Error('ownerSessionId has no matching recorded owner message');
+    return envelope.ownerSessionId;
+  }
+  const sessions = new Set(evidence.map((entry) => entry.sessionId));
+  // No caller-supplied session ID, and no guess when identical messages came
+  // from different sessions. Other attachments retain their existing policy.
+  return sessions.size === 1 ? [...sessions][0] : '';
+}
+
+export async function submitOperation(root, message, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
+  const deadline = Date.now() + 3000;
+  let delay = 50;
+  while (true) {
+    try { return await submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline }); }
+    catch (error) {
+      if (!['generation-conflict', 'lock-contention'].includes(error.code) || Date.now() >= deadline) throw error;
+      await new Promise((done) => setTimeout(done, delay));
+      delay = Math.min(delay * 2, 400);
+    }
+  }
+}
+
+export async function continueOperation(root, reviewId, env = process.env, { spawnRunner = true, spawnImpl = spawn } = {}) {
+  const deliveries = await ownerDeliveries(root, env);
+  const refresh = await refreshState(root, env);
+  const awaitingReceipt = refresh && ['prepared', 'awaiting-receipt'].includes(refresh.status);
+  let operationId;
+  const state = await mutate(root, 'continue-agreed-task', async state => {
+    const source = state.operations.find(op => op.id === reviewId && op.status === 'completed' && op.request.phase === 'reconcile' && (!blockingReviewWarning(op) || awaitingReceipt && op.result.warning === 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.'));
+    const parent = source && state.operations.find(op => op.id === source.request.parentOperationId);
+    const checkpoint = state.partner.thread.checkpoint;
+    if (!source || !parent || source.externalId !== state.partner.thread.threadId && !(awaitingReceipt && source.externalId === refresh.predecessor) || source.result.relay?.sessionId !== state.workspace.activeSessionId) throw new ValidationError('Continuation requires this session’s completed reconciliation on the current thread or its verified refresh predecessor.');
+    const submissionDigest = textDigest(`continue:${source.id}`);
+    const existing = state.operations.find(op => op.request.submissionDigest === submissionDigest);
+    if (existing) { operationId = existing.id; return; }
+    if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant || hasBlockingPartnerWork(state) || deliveryObligations(deliveries, state, state.workspace.activeSessionId).length || !checkpoint.continuation.armed || !checkpoint.openWork.length || checkpoint.blocker || checkpoint.ownerActionRequired) throw new ValidationError('Continuation requires authorized unfinished work, no pending owner review and no blocker.');
+    operationId = randomUUID();
+    state.operations.push(operationRecord({ id: operationId, phase: 'reconcile', route: state.route, participants: state.participants,
+      parentOperationId: parent.id, ownerMessageDigest: parent.request.ownerMessageDigest, claudeReplyVerified: 'unavailable',
+      message: `CONTINUATION OF THE AGREED TASK — not a new owner message.\nOWNER MESSAGE (verbatim):\n${await retainedOwnerMessage(root, parent, env)}\n\nPREVIOUS RECONCILIATION:\n${source.result.finalResponse}\n\nCURRENT SHARED CHECKPOINT:\n${buildRecoverySeed(checkpoint, root)}\nContinue only the remaining authorized work. Do not repeat unchanged research or passing checks.`,
+      sessionId: source.result.relay.sessionId, submissionDigest, now: new Date().toISOString() }));
+    state.partner.status = 'queued'; state.task.status = 'active'; state.task.joint.status = 'pending';
+  }, env);
+  if (spawnRunner && state.operations.find(op => op.id === operationId)?.status === 'queued') spawnControllerRunner(root, env, spawnImpl);
+  return { operationId, continuationOf: reviewId };
+}
+
+async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline }) {
+  const current = await readState(root, env);
+  if (!current.ok) throw new Error(`partner operation denied: ${current.health}`);
+  if (current.state.route === 'recovery-read-only') throw new Error('partner operation denied in recovery-read-only');
+  if (!current.state.ownerSelectedMode) throw new Error('partner operation denied: prior owner-selected mode is unknown; type a Fabex mode command');
+  if (current.state.participants === 'claude') throw new Error('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
+  let envelope = normalizeSubmissionEnvelope(message, current.state.participants);
+  const submissionDigest = textDigest(message);
+  const previous = envelope.requestId && current.state.operations.find((operation) => operation.id === envelope.requestId);
+  if (previous) {
+    if (previous.request.submissionDigest !== submissionDigest) throw new Error('requestId already belongs to a different submission');
+    return { operationId: previous.id, phase: previous.request.phase, status: previous.status, duplicate: true, attachments: previous.result.attachments };
+  }
+  const resolved = await resolveRecordedPrompt(root, envelope, current.state, env);
+  envelope = { ...envelope, ownerMessage: resolved.text };
+  if (envelope.phase !== 'reconcile') {
+    const deliveries = await ownerDeliveries(root, env);
+    const captured = deliveries.findLast(e => e.sessionId === (envelope.ownerSessionId ?? current.state.contextEvidence.ownerPrompt?.sessionId) && e.text === resolved.text);
+    if (captured) {
+      if ((envelope.attachments ?? []).some(path => !captured.attachments.includes(path))) throw new Error('Attachments must match the captured owner selection.');
+      const existing = current.state.operations.find(op => op.id === captured.id);
+      if (!existing) throw new Error(`Owner message ${captured.id} is captured but not submitted: ${captured.error ?? 'retry automatic delivery'}`);
+      return { operationId: existing.id, phase: existing.request.phase, status: existing.status, duplicate: true, attachments: existing.result.attachments };
+    }
+  }
+  if (envelope.phase === 'single') envelope.message = `OWNER MESSAGE (verbatim):\n${resolved.text}`;
+  const config = (await loadEffectiveConfig(current.paths.canonicalRoot, env)).config;
+  const uploadSessionId = await attachmentSessionId(root, envelope, current.state, env);
+  const selection = validateSubmissionAttachments(envelope.attachments ?? [], current.paths.canonicalRoot, config, { sessionId: uploadSessionId, env });
+  const attachments = selection.paths;
+  const ownerMessageDigest = textDigest(envelope.ownerMessage);
+  const promptEvidence = current.state.contextEvidence.ownerPrompt;
+  const promptEvidenceRing = envelope.phase === 'independent' ? await recentOwnerPromptEvidence(root, env) : [];
+  const promptCandidates = promptEvidenceRing.length ? promptEvidenceRing : promptEvidence ? [promptEvidence] : [];
+  let sessionId = uploadSessionId || promptCandidates.find((evidence) => evidence.digest === ownerMessageDigest)?.sessionId || promptEvidence?.sessionId || '';
+  if (envelope.phase === 'independent' && promptCandidates.length && !promptCandidates.some((evidence) => evidence.digest === ownerMessageDigest)) throw new Error('Phase 1 ownerMessage does not match a recent owner-typed prompt');
+  if (envelope.phase === 'independent') {
+    const stored = current.state.recordedReply;
+    const replyEvidence = current.state.contextEvidence.ownerVisibleReply?.sessionId === sessionId ? current.state.contextEvidence.ownerVisibleReply : null;
+    if (envelope.previousReplyStatus === 'recorded') {
+      if (stored?.status === 'available' && stored.sessionId === sessionId && replyEvidence?.digest === textDigest(stored.text)) {
+        envelope.previousReplyStatus = 'provided';
+        envelope.previousReply = stored.text;
+      } else envelope.previousReplyStatus = 'unavailable';
+    }
+    if (envelope.previousReplyStatus === 'provided' && replyEvidence) {
+      if (replyEvidence.digest !== textDigest(envelope.previousReply)) throw new Error('Phase 1 previousReply does not match the last owner-visible Claude reply');
+      envelope.claudeReplyVerified = true;
+    } else if (envelope.previousReplyStatus === 'none' && replyEvidence) throw new Error('Phase 1 declares no previous reply but a prior owner-visible reply was recorded');
+  }
+  if (envelope.phase === 'reconcile') {
+    const parent = current.state.operations.find((operation) => operation.id === envelope.parentOperationId);
+    if (!parent || parent.request.phase !== 'independent' || parent.status !== 'completed' || !parent.result.finalResponse) throw new Error('Phase 2 requires a completed Phase 1 with a stored independent reading');
+    if (parent.request.ownerMessageDigest !== ownerMessageDigest) throw new Error('Phase 2 ownerMessage does not match its Phase 1 owner message');
+    if (current.state.operations.some((operation) => operation.request.parentOperationId === parent.id)) throw new Error('Phase 1 already has a Phase 2 operation');
+    sessionId = parent.result.relay?.sessionId ?? sessionId;
+    assertSealed(current.state, parent);
+    const sealed = current.state.workspace?.seals[parent.id];
+    if (sealed?.reading) envelope.fableResponse = `CLAUDE INDEPENDENT ASSESSMENT (sealed before Codex execution):\n${sealed.reading}\n\nCLAUDE RECONCILIATION:\n${envelope.fableResponse}`;
+    envelope.message = `OWNER MESSAGE (verbatim):\n${envelope.ownerMessage}\n\nCODEX PHASE 1 INDEPENDENT READING (stored verbatim):\n${parent.result.finalResponse}${parent.result.warning ? `\n\nCONTROLLER WARNING (Phase 1):\n${parent.result.warning}` : ''}\n\nFABLE RESPONSE (owner-visible, verbatim):\n${envelope.fableResponse}`;
+  }
+  const retainedOwnerMessage = envelope.phase === 'independent' ? envelope.ownerMessage : null;
+  const retainedPreviousStatus = envelope.phase === 'independent' ? envelope.previousReplyStatus : null;
+  const retainedPreviousReply = envelope.phase === 'independent' && envelope.previousReplyStatus === 'provided' ? envelope.previousReply : null;
+  if (Buffer.byteLength(envelope.message ?? '', 'utf8') + Buffer.byteLength(retainedOwnerMessage ?? '', 'utf8') + Buffer.byteLength(retainedPreviousReply ?? '', 'utf8') > MAX_OWNER_MESSAGE_BYTES) throw new Error('owner message envelope must be at most 192 KiB');
+  const id = envelope.requestId ?? randomUUID();
+  const now = new Date().toISOString();
+  const updated = await updateState(root, (state) => {
+    state.operations = pruneOperations(state.operations);
+    const workspace = state.workspace;
+    for (const key of Object.keys(workspace?.seals ?? {})) if (!state.operations.some(op => op.id === key)) delete workspace.seals[key];
+    if (envelope.phase === 'independent' && state.participants === 'both' && workspace?.sessions[sessionId]) workspace.seals[id] = { reading: null, digest: null, at: null };
+    state.operations.push(operationRecord({
+      id,
+      message: envelope.phase === 'independent' ? null : envelope.message,
+      route: state.route,
+      participants: state.participants,
+      phase: envelope.phase,
+      parentOperationId: envelope.parentOperationId,
+      ownerMessageDigest,
+      claudeReplyVerified: envelope.claudeReplyVerified,
+      ownerMessage: retainedOwnerMessage,
+      previousReplyStatus: retainedPreviousStatus,
+      previousReply: retainedPreviousReply,
+      attachments,
+      sessionId,
+      submissionDigest,
+      now
+    }));
+    state.partner.status = state.controller.activeOperationId ? 'working' : 'queued';
+    state.task.status = 'active';
+    state.task.joint.required = true;
+    state.task.joint.status = 'pending';
+    state.generation += 1;
+    return state;
+  }, { expectedGeneration: current.state.generation, purpose: 'sdk-submit', lockWaitMs: Math.max(0, deadline - Date.now()) }, env);
+  if (!updated.ok) throw updated.error ?? new Error(`submit failed safely: ${updated.health}`);
+  if (spawnRunner) {
+    const child = spawnImpl(process.execPath, [CONTROLLER_PATH, 'runner', '--root', updated.paths.canonicalRoot], { detached: true, stdio: 'ignore', env });
+    child.unref?.();
+  }
+  return { operationId: id, phase: envelope.phase, status: 'queued', claudeReplyVerified: envelope.claudeReplyVerified, attachments: selection.statuses, ...(resolved.resolution ? { messageResolution: resolved.resolution } : {}) };
+}
+
+const CHECKPOINT_ARRAY_FIELDS = new Set(Object.keys(CHECKPOINT_ARRAY_LIMITS));
+function authorizeContinuationFields(state, fields) {
+  if (fields.some(field => ['openWork', 'ownerActionRequired', 'blocker'].includes(field)) &&
+    (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt)) throw new ValidationError('continuation updates require owner-selected work mode');
+}
+const CHECKPOINT_TEXT_FIELD_SET = new Set(CHECKPOINT_TEXT_FIELDS);
+
+function stampCheckpoint(checkpoint, fields, now = new Date().toISOString()) {
+  checkpoint.updatedAt = now;
+  for (const field of fields) checkpoint.fieldUpdatedAt[field] = now;
+}
+
+function validateCheckpointCandidate(checkpoint, root) {
+  for (const field of CHECKPOINT_TEXT_FIELDS) if (checkpoint[field] !== null && Buffer.byteLength(checkpoint[field], 'utf8') > 8192) throw new Error(`${field} exceeds its 8192-byte cap`);
+  for (const [field, limit] of Object.entries(CHECKPOINT_ARRAY_LIMITS)) {
+    if (checkpoint[field].length > limit.count) throw new Error(`${field} is full: ${checkpoint[field].length}/${limit.count}; use checkpoint export and checkpoint replace`);
+    if (checkpoint[field].some((value) => Buffer.byteLength(value, 'utf8') > limit.bytes)) throw new Error(`${field} contains a value over its ${limit.bytes}-byte cap`);
+  }
+  buildRecoverySeed(checkpoint, root);
+}
+
+export async function updateCheckpoint(root, field, value, env = process.env) {
+  if (!CHECKPOINT_ARRAY_FIELDS.has(field) && !CHECKPOINT_TEXT_FIELD_SET.has(field)) throw new Error('checkpoint field is not mutable');
+  if (typeof value !== 'string' || !value.trim()) throw new Error('checkpoint value must be non-empty');
+  const bounded = value.trim();
+  rejectPayloadLikeText(bounded);
+  const current = await readState(root, env);
+  if (!current.ok) throw new Error(`partner state unavailable: ${current.health}`);
+  const candidate = structuredClone(current.state.partner.thread.checkpoint);
+  if (CHECKPOINT_ARRAY_FIELDS.has(field)) {
+    const cap = CHECKPOINT_ARRAY_LIMITS[field].count;
+    if (candidate[field].length >= cap) throw new Error(`${field} is full: ${candidate[field].length}/${cap}; use checkpoint export and checkpoint replace`);
+    candidate[field] = [...candidate[field], bounded];
+  }
+  else candidate[field] = bounded;
+  stampCheckpoint(candidate, [field]);
+  validateCheckpointCandidate(candidate, current.paths.canonicalRoot);
+  const state = await mutate(root, 'checkpoint-update', (draft) => {
+    authorizeContinuationFields(draft, [field]);
+    if (CHECKPOINT_ARRAY_FIELDS.has(field)) draft.partner.thread.checkpoint[field] = [...draft.partner.thread.checkpoint[field], bounded];
+    else draft.partner.thread.checkpoint[field] = bounded;
+    if (field === 'openWork') draft.partner.thread.checkpoint.continuation.armed = true;
+    stampCheckpoint(draft.partner.thread.checkpoint, [field]);
+    validateCheckpointCandidate(draft.partner.thread.checkpoint, draft.project.canonicalRoot);
+  }, env);
+  return state.partner.thread.checkpoint;
+}
+
+export async function replaceCheckpointArray(root, field, values, env = process.env) {
+  if (!CHECKPOINT_ARRAY_FIELDS.has(field) || !Array.isArray(values)) throw new Error('checkpoint replace requires an array checkpoint field and JSON array');
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('checkpoint replacement values must be non-empty strings');
+    rejectPayloadLikeText(value);
+  }
+  const normalized = values.map((value) => value.trim());
+  return mutate(root, 'checkpoint-replace', (state) => {
+    authorizeContinuationFields(state, [field]);
+    const checkpoint = state.partner.thread.checkpoint;
+    checkpoint[field] = normalized;
+    if (field === 'openWork') checkpoint.continuation.armed = true;
+    stampCheckpoint(checkpoint, [field]);
+    validateCheckpointCandidate(checkpoint, state.project.canonicalRoot);
+  }, env).then((state) => state.partner.thread.checkpoint);
+}
+
+export async function compactCheckpointArray(root, field, keepLast, env = process.env) {
+  if (!CHECKPOINT_ARRAY_FIELDS.has(field) || !Number.isSafeInteger(keepLast) || keepLast < 0) throw new Error('checkpoint compact requires an array field and non-negative --keep-last');
+  return mutate(root, 'checkpoint-compact', (state) => {
+    authorizeContinuationFields(state, [field]);
+    const checkpoint = state.partner.thread.checkpoint;
+    checkpoint[field] = keepLast === 0 ? [] : checkpoint[field].slice(-keepLast);
+    stampCheckpoint(checkpoint, [field]);
+    validateCheckpointCandidate(checkpoint, state.project.canonicalRoot);
+  }, env).then((state) => state.partner.thread.checkpoint);
+}
+
+export async function snapshotCheckpoint(root, values, env = process.env) {
+  if (!values || typeof values !== 'object' || Array.isArray(values) || Object.keys(values).length === 0 || Object.keys(values).some((field) => !CHECKPOINT_TEXT_FIELD_SET.has(field))) throw new Error('checkpoint snapshot requires a JSON object containing only progress fields');
+  for (const value of Object.values(values)) {
+    if (value !== null && typeof value !== 'string') throw new Error('checkpoint snapshot values must be strings or null');
+    if (typeof value === 'string') rejectPayloadLikeText(value);
+  }
+  return mutate(root, 'checkpoint-snapshot', (state) => {
+    authorizeContinuationFields(state, Object.keys(values));
+    const checkpoint = state.partner.thread.checkpoint;
+    for (const [field, value] of Object.entries(values)) checkpoint[field] = typeof value === 'string' ? value.trim() || null : null;
+    stampCheckpoint(checkpoint, Object.keys(values));
+    validateCheckpointCandidate(checkpoint, state.project.canonicalRoot);
+  }, env).then((state) => state.partner.thread.checkpoint);
+}
+
+export async function claimRunner(root, pid = process.pid, env = process.env) {
+  const deadline = Date.now() + 3000;
+  while (true) {
+    const current = await readState(root, env, { lockWaitMs: Math.max(0, deadline - Date.now()) });
+    if (!current.ok) throw current.error ?? new Error(`runner denied: ${current.health}`);
+    const owner = current.state.controller.runnerPid;
+    if (owner && owner !== pid && isProcessAlive(owner)) return false;
+    const staleActiveId = owner && owner !== pid ? current.state.controller.activeOperationId : null;
+    const updated = await updateState(root, (state) => {
+      if (state.controller.runnerPid && state.controller.runnerPid !== pid && isProcessAlive(state.controller.runnerPid)) throw new Error('another runner owns the queue');
+      if (staleActiveId) markDeadRunnerFailure(state, staleActiveId);
+      state.controller.runnerPid = pid;
+      state.generation += 1;
+      return state;
+    }, { expectedGeneration: current.state.generation, purpose: 'sdk-runner-claim', lockWaitMs: Math.max(0, deadline - Date.now()) }, env);
+    if (updated.ok) return true;
+    if (!['generation-conflict', 'lock-contention'].includes(updated.health) || Date.now() >= deadline) throw updated.error ?? new Error(`runner claim failed: ${updated.health}`);
+  }
+}
+
+export async function claimNextOperation(root, env = process.env) {
+  const deadline = Date.now() + 3000;
+  while (true) {
+    const current = await readState(root, env, { lockWaitMs: Math.max(0, deadline - Date.now()) });
+    if (!current.ok) throw current.error ?? new Error(`queue unavailable: ${current.health}`);
+    if (current.state.route === 'recovery-read-only') return null;
+    const queued = nextClaimableOperation(current.state.operations, current.state.workspace?.seals);
+    if (!queued) return null;
+    const now = new Date().toISOString();
+    const updated = await updateState(root, (state) => {
+      if (state.controller.activeOperationId) throw new Error('another operation is active');
+      const operation = state.operations.find((item) => item.id === queued.id && item.status === 'queued');
+      if (!operation) throw new Error('queued operation changed');
+      bindQueuedSession(state, operation);
+      operation.status = 'working';
+      operation.lifecycle.phase = 'working';
+      operation.lifecycle.detail = 'Codex is working.';
+      operation.lifecycle.startedAt = now;
+      state.controller.activeOperationId = operation.id;
+      state.partner.status = 'working';
+      state.task.status = 'active';
+      state.generation += 1;
+      return state;
+    }, { expectedGeneration: current.state.generation, purpose: 'sdk-operation-claim', lockWaitMs: Math.max(0, deadline - Date.now()) }, env);
+    if (updated.ok) return updated.state.operations.find((operation) => operation.id === queued.id);
+    if (!['generation-conflict', 'lock-contention'].includes(updated.health) || Date.now() >= deadline) throw updated.error ?? new Error(`queue claim failed: ${updated.health}`);
+  }
+}
+
+async function recordLifecycle(root, operationId, update, env) {
+  if (!update) return;
+  await mutate(root, `sdk-lifecycle-${update.phase}`, (state) => {
+    const operation = state.operations.find((item) => item.id === operationId && item.status === 'working');
+    if (!operation) return;
+    operation.lifecycle.phase = update.phase;
+    operation.lifecycle.detail = update.detail;
+  }, env);
+}
+
+async function finishOperation(root, operationId, status, { finalResponse = null, error = null, threadId = null, fingerprint = null, completedAt = null, version = null, requiresRecovery = false, capacityRefused = false, usage = null, structured = null, warning = null, relay = null, attachmentDelivered = false } = {}, env) {
+  const config = (await loadEffectiveConfig(root, env)).config;
+  return mutate(root, `sdk-operation-${status}`, async (state) => {
+    const operation = state.operations.find((item) => item.id === operationId);
+    if (!operation || operation.status !== 'working') throw new Error('active operation record is missing');
+    operation.status = status;
+    operation.result.attachments = operation.result.attachments?.map((entry) => ({ ...entry, status: attachmentDelivered ? 'delivered' : 'failed' })) ?? null;
+    operation.request.attachments = [];
+    operation.usage = usage;
+    operation.externalId = threadId ?? state.partner.thread.threadId;
+    if (operation.request.phase !== 'independent') operation.request.message = null;
+    operation.result.finalResponse = finalResponse;
+    operation.result.error = error;
+    operation.result.structured = structured;
+    operation.result.warning = warning;
+    operation.result.relay = relay ?? operation.result.relay;
+    operation.lifecycle.phase = status;
+    operation.lifecycle.detail = status === 'completed' ? 'Codex turn completed.' : status === 'cancelled' ? 'Codex turn cancelled.' : 'Codex turn failed.';
+    operation.lifecycle.finishedAt = new Date().toISOString();
+    state.controller.activeOperationId = null;
+    const isIndependent = operation.request.phase === 'independent';
+    const isJointlyComplete = operation.request.phase === 'reconcile';
+    if (isIndependent) {
+      operation.request.previousReply = null;
+      operation.request.previousReplyStatus = null;
+    }
+    state.partner.status = status === 'completed' && isIndependent
+      ? 'awaiting-phase2'
+      : state.operations.some((item) => item.status === 'queued') ? 'queued' : status;
+    if (status === 'completed') {
+      state.task.status = 'active';
+      state.partner.thread.metadata.turnCount += 1;
+      state.partner.thread.metadata.lastUsedAt = completedAt;
+      if (!isIndependent) {
+        state.partner.thread.metadata.repoFingerprint = fingerprint;
+        state.partner.thread.metadata.repoFingerprintCapturedAt = completedAt;
+        state.partner.thread.metadata.lastRecordedTurn = { at: completedAt, version };
+        state.partner.thread.checkpoint.repoFingerprint = fingerprint;
+        state.partner.thread.checkpoint.repoFingerprintCapturedAt = completedAt;
+        state.partner.thread.checkpoint.updatedAt = completedAt;
+      }
+    }
+    else if (status === 'failed') {
+      state.task.status = (capacityRefused || operation.request.phase === 'single') && !requiresRecovery ? 'partner-unavailable' : 'recovery-required';
+      if (!capacityRefused && operation.request.phase !== 'single' || requiresRecovery) {
+        state.route = 'recovery-read-only';
+        state.participants = 'both';
+      }
+    }
+    else if (status === 'cancelled' && !state.operations.some((item) => item.status === 'queued')) state.task.status = null;
+    state.task.joint.required = true;
+    state.task.joint.status = status === 'completed' && isIndependent ? 'awaiting-phase2'
+      : status === 'completed' && isJointlyComplete ? 'completed'
+        : status === 'completed' ? 'completed' : status === 'failed' ? 'unavailable' : 'pending';
+    if (status === 'completed' && isJointlyComplete) {
+      const parent = state.operations.find((item) => item.id === operation.request.parentOperationId);
+      if (parent) {
+        // Keep the exact owner words for recorded references and agreed continuations.
+        parent.request.previousReply = null;
+        parent.request.message = null;
+      }
+    }
+    if (status !== 'failed' && state.modeGrant?.pausedAt && state.controller.activeOperationId === null) {
+      if (state.modeGrant.participants === 'claude' && state.modeGrant.ownerMessage) applyModeSelection(state, state.modeGrant, new Date().toISOString());
+      else {
+        try { await completeModeTransitionInState(state, new Date().toISOString(), config, env); }
+        catch (transitionError) {
+          // Retain the unused paused grant and verbatim text, not a half-applied
+          // transition. Attachment validation runs before any transition effects.
+          if (!/attachment|attach:|ENOENT|EACCES/.test(transitionError.message)) throw transitionError;
+          operation.result.warning = mergeWarnings(operation.result.warning, 'Pending owner mode transition could not validate its selected images; grant and text retained. Restore the selected file and retry the same mode command.');
+        }
+      }
+    }
+    state.operations = pruneOperations(state.operations);
+  }, env);
+}
+
+function markDeadRunnerFailure(state, operationId, now = new Date().toISOString()) {
+  const operation = state.operations.find((item) => item.id === operationId);
+  if (!operation || operation.status !== 'working' || state.controller.activeOperationId !== operationId || isProcessAlive(state.controller.runnerPid)) return false;
+  operation.status = 'failed';
+  operation.result.attachments = operation.result.attachments?.map((entry) => ({ ...entry, status: 'failed' })) ?? null;
+  operation.request.attachments = [];
+  operation.request.message = null;
+  operation.result.error = 'controller stopped before the SDK turn outcome was known';
+  operation.lifecycle.phase = 'failed';
+  operation.lifecycle.detail = 'Controller stopped; recovery is required.';
+  operation.lifecycle.finishedAt = now;
+  state.controller.activeOperationId = null;
+  state.controller.runnerPid = null;
+  state.partner.status = 'failed';
+  state.route = 'recovery-read-only';
+  state.participants = 'both';
+  state.task.status = 'recovery-required';
+  state.task.joint.required = true;
+  state.task.joint.status = 'unavailable';
+  return true;
+}
+
+export async function failDeadRunnerOperation(root, operationId, env = process.env) {
+  const current = await readState(root, env);
+  if (!current.ok) throw current.error ?? new Error(`partner state unavailable: ${current.health}`);
+  const operation = current.state.operations.find((item) => item.id === operationId);
+  if (!operation || operation.status !== 'working' || current.state.controller.activeOperationId !== operationId || isProcessAlive(current.state.controller.runnerPid)) return { changed: false, operation: operation ?? null };
+  const updated = await updateState(root, (state) => {
+    if (!markDeadRunnerFailure(state, operationId)) throw new Error('operation runner changed while recovery was starting');
+    state.generation += 1;
+    return state;
+  }, { expectedGeneration: current.state.generation, purpose: 'sdk-dead-runner-recovery' }, env);
+  if (!updated.ok) throw updated.error ?? new Error(`dead-runner recovery failed safely: ${updated.health}`);
+  return { changed: true, operation: updated.state.operations.find((item) => item.id === operationId) ?? null };
+}
+
+export async function runOperation(root, operation, { createCodex, signal, pause = ms => new Promise(done => setTimeout(done, ms)) } = {}, env = process.env) {
+  let finalResponse = null;
+  let usage = null;
+  let verifiedId = null;
+  let expectedId = null;
+  let attachmentDelivered = false, turnCompleted = false;
+  let authorshipBefore = null, auditWarning = null, auditFinished = false, appliedTestFiles = [];
+  let changesBefore = null;
+  const finishAudit = async () => {
+    if (authorshipBefore && !auditFinished) {
+      auditWarning = authorshipWarning(authorshipBefore, await captureAuthorship(authorshipBefore.root), new Set(appliedTestFiles));
+      auditFinished = true;
+    }
+    return auditWarning;
+  };
+  try {
+    const before = await readState(root, env);
+    if (!before.ok) throw new Error(`partner state unavailable: ${before.health}`);
+    assertSealed(before.state, operation);
+    expectedId = before.state.partner.thread.threadId;
+    if (before.state.operations.find((item) => item.id === operation.id)?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK execution'), { name: 'AbortError' });
+    const config = (await loadEffectiveConfig(before.paths.canonicalRoot, env)).config;
+    const profile = resolveSettings(config, before.state, operation.result.relay?.sessionId).values;
+    const plan = executionPlan(config, before.state, operation.result.relay?.sessionId);
+    const authorship = authorshipPolicy(profile, plan);
+    const refresh = await refreshState(root, env);
+    const awaitingHandoff = refresh && ['prepared', 'awaiting-receipt'].includes(refresh.status);
+    // Review turns cannot edit code when the other main partner is the coder.
+    // Document-writing turns retain normal file tools; their file-type boundary
+    // is instructional while this launch uses the workspace-wide sandbox.
+    const deliveries = await ownerDeliveries(root, env);
+    const ownerIndex = deliveries.findIndex(e => e.id === (operation.request.parentOperationId ?? operation.id));
+    const newerMessage = deliveries.some((e, index) => e.sessionId === operation.result.relay?.sessionId && e.id !== (operation.request.parentOperationId ?? operation.id) && (ownerIndex >= 0 ? index > ownerIndex : Date.parse(e.capturedAt) >= Date.parse(operation.lifecycle.queuedAt)) && e.status !== 'reconciled');
+    const activity = await activitySnapshot(root, operation.result.relay?.sessionId, env);
+    const restrictedActivity = activity.active && activity.activity !== 'work';
+    const researchEdits = restrictedActivity && activity.installed && ['reconcile', 'single'].includes(operation.request.phase) && !newerMessage && !awaitingHandoff;
+    let appliedResearchFiles = [];
+    const sandbox = restrictedActivity || operation.request.phase === 'independent' || newerMessage || awaitingHandoff || operation.request.sandbox === 'workspace-write' && authorship.coder !== 'codex' && !authorship.codexDocuments
+      ? 'read-only' : operation.request.sandbox;
+    const restrictedTools = restrictedActivity;
+    const limitedTests = !restrictedActivity && authorship.codexTestEdits && operation.request.route === 'normal' && operation.request.phase !== 'independent' && !newerMessage && !awaitingHandoff;
+    const docsBoth = plan.role === 'docs' && plan.executor === 'both' && operation.request.participants === 'both' && operation.request.route === 'normal';
+    const roleExecution = operation.request.phase !== 'independent' && ['codex', 'both'].includes(plan.executor);
+    const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
+    const options = {
+      ...(!expectedId ? { threadSource: 'fabex' } : {}),
+      workingDirectory: before.paths.canonicalRoot,
+      skipGitRepoCheck: true,
+      sandboxMode: sandbox,
+      approvalPolicy: sandbox === 'read-only' || limitedTests ? 'never' : 'on-request',
+      model: (roleExecution ? plan.model : null) ?? profile['partners.codex.model'] ?? undefined,
+      modelReasoningEffort: (roleExecution ? plan.effort : null) ?? profile['partners.codex.effort'] ?? config.models.codex.reasoningEffort,
+      networkAccessEnabled: restrictedTools || config.models.codex.networkAccessEnabled === true,
+      ...(restrictedTools ? { webSearchMode: 'live' } : {}),
+      ...(repositoryDirectory && sandbox === 'workspace-write' ? { additionalDirectories: [repositoryDirectory] } : {})
+    };
+    const seed = expectedId ? null : buildRecoverySeed(before.state.partner.thread.checkpoint, before.paths.canonicalRoot);
+    let prompt = turnPrompt({ ...operation, request: { ...operation.request, sandbox } }, operation.request.phase === 'independent' ? null : seed);
+    if (awaitingHandoff) prompt += `\nREVIEWED CONTINUATION HANDOFF:\n${refresh.handoff}\nRead this handoff before proceeding. This receipt turn is read-only. Include exactly "Handoff received: sha256:${refresh.digest}" as an evidence entry after reading it. Preserve pending messages and existing task scope.`;
+    if (docsBoth) {
+      prompt += '\nDOCUMENTATION BOTH: Collaborate on the same handoff or document. Read the existing file, including the other partner’s edits, and update it in place using its topic structure. Each contributes what it knows; coordinate edits one writer at a time, check the whole handoff for accuracy, preserve relevant disagreements with attribution, and never silently delete the other’s content. Do not create a companion document or require separate author sections. Shared documentation is not a sealed strategy assessment: both may read it at any time. Keep the normal independent assessment and reconciliation of the owner’s request separate from writing the document. Claude’s main model stays host controlled; the Documentation model/effort override applies to Codex on working reconciliation turns.';
+    }
+
+    const attachments = validateAttachments(operation.request.attachments ?? [], before.paths.canonicalRoot, config, { sessionId: operation.result.relay?.sessionId ?? '', env });
+    const input = attachments.length ? [{ type: 'text', text: prompt }, ...attachments.map((path) => ({ type: 'local_image', path }))] : prompt;
+    const jobs = await heavyStatus(root, env);
+    const scheduling = ` Heavy work policy: never batch suites/builds/installs/migrations in parallel. Before a heavy command, inspect control.mjs heavy status and mem; if another job is active or pressure critical, use heavy wait in 120-second slices and retry without an owner prompt. A wait timeout is not task completion. Preserve required review/relay. Never bypass an occupied queue. SDK command events are observed, not pre-execution enforcement. Current heavy jobs: ${JSON.stringify(jobs.jobs.map(job => ({ id: job.id, label: job.label })))}. Only release verified task-owned resources no longer needed. Keep requested previews. Continue required authorized feasible openWork until complete, interrupted, or genuinely blocked; a review-cycle completion is not task completion.`;
+    let initialInstructions = (seed && operation.request.phase === 'independent' ? `${developerInstructions()} ${seed}` : developerInstructions()) + scheduling + ` Active task assignment: ${JSON.stringify(plan)}. Preserve independent review by both main partners. During Phase 1 do not read Claude's current sealed assessment, chat transcript or scratch notes; use the original message and agreed prior context. Sanctioned status controls omit sealed readings. When the active task is assigned to Claude, do not perform competing task work; review independently. Model/effort role preferences not supported by the executing host must be reported, not silently claimed applied.`;
+    initialInstructions += ` ${authorship.instructions}`;
+    initialInstructions += operation.request.phase === 'independent' ? ' Independent assessment is read-only. Do not implement or return test edits during Phase 1.' : ' Reconciliation permits building only within actual owner authorization and agreement. A question, a partner proposal or a work-mode label alone does not authorize implementation. Continue already-agreed work without asking the owner to repeat it.';
+    if (newerMessage) initialInstructions += ' A newer owner message is pending. This turn is read-only: reconcile the earlier assessment, then assess the pending correction before affected implementation.';
+    if (limitedTests) initialInstructions += ` ${testEditInstructions}`;
+    if (restrictedTools) initialInstructions += ' Research MCP tools remain available under host permissions: only Mobbin searches/get/list, Context7 resolve-library-id/query-docs and IDE getDiagnostics are authorized. Do not invoke mutating MCPs, browser actions that change real data, publishing or arbitrary remote code. Shell networking is for read-only research. Report unavailable tools or enforcement limits honestly.';
+    if (researchEdits) initialInstructions += ` ${editInstructions} Research directory: ${researchRoot(activity.root)}.`;
+    if (docsBoth) initialInstructions += ' Shared handoff and documentation files are collaborative sources, not sealed assessments; both partners may read and update them in turn.';
+    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: restrictedTools ? 'research' : limitedTests ? 'off' : profile['partners.codex.helperServers'] });
+    const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
+    await mutate(root, 'sdk-execution-envelope', (state) => {
+      state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox, instructionProfile: 'continuous-canonical-v1' };
+      const stored = state.operations.find((op) => op.id === operation.id);
+      state.workspace.observations ??= {};
+      state.workspace.observations.helperServers = codex.fabexHelperServers ?? { requested: profile['partners.codex.helperServers'], verified: false };
+      state.workspace.observations.codex = { requested: options.model ?? null, effort: options.modelReasoningEffort, observed: null, verified: false, source: 'SDK request; no served-model evidence yet', at: new Date().toISOString(), role: plan.role };
+      if (stored?.lifecycle.cancelRequested || signal?.aborted) throw Object.assign(new Error('operation cancelled before SDK submission'), { name: 'AbortError' });
+      stored.result.attachments = attachments.map((_, index) => ({ index, status: 'submitted' }));
+    }, env);
+    const outputSchema = researchEdits ? extendSchema(reviewSchema(operation.request.phase)) : limitedTests ? testEditSchema(operation.request.phase) : reviewSchema(operation.request.phase);
+    if (authorship.coder !== 'codex' && operation.request.route === 'normal') authorshipBefore = await captureAuthorship(before.paths.canonicalRoot);
+    if (sandbox === 'workspace-write' || limitedTests) changesBefore = await captureAuthorship(repositoryDirectory ?? before.paths.canonicalRoot);
+    for (let attempt = 0; ; attempt++) {
+      let executionObserved = false;
+      try {
+        const streamed = await thread.runStreamed(input, { signal, ...(operation.request.participants === 'both' || limitedTests || researchEdits ? { outputSchema } : {}) });
+        let first = true;
+        for await (const event of streamed.events) {
+          if (event.type.startsWith('item.') || event.type === 'turn.completed') executionObserved = true;
+          if (['error', 'turn.failed'].includes(event.type)) {
+            const failure = Object.assign(new Error(event.error?.message ?? event.message ?? 'Codex stream failed'), { code: event.error?.code ?? event.code, providerEvent: true });
+            throw failure;
+          }
+          if (typeof event.model === 'string') await mutate(root, 'sdk-model-observation', state => {
+            Object.assign(state.workspace.observations.codex, { observed: event.model, verified: true, source: 'SDK event', at: new Date().toISOString() });
+          }, env);
+          if (first) {
+            verifiedId = verifyThreadStarted(expectedId ?? verifiedId, event);
+            first = false;
+            if (!expectedId) {
+              await mutate(root, 'sdk-thread-started', (state) => {
+                if (state.partner.thread.threadId && state.partner.thread.threadId !== verifiedId) throw new ThreadMismatchError(state.partner.thread.threadId, verifiedId);
+                state.partner.thread.threadId = verifiedId;
+              }, env);
+            }
+          }
+          if (event.item?.type === 'command_execution' && ['item.started', 'item.completed'].includes(event.type)) {
+            const jobId = `sdk:${operation.id}:${event.item.id}`;
+            if (event.type === 'item.started' && heavyShape(event.item.command)) await beginHeavy(root, { id: jobId, command: event.item.command, executor: 'codex', observed: true }, env);
+            if (event.type === 'item.completed') {
+              const tracked = await heavyStatus(root, env);
+              if (tracked.jobs.some(job => job.id === jobId)) await finishHeavy(root, jobId, env, { evidence: 'sdk-command-completed', exitCode: event.item.exit_code ?? null });
+            }
+          }
+          const response = finalResponseFromEvent(event);
+          if (event.type === 'turn.completed') { turnCompleted = true; usage = boundedUsage(event.usage); attachmentDelivered = attachments.length > 0; }
+          if (response !== null) finalResponse = response;
+          await recordLifecycle(root, operation.id, lifecycleUpdate(event), env);
+        }
+        break;
+      } catch (error) {
+        if (!confirmedCapacityRefusal(error, executionObserved) || signal?.aborted) throw error;
+        if (attempt >= 2) throw Object.assign(new Error('Codex is temporarily unavailable: provider capacity refused execution after three attempts. The task is preserved; no model was substituted.'), { code: error.code, capacityRefused: true });
+        await recordLifecycle(root, operation.id, { phase: 'working', detail: `Provider refused execution at capacity; retry ${attempt + 1}/2 with the same model.` }, env);
+        await pause(attempt === 0 ? 500 : 1500);
+        if (signal?.aborted) throw Object.assign(new Error('operation cancelled during capacity wait'), { name: 'AbortError' });
+      }
+    }
+    if (!verifiedId) throw new ThreadMismatchError(expectedId, null);
+    if (limitedTests) {
+      const output = splitTestEdits(finalResponse, operation.request.phase);
+      if (!turnCompleted) throw new Error('Test-writing turn ended without completion; no edits applied.');
+      await mutate(root, 'sdk-apply-test-edits', async now => {
+        const sessionId = operation.result.relay?.sessionId;
+        const effective = (await loadEffectiveConfig(root, env)).config;
+        const currentPlan = executionPlan(effective, now, sessionId);
+        if (signal?.aborted || now.route !== 'normal' || now.ownerSelectedMode?.route !== 'normal' || now.modeGrant?.pausedAt || now.controller.activeOperationId !== operation.id || now.operations.find(op => op.id === operation.id)?.lifecycle.cancelRequested || now.workspace.activeSessionId !== sessionId || now.workspace.activeMilestoneId !== before.state.workspace.activeMilestoneId || !authorshipPolicy(resolveSettings(effective, now, sessionId).values, currentPlan).codexTestEdits) throw new Error('Test-writing assignment or operation changed; no test edits applied.');
+        appliedTestFiles = applyTestEdits(before.paths.canonicalRoot, output.edits);
+      }, env);
+      finalResponse = output.review;
+    }
+    if (researchEdits) {
+      const output = splitEdits(finalResponse);
+      if (!turnCompleted || !parseReview(output.review, operation.request.phase).structured) throw new Error('Invalid or incomplete research review; no edits applied');
+      await mutate(root, 'sdk-apply-research-edits', async now => {
+        const current = await activitySnapshot(root, operation.result.relay?.sessionId, env);
+        const messages = await ownerDeliveries(root, env);
+        const originId = operation.request.parentOperationId ?? operation.id;
+        const ownIndex = messages.findIndex(e => e.id === originId);
+        const newer = messages.some((e, i) => e.sessionId === operation.result.relay?.sessionId && e.id !== originId && (ownIndex >= 0 ? i > ownIndex : Date.parse(e.capturedAt) >= Date.parse(operation.lifecycle.queuedAt)) && e.status !== 'reconciled');
+        if (signal?.aborted || current.activity !== activity.activity || current.transitionId !== activity.transitionId || now.route === 'recovery-read-only' || now.modeGrant || now.controller.activeOperationId !== operation.id || now.operations.find(op => op.id === operation.id)?.lifecycle.cancelRequested || newer) throw new Error('Research authority changed; no edits applied');
+        const effective = (await loadEffectiveConfig(root, env)).config;
+        const rights = authorshipPolicy(resolveSettings(effective, now, operation.result.relay?.sessionId).values, executionPlan(effective, now, operation.result.relay?.sessionId));
+        if (output.edits.some(e => !researchAuthorAllowed(activity.root, e.path, rights, 'codex'))) throw new Error('Research edit exceeds the current Coding/Test Writing/Documentation assignment');
+        appliedResearchFiles = applyContainedEdits(activity.root, output.edits);
+      }, env);
+      finalResponse = output.review;
+    }
+    const fingerprint = await repositoryFingerprint(before.paths.canonicalRoot, config);
+    const completedAt = new Date().toISOString();
+    const version = await sourceVersion();
+    const review = operation.request.participants === 'both' || limitedTests || researchEdits ? parseReview(finalResponse, operation.request.phase) : { finalResponse, structured: null, warning: null };
+    if (restrictedTools && codex.fabexHelperServers?.warning) review.warning = mergeWarnings(review.warning, codex.fabexHelperServers.warning);
+    if (awaitingHandoff && !await acknowledgeHandoff(root, verifiedId, review.structured, env)) review.warning = mergeWarnings(review.warning, 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.');
+
+    if (appliedResearchFiles.length && review.structured) {
+      review.structured.changedFiles = [...new Set([...review.structured.changedFiles, ...appliedResearchFiles])].slice(0, 16);
+      review.structured.evidence = [...review.structured.evidence.slice(0, 15), `Controller applied ${appliedResearchFiles.length} contained research/plan edit(s).`];
+    }
+    const unbounded = review.finalResponse;
+    finalResponse = boundedFinalResponse(unbounded);
+    if (finalResponse !== unbounded) review.warning = 'Codex answer exceeded the 32 KiB storage bound and was truncated; this is not the complete original answer.';
+    review.warning = mergeWarnings(await finishAudit(), review.warning, appliedTestFiles.length ? `Controller applied ${appliedTestFiles.length} validated test-file edit(s). Test execution remains assigned separately.` : null);
+    const model = options.model ? { id: options.model, source: 'requested SDK model', verified: false } : await codexModelSource(config, env);
+    const relay = finalResponse ? { label: speakerLabels(null, model.id).codex, sessionId: operation.result.relay?.sessionId ?? '', status: 'pending' } : null;
+    await finishOperation(root, operation.id, 'completed', { finalResponse, structured: review.structured, warning: review.warning, relay, threadId: verifiedId, fingerprint, completedAt, version, usage, attachmentDelivered }, env);
+    await syncOwnerDeliveries(root, (await readState(root, env)).state, env).catch(error => { process.stderr.write(`Fabex delivery acknowledgement pending: ${error.message}\n`); });
+    return { status: 'completed', threadId: verifiedId, finalResponse };
+  } catch (error) {
+    const warning = await finishAudit();
+    const cancelled = signal?.aborted || error?.name === 'AbortError';
+    if (cancelled) {
+      const partialEdits = changesBefore ? interruptedChangesWarning(changesBefore, await captureAuthorship(changesBefore.root)) : null;
+      await finishOperation(root, operation.id, 'cancelled', { threadId: verifiedId ?? expectedId, attachmentDelivered, warning: mergeWarnings(partialEdits, warning) }, env);
+      return { status: 'cancelled', threadId: verifiedId ?? expectedId };
+    }
+    const missing = expectedId && isMissingSessionError(error);
+    const mismatch = error?.code === 'thread-mismatch';
+    await finishOperation(root, operation.id, 'failed', { error: error?.message ?? String(error), threadId: verifiedId ?? expectedId, requiresRecovery: Boolean(missing || mismatch), capacityRefused: error.capacityRefused === true, attachmentDelivered, warning }, env);
+    throw error;
+  } finally { await recoverSdkJobs(root, operation.id, env).catch(() => {}); }
+}
+
+export async function cancelOperation(root, operationId, env = process.env, { identity = processIdentity, commandLine = async pid => (await promisify(execFile)('/bin/ps', ['-p', String(pid), '-o', 'args='], { timeout: 750, maxBuffer: 8192 })).stdout.trim(), signal = (pid, name) => process.kill(pid, name) } = {}) {
+  const observed = await readState(root, env, { observationOnly: true });
+  if (observed.ok && observed.health === 'migration-deferred') {
+    const operation = observed.state.operations.find(op => op.id === operationId);
+    const pid = observed.state.controller.runnerPid;
+    if (operation?.status !== 'working' || observed.state.controller.activeOperationId !== operationId || !isProcessAlive(pid)) throw new Error('Deferred migration cancellation requires the active live runner; no state changed.');
+    const before = await identity(pid);
+    const expected = `${process.execPath} ${CONTROLLER_PATH} runner --root ${observed.paths.canonicalRoot}`;
+    if (!before || await commandLine(pid) !== expected) throw new Error('Runner identity cannot be verified for cancellation; no process signalled.');
+    const again = await readState(root, env, { observationOnly: true });
+    if (!again.ok || again.state.controller.runnerPid !== pid || again.state.controller.activeOperationId !== operationId
+      || !sameIdentity(before, await identity(pid))) throw new Error('Runner ownership changed; no process signalled.');
+    signal(pid, 'SIGUSR1');
+    return { operationId, status: 'working', cancellationRequested: true, observationHealth: 'migration-deferred', instruction: 'Verified runner signalled; wait for its recorded outcome. State was not migrated.' };
+  }
+  let deadRunner = false;
+  const state = await mutate(root, 'sdk-cancel-request', (draft) => {
+    const operation = draft.operations.find((item) => item.id === operationId);
+    if (!operation || !['queued', 'working'].includes(operation.status)) throw new Error('operation is not queued or working');
+    deadRunner = markDeadRunnerFailure(draft, operationId);
+    if (deadRunner) return;
+    operation.lifecycle.cancelRequested = true;
+    if (operation.status === 'queued') {
+      operation.status = 'cancelled';
+      operation.result.attachments = operation.result.attachments?.map((entry) => ({ ...entry, status: 'failed' })) ?? null;
+      operation.request.attachments = [];
+      operation.request.message = null;
+      operation.request.ownerMessage = null;
+      operation.request.previousReply = null;
+      operation.lifecycle.phase = 'cancelled';
+      operation.lifecycle.detail = 'Queued Codex turn cancelled.';
+      operation.lifecycle.finishedAt = new Date().toISOString();
+      draft.partner.status = draft.controller.activeOperationId ? 'working' : draft.operations.some((item) => item.status === 'queued') ? 'queued' : 'cancelled';
+      if (!draft.controller.activeOperationId && !draft.operations.some((item) => item.status === 'queued')) draft.task.status = null;
+      draft.task.joint.status = 'pending';
+    }
+  }, env);
+  if (!deadRunner && state.controller.activeOperationId === operationId && isProcessAlive(state.controller.runnerPid)) signal(state.controller.runnerPid, 'SIGUSR1');
+  return { operationId, status: state.operations.find((item) => item.id === operationId)?.status, deadRunner };
+}
+
+export async function operationStatus(root, operationId, env = process.env, readOptions = {}) {
+  const current = await readState(root, env, { ...readOptions, observationOnly: true });
+  if (!current.ok) throw current.error ?? new Error(`state is ${current.health}`);
+  const operation = current.state.operations.find((item) => item.id === operationId);
+  if (!operation) throw new Error('operation not found');
+  return { ...structuredClone(operation), observationHealth: current.health };
+}
+
+export async function releaseRunner(root, pid = process.pid, env = process.env) {
+  return mutate(root, 'sdk-runner-release', (state) => {
+    if (state.controller.runnerPid === pid) state.controller.runnerPid = null;
+  }, env);
+}
+
+export async function releaseRunnerIfIdle(root, pid = process.pid, env = process.env) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const current = await readState(root, env);
+    if (!current.ok) throw new Error(`runner state unavailable: ${current.health}`);
+    if (current.state.controller.runnerPid !== pid) return true;
+    if (nextClaimableOperation(current.state.operations, current.state.workspace?.seals)) return false;
+    const updated = await updateState(root, (state) => {
+      if (state.controller.runnerPid !== pid || nextClaimableOperation(state.operations, state.workspace?.seals)) throw new Error('runner release raced with queue submission');
+      state.controller.runnerPid = null;
+      state.generation += 1;
+      return state;
+    }, { expectedGeneration: current.state.generation, purpose: 'sdk-runner-release-idle' }, env);
+    if (updated.ok) return true;
+    if (updated.health !== 'generation-conflict') throw updated.error ?? new Error(`runner release failed: ${updated.health}`);
+  }
+  return false;
+}
+
+export { threadTitle };

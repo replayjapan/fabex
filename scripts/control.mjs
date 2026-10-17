@@ -1,0 +1,550 @@
+#!/usr/bin/env node
+import { access, readFile } from 'node:fs/promises';
+import { homedir, platform } from 'node:os';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
+import { CHECKPOINT_ARRAY_LIMITS, CHECKPOINT_TEXT_FIELDS, checkpointWarnings, MAX_RECOVERY_SEED_BYTES, recoverySeedBytes } from './lib/checkpoint.mjs';
+import { loadEffectiveConfig } from './lib/config.mjs';
+import { formatMode, formatModeTransition, isValidMode, PARTICIPANTS } from './lib/mode.mjs';
+import { PLUGIN_ROOT, rootFromControlCwd } from './lib/paths.mjs';
+import { applyOwnerModeTransition, missingSessionThreadId, compactCheckpointArray, failDeadRunnerOperation, replaceCheckpointArray, repositoryFingerprint, snapshotCheckpoint, updateCheckpoint } from './lib/sdk-controller.mjs';
+import { clearDeadLock, initializeState, inspectTransaction, readState, resolveTransaction, updateState } from './lib/state.mjs';
+import { assertUuid, ValidationError } from './lib/validation.mjs';
+import { claudeModelSource, codexModelSource, speakerLabels } from './lib/speakers.mjs';
+import { cleanupWorkingCopy } from './lib/cleanup.mjs';
+import { devControl, parseDevArgs } from './lib/dev-server.mjs';
+import { detectDevelopment, developmentInvocation } from './lib/development.mjs';
+import { sampleMemory, processMemory } from './lib/memory.mjs';
+import { heavyStatus, waitHeavy, runHeavy, releaseHeavy, recoverHeavy } from './lib/heavy.mjs';
+import { resourceList, retainResource, releaseResource } from './lib/resources.mjs';
+import { recentOwnerPromptEvidence } from './lib/hook-evidence.mjs';
+import { conversationStatus, workspaceStatus, applyWorkspaceGrant, contextGauge, milestoneHandoff, selectTaskRole } from './lib/workspace.mjs';
+import { settingsView } from './lib/settings-view.mjs';
+import { usageControl } from './lib/usage-integration.mjs';
+import { ownerDeliveries, updateOwnerDelivery } from './lib/owner-delivery.mjs';
+
+const USAGE = 'Usage: control.mjs mem | prompts | heavy status|wait [--timeout 1..120] | resources list|retain <id> --note <reason>|release <id> | status [--all|--brief] | config | diagnose | dev start|stop|restart|status|logs [--lines 1..400] | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
+const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
+
+async function currentState(root) {
+  const result = await readState(root, process.env);
+  if (!result.ok) throw result.error ?? new Error(`state is ${result.health}; remain recovery-read-only and use recover or diagnose`);
+  return result;
+}
+
+async function mutate(root, purpose, fn) {
+  const current = await currentState(root);
+  const updated = await updateState(root, (state) => {
+    fn(state);
+    state.generation += 1;
+    return state;
+  }, { expectedGeneration: current.state.generation, purpose }, process.env);
+  if (!updated.ok) throw updated.error ?? new Error(`state update failed safely: ${updated.health}`);
+  return updated.state;
+}
+
+async function mode(root, target, participants, grantId, attachments = []) {
+  if (!['normal', 'discussion', 'ask-once'].includes(target)) throw new ValidationError('mode must be normal, discussion, or ask-once');
+  if (!PARTICIPANTS.has(participants) || !isValidMode(target, participants)) throw new ValidationError(`unsupported mode combination: ${target}/${participants}`);
+  const outcome = await applyOwnerModeTransition(root, { grantId, route: target, participants, attachments }, process.env);
+  const transition = outcome.status === 'pending'
+    ? `Fabex mode transition pending: ${outcome.from ? formatMode(outcome.from.route, outcome.from.participants) : 'unknown'} -> ${formatMode(target, participants)}.`
+    : outcome.from
+      ? formatModeTransition(outcome.from, outcome.to)
+      : `Fabex mode selected: ${formatMode(target, participants)}. Prior owner-selected mode was unavailable; owner authorization restored it.`;
+  process.stdout.write(`${transition}\nNative permissions and sandbox: unchanged. Codex SDK sandbox is selected per queued turn.\n`);
+  if (attachments.length) process.stdout.write(`Images selected for the mode transition: ${attachments.length}. Confirm delivery with the resulting operation status.\n`);
+  if (outcome.status === 'pending') {
+    const next = participants === 'claude'
+      ? ' Wait for it, then rerun this exact mode command to finish the transition and reveal the retained owner message.'
+      : ` The transition applies automatically after it stops.${outcome.operationId ? ` Reserved next operation ${outcome.operationId}.` : ''}`;
+    process.stdout.write(`Mode transition pending while Codex operation ${outcome.activeOperationId} stops; grant expiry and trailing text are retained.${next}\n`);
+  }
+  if (outcome.status === 'applied' && outcome.operationId) process.stdout.write(`${participants === 'both' ? 'Phase 1' : 'Codex'} operation: ${outcome.operationId}\n`);
+  if (outcome.status === 'applied' && outcome.ownerMessage) process.stdout.write(`OWNER MESSAGE (verbatim):\n${outcome.ownerMessage}\n`);
+}
+
+function restoreOwnerSelectedMode(state) {
+  const selected = state.ownerSelectedMode;
+  if (selected) {
+    state.route = selected.route;
+    state.participants = selected.participants;
+    return { route: selected.route, participants: selected.participants, proven: true };
+  }
+  state.route = 'discussion';
+  state.participants = 'both';
+  state.returnTo = null;
+  return { route: 'discussion', participants: 'both', proven: false };
+}
+
+async function status(root, view = 'default') {
+  const result = await readState(root, process.env);
+  const effective = await loadEffectiveConfig(result.paths.canonicalRoot, process.env);
+  let fingerprintError = null;
+  const liveFingerprintValue = await repositoryFingerprint(result.paths.canonicalRoot, effective.config).catch((error) => {
+    fingerprintError = error.message;
+    return { branch: null, head: null, dirty: null };
+  });
+  const checkpoint = result.state.partner.thread.checkpoint;
+  const warnings = checkpointWarnings(checkpoint, result.state.partner.thread.metadata, { repositoryRootConfigured: effective.config.project.repositoryRoot !== null });
+  if (fingerprintError) warnings.push(`repositoryRoot is invalid: ${fingerprintError}`.slice(0, 256));
+  const capturedValue = result.state.partner.thread.metadata.repoFingerprint;
+  if (!isDeepStrictEqual(capturedValue, liveFingerprintValue)) warnings.push('captured fingerprint differs from live');
+  const terminal = result.state.operations.filter((operation) => ['completed', 'failed', 'cancelled'].includes(operation.status)).slice(-3);
+  const selected = view === 'all' ? result.state.operations : result.state.operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status) || terminal.includes(operation));
+  const operations = selected.map(({ id, status: operationStatus, externalId, request, lifecycle, usage, result: operationResult }) => ({ id, status: operationStatus, externalId, phase: request.phase, parentOperationId: request.parentOperationId, lifecycle, usage, reviewStructured: Boolean(operationResult.structured), relayStatus: operationResult.relay?.status ?? null, resultWarning: operationResult.warning, attachments: operationResult.attachments }));
+  const output = {
+    workspace: await workspaceStatus(root),
+    contextGauge: await contextGauge(root),
+    memory: { ...(await heavyStatus(root)), processes: await processMemory(result.state.controller.runnerPid) },
+    resources: await resourceList(root),
+    health: result.health,
+    ...(result.lock ? { lock: result.lock } : {}),
+    route: result.state.route,
+    participants: result.state.participants,
+    returnTo: result.state.returnTo,
+    label: formatMode(result.state.route, result.state.participants),
+    generation: result.state.generation,
+    project: result.state.project,
+    task: result.state.task,
+    collaboration: {
+      modeGrantActive: Boolean(result.state.modeGrant && (result.state.modeGrant.pausedAt || Date.parse(result.state.modeGrant.expiresAt) >= Date.now())),
+      modeTransitionPending: Boolean(result.state.modeGrant?.pausedAt),
+      ownerSelectedMode: result.state.ownerSelectedMode,
+      ownerPromptCapturedAt: result.state.contextEvidence.ownerPrompt?.capturedAt ?? null,
+      ownerVisibleReplyCapturedAt: result.state.contextEvidence.ownerVisibleReply?.capturedAt ?? null,
+      recordedReply: result.state.recordedReply ? { status: result.state.recordedReply.status, at: result.state.recordedReply.at } : null,
+      operationalDelivery: result.state.operationalDelivery
+    },
+    partner: {
+      transport: result.state.partner.transport,
+      status: result.state.partner.status,
+      envelope: result.state.partner.envelope,
+      thread: { threadId: result.state.partner.thread.threadId, metadata: result.state.partner.thread.metadata },
+      checkpoint: { updatedAt: checkpoint.updatedAt, repoFingerprintCapturedAt: checkpoint.repoFingerprintCapturedAt, warnings, recoverySeedBytes: recoverySeedBytes(checkpoint, result.paths.canonicalRoot), recoverySeedLimitBytes: MAX_RECOVERY_SEED_BYTES }
+    },
+    capturedRepoFingerprint: { ...capturedValue, capturedAt: result.state.partner.thread.metadata.repoFingerprintCapturedAt },
+    liveRepoFingerprint: { ...liveFingerprintValue, computedAt: new Date().toISOString() }
+  };
+  const model = await codexModelSource(effective.config, process.env);
+  const claude = await claudeModelSource(result.state.claudeModel, process.env);
+  output.speakers = { labels: speakerLabels(claude.id, model.id, claude.source), claude, codex: model };
+  if (view !== 'brief') {
+    output.controller = result.state.controller;
+    output.operations = operations;
+  }
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  if (!result.ok) process.exitCode = 2;
+}
+
+const FIELD_NAMES = new Map([
+  ['objective', 'objective'], ['current-task', 'currentTask'], ['constraint', 'constraints'],
+  ['decision', 'acceptedDecisions'], ['relevant-file', 'relevantFiles'],
+  ['implementation-status', 'implementationStatus'], ['test-status', 'testStatus'],
+  ['unresolved-problem', 'unresolvedProblems'], ['next-action', 'nextAction'],
+  ['open-work', 'openWork'], ['owner-action-required', 'ownerActionRequired'], ['blocker', 'blocker']
+]);
+
+async function stdinJson(limit = MAX_RECOVERY_SEED_BYTES) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    if (size > limit) throw new ValidationError(`stdin JSON exceeds ${limit} bytes`);
+    chunks.push(chunk);
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new ValidationError('stdin must contain valid JSON'); }
+}
+
+function checkpointCapacity(value, root) {
+  const fields = {};
+  for (const field of CHECKPOINT_TEXT_FIELDS) fields[field] = { count: value[field] === null ? 0 : 1, cap: 1, bytes: Buffer.byteLength(value[field] ?? '', 'utf8') };
+  for (const [field, limit] of Object.entries(CHECKPOINT_ARRAY_LIMITS)) fields[field] = { count: value[field].length, cap: limit.count, bytes: Buffer.byteLength(JSON.stringify(value[field]), 'utf8') };
+  return { fields, seed: { bytes: recoverySeedBytes(value, root), limit: MAX_RECOVERY_SEED_BYTES } };
+}
+
+async function checkpoint(root, args) {
+  if (args.length === 0 || (args.length === 1 && args[0] === '--help')) {
+    process.stdout.write(`${CHECKPOINT_USAGE}\n`);
+    return;
+  }
+  const current = await currentState(root);
+  const value = current.state.partner.thread.checkpoint;
+  if (args.length === 2 && args[1] === '--clear' && ['owner-action-required', 'blocker'].includes(args[0])) args = ['clear', args[0]];
+  if (args[0] === 'clear' && args.length === 2 && ['open-work', 'owner-action-required', 'blocker'].includes(args[1])) {
+    if (current.state.route !== 'normal') throw new ValidationError('continuation updates require work mode');
+    const field = FIELD_NAMES.get(args[1]);
+    if (field === 'openWork') await replaceCheckpointArray(root, field, [], process.env);
+    else await snapshotCheckpoint(root, { [field]: null }, process.env);
+    process.stdout.write(JSON.stringify({ cleared: field }) + '\n'); return;
+  }
+  if (args[0] === 'capacity' && args.length === 1) {
+    process.stdout.write(`${JSON.stringify(checkpointCapacity(value, root), null, 2)}\n`);
+    return;
+  }
+  if (args[0] === 'export' && args.length === 1) {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+    return;
+  }
+  if (args[0] === 'replace' && args.length === 2 && FIELD_NAMES.has(args[1]) && CHECKPOINT_ARRAY_LIMITS[FIELD_NAMES.get(args[1])]) {
+    const updated = await replaceCheckpointArray(root, FIELD_NAMES.get(args[1]), await stdinJson(), process.env);
+    process.stdout.write(`${JSON.stringify({ replaced: true, field: args[1], ...checkpointCapacity(updated, root).seed })}\n`);
+    return;
+  }
+  if (args[0] === 'compact' && args.length === 4 && FIELD_NAMES.has(args[1]) && args[2] === '--keep-last' && /^\d+$/.test(args[3])) {
+    const updated = await compactCheckpointArray(root, FIELD_NAMES.get(args[1]), Number(args[3]), process.env);
+    process.stdout.write(`${JSON.stringify({ compacted: true, field: args[1], ...checkpointCapacity(updated, root).seed })}\n`);
+    return;
+  }
+  if (args[0] === 'snapshot' && args.length === 1) {
+    const snapshot = await stdinJson();
+    const updated = await snapshotCheckpoint(root, snapshot, process.env);
+    process.stdout.write(`${JSON.stringify({ recorded: true, fields: Object.keys(snapshot), ...checkpointCapacity(updated, root).seed, resourceWarnings: (await resourceList(root)).warnings })}\n`);
+    return;
+  }
+  if (args.length !== 2 || !FIELD_NAMES.has(args[0])) throw new ValidationError('checkpoint requires <field> <bounded-value>');
+  const state = ['owner-action-required', 'blocker'].includes(args[0]) && args[1] === 'null'
+    ? await snapshotCheckpoint(root, { [FIELD_NAMES.get(args[0])]: null }, process.env)
+    : await updateCheckpoint(root, FIELD_NAMES.get(args[0]), args[1], process.env);
+  process.stdout.write(`${JSON.stringify({ recorded: true, field: args[0], recoverySeedBytes: recoverySeedBytes(state, root), recoverySeedLimitBytes: MAX_RECOVERY_SEED_BYTES })}\n`);
+}
+
+function exactOption(args, name) {
+  const index = args.indexOf(name);
+  if (index < 0 || index + 1 >= args.length || args.indexOf(name, index + 1) >= 0) throw new ValidationError(`${name} is required exactly once`);
+  return args[index + 1];
+}
+
+async function executorException(root, args) {
+  if (args[0] === 'authorize' && args.length === 7) {
+    const executor = exactOption(args, '--executor');
+    const scope = exactOption(args, '--scope');
+    const reason = exactOption(args, '--reason');
+    if (![executor, scope, reason].every((value) => typeof value === 'string' && value.trim())) throw new ValidationError('executor exception values must be non-empty');
+    if (['claude', 'claude-main', 'codex', 'codex-main', 'main-session'].includes(executor.trim().toLowerCase()) && ['project file edits', 'all edits', 'all writes', 'write', 'edit', 'notebookedit', 'bash'].includes(scope.trim().toLowerCase())) throw new ValidationError('Choose the main code editor through Coding settings. File-editing exceptions are for explicitly authorized sub-agents.');
+    await mutate(root, 'executor-exception-authorize', (state) => {
+      state.executorException = { executor: executor.trim(), scope: scope.trim(), reason: reason.trim(), authorizedAt: new Date().toISOString() };
+    });
+    process.stdout.write('Executor exception authorized in structured state.\n');
+    return;
+  }
+  if (args[0] === 'reconcile' && args.length === 3 && args[1] === '--outcome' && args[2].trim()) {
+    await mutate(root, 'executor-exception-reconcile', (state) => { state.executorException = null; });
+    process.stdout.write('Executor exception reconciled and cleared.\n');
+    return;
+  }
+  throw new ValidationError('executor-exception requires authorize --executor <name> --scope <scope> --reason <text> or reconcile --outcome <text>');
+}
+
+async function config(root) {
+  const state = await readState(root, process.env);
+  const output = await loadEffectiveConfig(root, process.env);
+  if (!state.ok) output.stateRead = { health: state.health, lock: state.lock };
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  if (!state.ok) process.exitCode = 2;
+}
+
+async function recover(root, args) {
+  if (args[0] === 'heavy' && args.length === 2) { process.stdout.write(JSON.stringify({ released: await recoverHeavy(root, args[1]), evidence: 'owner-named', signalsSent: 0 }) + '\n'); return; }
+  const action = args[0];
+  if (action === 'clear-dead-lock' && args.length === 1) {
+    const result = await clearDeadLock(root, process.env);
+    const state = await currentState(root);
+    const selected = state.state.ownerSelectedMode;
+    process.stdout.write(`Cleared lock owned by confirmed dead PID ${result.pid}. Preserved route: ${selected ? formatMode(selected.route, selected.participants) : 'unknown (fail-closed; type an owner mode command)'}. Recheck status before continuing.\n`);
+    return;
+  }
+  if (action === 'resolve-transaction' && args.length === 2 && ['--commit', '--discard'].includes(args[1])) {
+    const result = await resolveTransaction(root, args[1].slice(2), process.env);
+    const state = await currentState(root);
+    const selected = state.state.ownerSelectedMode;
+    process.stdout.write(`Transaction ${result.action} completed at generation ${result.generation}. Preserved route: ${selected ? formatMode(selected.route, selected.participants) : 'unknown (fail-closed; type an owner mode command)'}. Recheck status before continuing.\n`);
+    return;
+  }
+  if (!(args.length === 3 && args[1] === '--operation-id')) throw new ValidationError('recover action requires exactly --operation-id <uuid>');
+  const id = assertUuid(args[2], 'operation id');
+  let current = await currentState(root);
+  let operation = current.state.operations.find((item) => item.id === id);
+  if (!operation && action === 'abandon') {
+    const captured = (await ownerDeliveries(root)).find(entry => entry.id === id && entry.sessionId === current.state.workspace.activeSessionId && ['captured', 'failed'].includes(entry.status));
+    if (captured) {
+      await updateOwnerDelivery(root, id, { status: 'failed', error: 'Captured owner delivery abandoned during recovery; task remains unfinished.', failureReportedAt: null });
+      process.stdout.write(`Interrupted delivery ${id}; original text and attachment references retained. Report this failure; the task remains unfinished.\n`);
+      return;
+    }
+  }
+  if (!operation) throw new ValidationError('operation not found');
+  if (action === 'inspect') {
+    process.stdout.write(`${JSON.stringify({ route: current.state.route, operation: { ...operation, request: { ...operation.request, message: operation.request.message ? '[queued owner message retained]' : null, ownerMessage: operation.request.ownerMessage ? '[owner message retained for Phase 2]' : null, previousReply: operation.request.previousReply ? '[previous owner-visible reply retained for Phase 1]' : null } } }, null, 2)}\n`);
+    return;
+  }
+  if (action === 'replace-missing-thread') {
+    const verify = state => {
+      const failed = state.operations.find(item => item.id === id);
+      const missingId = missingSessionThreadId(failed?.result.error);
+      if (failed?.status !== 'failed' || !missingId) throw new ValidationError('thread replacement requires a recognized SDK missing-session failure');
+      if (missingId !== state.partner.thread.threadId || failed.externalId && failed.externalId !== missingId) throw new ValidationError('missing-session failure does not match the current canonical thread; nothing changed');
+      if (state.controller.activeOperationId || state.operations.some(item => item.status === 'working')) throw new ValidationError('thread replacement waits for active partner work to stop');
+    };
+    verify(current.state);
+    let restored = null;
+    await mutate(root, 'replace-confirmed-missing-thread', (state) => {
+      verify(state);
+      const milestone = state.workspace.milestones[state.workspace.activeMilestoneId];
+      if (!milestone.parts.some(part => part.threadId === state.partner.thread.threadId)) milestone.parts.push({ ...structuredClone(state.partner.thread), archivedAt: new Date().toISOString() });
+      state.partner.thread.threadId = null;
+      Object.assign(state.partner.thread.metadata, { turnCount: 0, lastUsedAt: null, lastRecordedTurn: null, lastCompaction: null });
+      state.partner.thread.checkpoint.continuation.armed = false;
+      milestone.thread = structuredClone(state.partner.thread);
+      state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : 'not-started';
+      restored = restoreOwnerSelectedMode(state);
+      state.task.status = state.operations.some((item) => item.status === 'queued') ? 'active' : null;
+    });
+    process.stdout.write(`Confirmed-missing SDK thread cleared. Preserved route: ${formatMode(restored.route, restored.participants)}${restored.proven ? '' : ' (fail-closed; type an owner mode command)'}. The next owner turn will create one checkpoint-seeded canonical replacement.\n`);
+    return;
+  }
+  if (action === 'abandon') {
+    if (operation.status === 'completed' && operation.result.relay?.status === 'pending') {
+      const cycleId = operation.request.parentOperationId ?? operation.id;
+      let preserved = { route: current.state.route, participants: current.state.participants };
+      await mutate(root, 'partner-relay-abandon', (state) => {
+        const cycle = state.operations.filter((item) => item.id === cycleId || item.request.parentOperationId === cycleId);
+        if (cycle.some((item) => ['queued', 'working'].includes(item.status))) throw new ValidationError('cancel active cycle operations before abandoning the relay');
+        for (const item of cycle) {
+          if (item.result.relay) item.result.relay.status = 'waived';
+          if (item.request.phase === 'independent') { item.request.interrupted = true; item.request.ownerMessage = null; item.request.previousReply = null; item.request.message = null; }
+        }
+        if (state.route === 'recovery-read-only') preserved = restoreOwnerSelectedMode(state);
+        state.task.status = state.operations.some((item) => ['queued', 'working'].includes(item.status)) ? 'active' : null;
+        state.partner.status = state.controller.activeOperationId ? 'working' : state.operations.some((item) => item.status === 'queued') ? 'queued' : state.partner.thread.threadId ? 'completed' : 'not-started';
+        state.task.joint.status = null;
+      });
+      process.stdout.write(`Abandoned relay for cycle ${cycleId}; stored answers retained. Preserved route: ${formatMode(preserved.route, preserved.participants)}.\n`);
+      return;
+    }
+    if (operation.status === 'working') {
+      const recovered = await failDeadRunnerOperation(root, id, process.env);
+      if (!recovered.changed) throw new ValidationError('working operation still has a live runner; cancel it before abandonment');
+      current = await currentState(root);
+      operation = current.state.operations.find((item) => item.id === id);
+    }
+    const awaitingPhase2 = operation.status === 'completed' && operation.request.phase === 'independent'
+      && !current.state.operations.some((item) => item.request.parentOperationId === operation.id);
+    if (!['failed', 'cancelled'].includes(operation.status) && !awaitingPhase2) throw new ValidationError('only failed, cancelled, or awaiting-Phase-2 operations can be abandoned');
+    const deliveryId = operation.request.parentOperationId ?? operation.id;
+    if ((await ownerDeliveries(root)).some(entry => entry.id === deliveryId)) {
+      await updateOwnerDelivery(root, deliveryId, { status: 'failed', error: `Cycle abandoned during recovery (${id}); task remains unfinished.`, failureReportedAt: null });
+    }
+    let restored = null;
+    await mutate(root, 'partner-abandon', (state) => {
+      state.operations = state.operations.filter((item) => item.id !== id);
+      const parent = operation.request.parentOperationId && state.operations.find(item => item.id === operation.request.parentOperationId);
+      if (parent) parent.request.interrupted = true;
+      if (state.route === 'recovery-read-only') restored = restoreOwnerSelectedMode(state);
+      else restored = { route: state.route, participants: state.participants, proven: Boolean(state.ownerSelectedMode) };
+      state.task.status = state.operations.some((item) => item.status === 'queued') ? 'active' : null;
+      state.partner.status = state.operations.some((item) => item.status === 'queued') ? 'queued' : state.partner.thread.threadId ? 'completed' : 'not-started';
+    });
+    const pending = (await currentState(root)).state.modeGrant;
+    let applied = null;
+    if (pending?.pausedAt) applied = await applyOwnerModeTransition(root, { grantId: pending.id, route: pending.route, participants: pending.participants }, process.env);
+    const finalMode = applied?.to ?? restored;
+    process.stdout.write(`Abandoned operation ${id}; external effects were not inferred or rolled back. Preserved route: ${formatMode(finalMode.route, finalMode.participants)}${applied || restored.proven ? '' : ' (fail-closed; type an owner mode command)'}.\n`);
+    return;
+  }
+  throw new ValidationError('recover action must be inspect, abandon, replace-missing-thread, clear-dead-lock, or resolve-transaction');
+}
+
+async function diagnose(root) {
+  let metadata = {};
+  try { metadata = JSON.parse(await readFile(resolve(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')); } catch {}
+  const state = await readState(root, process.env);
+  let hooksValid = false;
+  try {
+    const hooks = JSON.parse(await readFile(resolve(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))?.hooks;
+    hooksValid = ['SessionStart', 'PostModelSwitch', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PostCompact'].every((name) => Array.isArray(hooks?.[name]) && hooks[name].length > 0);
+  } catch {}
+  let sdkInstalled = false;
+  try { await access(resolve(PLUGIN_ROOT, 'node_modules', '@openai', 'codex-sdk', 'package.json')); sdkInstalled = true; } catch {}
+  let packageMetadata = {};
+  try { packageMetadata = JSON.parse(await readFile(resolve(PLUGIN_ROOT, 'package.json'), 'utf8')); } catch {}
+  let transaction = { present: false };
+  try { transaction = await inspectTransaction(root, process.env); } catch (error) { transaction = { present: true, valid: false, reason: error.message }; }
+  const effective = await loadEffectiveConfig(root, process.env);
+  const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+  let installed = { registryVersion: null, installPath: null, matchesSource: false };
+  const installWarnings = [];
+  try {
+    const registry = JSON.parse(await readFile(join(configDir, 'plugins', 'installed_plugins.json'), 'utf8'));
+    const direct = registry?.plugins?.['fabex@fabex'] ?? registry?.['fabex@fabex'];
+    const entry = Array.isArray(direct) ? direct.at(-1) : direct;
+    if (entry && typeof entry === 'object') installed = { registryVersion: entry.version ?? null, installPath: entry.installPath ?? entry.install_path ?? null, matchesSource: entry.version === metadata.version };
+  } catch {}
+  if (installed.registryVersion && !installed.matchesSource) installWarnings.push('installed Fabex registry metadata differs from the loaded source; update or reinstall the plugin, then restart Claude Code');
+  const lastRecordedTurn = state.state.partner.thread.metadata.lastRecordedTurn;
+  let directoryMarketplace = false;
+  try {
+    const marketplace = JSON.parse(await readFile(resolve(PLUGIN_ROOT, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    directoryMarketplace = marketplace.name === 'fabex' && marketplace.plugins?.some(p => p.name === 'fabex' && ['.', './'].includes(p.source));
+  } catch {}
+  const sourceLocation = installed.installPath && resolve(installed.installPath) === PLUGIN_ROOT ? 'installed-path'
+    : directoryMarketplace ? 'directory-marketplace' : 'unmatched-path';
+  const installationAgrees = Boolean(state.ok && hooksValid && installed.matchesSource && metadata.version && lastRecordedTurn?.version === metadata.version);
+  const reloadRequired = installed.registryVersion && !installed.matchesSource ? true
+    : installed.matchesSource && sourceLocation !== 'unmatched-path' ? false : 'unknown';
+  const activation = {
+    sourceVersion: metadata.version ?? 'unknown', registryVersion: installed.registryVersion,
+    matchesSource: installed.matchesSource, hooksValid, reloadRequired, lastRecordedTurn,
+    sourceLocation, installationAgrees, liveHooksVerified: false,
+    reloadEvidence: 'Version/path comparison only; does not establish which hooks the host currently executes.',
+    verdict: !state.ok ? 'unknown' : installationAgrees ? 'Installed source and recorded controller turn agree; live hook execution remains unverified'
+      : 'not verified: compare installation versions, hook definitions and recorded controller evidence; a directory marketplace may legitimately load outside the cache'
+  };
+  const model = await codexModelSource(effective.config, process.env);
+  const claude = await claudeModelSource(state.state.claudeModel, process.env);
+  process.stdout.write(`${JSON.stringify({
+    plugin: { name: metadata.name ?? 'unknown', version: metadata.version ?? 'unknown', loadedRoot: PLUGIN_ROOT, beta: true, installed, warnings: installWarnings },
+    ...(state.ok ? { workspace: await workspaceStatus(root), contextGauge: await contextGauge(root) } : {}),
+    memory: { ...(await heavyStatus(root)), processes: await processMemory(state.state.controller.runnerPid) },
+    resources: await resourceList(root),
+    node: process.version,
+    platform: { value: platform(), support: platform() === 'darwin' ? 'macOS supported' : platform() === 'win32' ? 'Windows experimental' : 'not documented as supported' },
+    hooks: { configPresentAndValidJson: hooksValid },
+    state: { health: state.health, ...(state.lock ? { lock: state.lock } : {}), route: state.state.route, participants: state.state.participants, label: formatMode(state.state.route, state.state.participants), transaction },
+    activation,
+    claude: {
+      model: state.state.claudeModel,
+      modelSource: claude,
+      lastSessionStart: state.state.sessionStartDiagnostic,
+      label: speakerLabels(claude.id, null, claude.source).claude,
+      explanation: state.state.claudeModel
+        ? 'Last hook-observed session model; retained on model-less same-session starts. Not a per-response served-model guarantee.'
+        : claude.id ? 'Claude settings default, configured only; not verified for this session or response.' : 'No valid session evidence or configured default; Claude (model unknown).'
+    },
+    codex: {
+      transport: 'official TypeScript SDK',
+      dependency: packageMetadata.dependencies?.['@openai/codex-sdk'] ?? null,
+      installed: sdkInstalled,
+      model,
+      threadSource: 'fabex (new threads only; Desktop visibility unverified)',
+      authentication: 'existing Codex CLI ChatGPT subscription sign-in only; Fabex has no API-key option'
+    },
+    effective: {
+      networkAccessEnabled: effective.config.models.codex.networkAccessEnabled,
+      networkPolicyProvenance: 'Configured workspace-write network preference; effective activity policy and native host permissions remain authoritative.',
+      repositoryRoot: effective.config.project.repositoryRoot,
+      devServer: { available: true, override: effective.config.devServer },
+      warnings: effective.warnings
+    }
+  }, null, 2)}\n`);
+}
+
+export async function main({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
+  const root = await rootFromControlCwd(cwd, process.env);
+  const [command, ...args] = argv;
+  if (command === 'session' && (args.length === 0 || args.length === 2 && args[0] === '--session')) { process.stdout.write(JSON.stringify(await conversationStatus(root, process.env, args[1]), null, 2) + '\n'); return; }
+  if (command === 'milestone' && args.length === 2 && args[0] === '--session' && args[1]) {
+    process.stdout.write(JSON.stringify(await workspaceStatus(root, process.env, args[1]), null, 2) + '\n'); return;
+  }
+  if (command === 'docs') throw new ValidationError('Retired: Docs Both updates the shared document directly. Private drafts and assembly are no longer required.');
+  if (command === 'role' && args.length === 1) { process.stdout.write(JSON.stringify(await selectTaskRole(root, args[0]), null, 2) + '\n'); return; }
+  if (command === 'settings') {
+    if (args.length === 3 && args[0] === 'apply' && args[1] === '--grant') {
+      process.stdout.write(JSON.stringify(await applyWorkspaceGrant(root, assertUuid(args[2])), null, 2) + '\n'); return;
+    }
+    const viewArgs = args.filter(arg => arg !== '--json');
+    if (!(viewArgs.length === 0 || viewArgs.length === 2 && viewArgs[0] === '--session' && viewArgs[1])) throw new ValidationError('settings accepts [--session id] [--json] or apply --grant <owner-issued-id>');
+    const result = await workspaceStatus(root, process.env, viewArgs[1]);
+    process.stdout.write(args.includes('--json') ? JSON.stringify(result, null, 2) + '\n' : await settingsView(result)); return;
+  }
+  if (command === 'milestone' && args.length === 0) { process.stdout.write(JSON.stringify(await workspaceStatus(root), null, 2) + '\n'); return; }
+  if (command === 'milestone' && ['handoff', 'rotate'].includes(args[0]) && args[1] === '--review' && (args[0] === 'handoff' ? args.length === 4 : args.length === 3)) {
+    process.stdout.write(JSON.stringify(await milestoneHandoff(root, assertUuid(args[2]), args[3], args[0] === 'rotate')) + '\n'); return;
+  }
+  if (command === 'usage') { const result = await usageControl(root, args); if (result !== null) process.stdout.write(JSON.stringify(result, null, 2) + '\n'); return; }
+  if (command === 'mem' && args.length === 0) {
+    const { readPrivate, sidecar } = await import('./lib/private-store.mjs');
+    const state = await readPrivate(await sidecar(root, 'state.json', process.env), null, 8 * 1024 * 1024);
+    process.stdout.write(JSON.stringify({ ...await sampleMemory(), processes: await processMemory(state?.controller?.runnerPid) }) + '\n'); return;
+  }
+  if (command === 'prompts' && args.length === 0) {
+    const { ownerDeliveries } = await import('./lib/owner-delivery.mjs');
+    const deliveries = await ownerDeliveries(root);
+    if (deliveries.length) {
+      process.stdout.write(JSON.stringify(deliveries.map(({ id, digest, capturedAt, text, sessionId, status, error }) => ({ operationId: id, digest, capturedAt, sessionId, status, error, preview: text.slice(0, 60), available: true }))) + '\n'); return;
+    }
+    const entries = await recentOwnerPromptEvidence(root);
+    process.stdout.write(JSON.stringify(entries.map(({ digest, bytes, capturedAt, text, sessionId }) => ({ digest, bytes, capturedAt, sessionId, preview: text?.slice(0, 60) ?? null, available: typeof text === 'string' }))) + '\n'); return;
+  }
+  if (command === 'heavy' && (args.length === 1 && ['status', 'wait'].includes(args[0]) || args.length === 3 && args[0] === 'wait' && args[1] === '--timeout' && /^\d+$/.test(args[2]))) {
+    const result = args[0] === 'status' ? await heavyStatus(root) : await waitHeavy(root, Number(args[2] ?? 120));
+    process.stdout.write(JSON.stringify(result) + '\n'); if (result.ready === false) process.exitCode = 3; return;
+  }
+  if (command === 'heavy' && ['run', 'release'].includes(args[0])) {
+    const { state } = await currentState(root);
+    if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('heavy execution/release requires owner-selected work mode');
+    if (args[0] === 'release' && args.length === 2) { process.stdout.write(JSON.stringify({ released: await releaseHeavy(root, args[1]), evidence: 'verified-process-and-group-ended', signalsSent: 0 }) + '\n'); return; }
+    if (args[0] === 'run' && args.length === 5 && args[1] === '--id' && args[3] === '--') {
+      const result = await runHeavy(root, args[2], args[4]);
+      if (result.retained) process.stderr.write('Fabex: completion identity/group evidence unavailable; reservation retained for inspection.\n');
+      process.exitCode = result.exitCode; return;
+    }
+    throw new ValidationError('heavy run --id <id> -- <single command argument> | heavy release <id>');
+  }
+  if (command === 'resources') {
+    if (args.length === 1 && args[0] === 'list') { process.stdout.write(JSON.stringify(await resourceList(root)) + '\n'); return; }
+    const authorize = async () => {
+      const { state } = await currentState(root);
+      if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('resource changes require owner-selected work mode');
+    };
+    await authorize();
+    const result = args[0] === 'retain' && args.length === 4 && args[2] === '--note' ? await retainResource(root, args[1], args[3])
+      : args[0] === 'release' && args.length === 2 ? await releaseResource(root, args[1], { authorize }) : null;
+    if (!result) throw new ValidationError('resources list | retain <id> --note <reason> | release <id>');
+    process.stdout.write(JSON.stringify(result) + '\n'); return;
+  }
+  if (command === 'dev') {
+    parseDevArgs(args);
+    const effective = await loadEffectiveConfig(root, process.env);
+    let server = effective.config.devServer;
+    if (['start', 'restart'].includes(args[0])) {
+      if (!server && effective.warnings.some(warning => warning.includes('devServer') && !warning.includes('project-layer only'))) throw new ValidationError('invalid devServer override; inspect config warnings instead of silently falling back');
+      if (!server) server = detectDevelopment(root, effective.config);
+      else developmentInvocation(server.start, root, effective.config, server.cwd);
+    }
+    const authorize = async () => {
+      const { state } = await currentState(root);
+      if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) throw new ValidationError('dev lifecycle requires healthy owner-selected work mode with no pending transition');
+    };
+    const result = await devControl(root, server, args, { authorize });
+    process.stdout.write(`${JSON.stringify({ ...result, ...(args[0] === 'status' ? { memory: (await heavyStatus(root)).latestSample } : {}), notes: ['start', 'restart'].includes(args[0]) ? ['Review the selected script, lifecycle hooks, development target and effects before execution; detection is not a safety verdict.'] : [], warnings: effective.warnings.filter(item => item.includes('devServer')) })}\n`);
+    return;
+  }
+  if ((command === undefined || command === '--help') && args.length === 0) { process.stdout.write(`${USAGE}\n`); return; }
+  if (command === 'cleanup' && [2, 4].includes(args.length) && args[0] === '--path' && (args.length === 2 || args[2] === '--source')) {
+    await currentState(root);
+    process.stdout.write(`${JSON.stringify(await cleanupWorkingCopy(root, args[1], args.length === 4 ? { source: args[3], namedSource: true } : undefined))}\n`);
+    return;
+  }
+  if (command === 'mode') {
+    const offset = args[1] === '--participants' ? 5 : 3;
+    if ((offset === 5 ? args[3] !== '--grant' : args[1] !== '--grant') || args.length < offset || (args.length - offset) % 2 || args.slice(offset).some((arg, index) => index % 2 === 0 && arg !== '--attach')) throw new ValidationError('mode requires target, optional participants, grant, then repeated --attach <absolute path>');
+    return mode(root, args[0], offset === 5 ? args[2] : 'both', assertUuid(args[offset - 1], 'mode grant'), args.slice(offset).filter((_, index) => index % 2 === 1));
+  }
+  if (command === 'status' && (args.length === 0 || args.length === 1 && ['--all', '--brief'].includes(args[0]))) return status(root, args[0] === '--all' ? 'all' : args[0] === '--brief' ? 'brief' : 'default');
+  if (command === 'diagnose' && args.length === 0) return diagnose(root);
+  if (command === 'config' && args.length === 0) return config(root);
+  if (command === 'recover') return recover(root, args);
+  if (command === 'checkpoint') return checkpoint(root, args);
+  if (command === 'executor-exception') return executorException(root, args);
+  throw new ValidationError('unknown or malformed control command');
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await main(); } catch (error) {
+    process.stderr.write(`fabex: ${error.message}\n`);
+    if (error.details?.length) process.stderr.write(`${error.details.join('\n')}\n`);
+    process.exitCode = 1;
+  }
+}

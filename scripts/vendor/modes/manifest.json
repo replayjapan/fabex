@@ -1,0 +1,15 @@
+{
+  "apiVersion": 1,
+  "source": "replayjapan/modes",
+  "version": "0.1.0",
+  "files": {
+    "state.mjs": "31323abfc53023dfaa1809bf145de618687c737e259dadfa2991b4a6ad81774e",
+    "shell.mjs": "dd45161f60ed28e617d7800292f79e479ff3587d919c559872ff33782e9f9d3e",
+    "policy.mjs": "f4404e67df315f549fcc66d268ec92cdd0d2dab07ec3ccb103f20df79819de76",
+    "runner.mjs": "f88e75f57a2842ec78ad55af50db06824f70acc39109c45f02be76b9462018bd",
+    "edits.mjs": "0b8c937d67f6c101b9c46edf918edb401df90eb232093ab10f50b8ce4d36292f",
+    "contained-edits.mjs": "1144124113eb009f86b26e65bdb250b3bc3cf4bbc088595b8c750679d99712ae",
+    "edit-writer.mjs": "5fe442ad318978c47016af7af1abc2e4275c3d52df0e39979b4e4a9d30904278",
+    "lock.mjs": "167bf57e67ba1e48948b901686996abb94588aef9ba78a078b38c63c4505d122"
+  }
+}

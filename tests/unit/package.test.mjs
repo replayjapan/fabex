@@ -1,0 +1,135 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { access, readFile, readdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+
+const root = resolve(import.meta.dirname, '..', '..');
+const tagline = 'Beta — Claude and Codex work as partners: independent reviews, coordinated coding and saved conversations.';
+
+async function filesUnder(directory) {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...await filesUnder(path));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files;
+}
+
+test('plugin, package, lockfiles, and marketplace metadata agree on 1.12.0 Beta', async () => {
+  const plugin = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
+  const marketplace = JSON.parse(await readFile(resolve(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
+  const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
+  const pnpmLock = await readFile(resolve(root, 'pnpm-lock.yaml'), 'utf8');
+  const npmLock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
+  assert.equal(plugin.name, 'fabex');
+  assert.equal(plugin.version, '1.12.0');
+  assert.equal(pkg.version, '1.12.0');
+  assert.equal(npmLock.version, '1.12.0');
+  assert.equal(npmLock.packages[''].version, '1.12.0');
+  assert.equal(plugin.description, tagline);
+  assert.equal(marketplace.metadata.description, tagline);
+  assert.equal(marketplace.plugins[0].description, tagline);
+  assert.equal(marketplace.plugins[0].source, './');
+  assert.ok(marketplace.plugins.every(({ source }) => typeof source === 'string'
+    ? source.startsWith('./')
+    : source?.source === 'url' && /^https:\/\//.test(source.url)), 'Marketplace plugins must use local paths or explicit HTTPS URLs, never GitHub shorthand or SSH');
+  assert.equal(marketplace.plugins[0].defaultEnabled, true);
+  assert.equal(pkg.dependencies['@openai/codex-sdk'], '0.153.4');
+  assert.match(pnpmLock, /'@openai\/codex-sdk':\s*\n\s*specifier: 0\.153\.4\s*\n\s*version: 0\.153\.4/);
+  assert.equal(npmLock.packages['node_modules/@openai/codex-sdk'].version, '0.153.4');
+  assert.equal(npmLock.packages['node_modules/@openai/codex'].version, '0.153.4');
+});
+
+test('hook registration is exec-form with no MCP result recorder', async () => {
+  const hooks = JSON.parse(await readFile(resolve(root, 'hooks', 'hooks.json'), 'utf8')).hooks;
+  assert.deepEqual(Object.keys(hooks).sort(), ['PermissionDenied', 'PostToolUseFailure', 'PostCompact', 'PostModelSwitch', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'UserPromptExpansion', 'UserPromptSubmit'].sort());
+  for (const registrations of Object.values(hooks)) {
+    const hook = registrations[0].hooks[0];
+    assert.equal(hook.type, 'command');
+    assert.equal(hook.command, 'node');
+    assert.equal(Array.isArray(hook.args), true);
+    assert.equal(hook.args.length, 1);
+  }
+  await assert.rejects(access(resolve(root, 'scripts', 'hook-mcp-result.mjs')));
+  await assert.rejects(access(resolve(root, 'scripts', 'lib', 'mcp-adapter.mjs')));
+  await assert.rejects(access(resolve(root, '.mcp.json')));
+});
+
+test('only requested public skills are packaged and SDK protocol is authoritative', async () => {
+  const names = (await readdir(resolve(root, 'skills'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  assert.deepEqual(names, ['diagnose', 'jointly', 'milestone', 'session', 'settings', 'recover', 'status'].sort());
+  const jointly = await readFile(resolve(root, 'skills', 'jointly', 'SKILL.md'), 'utf8');
+  for (const pattern of [/owner's message verbatim/, /Scope and parity/, /controller\.mjs submit/, /status --operation-id/, /result --operation-id/, /cancel/, /thread\.started/, /read-only/, /workspace-write/, /Coding owns application code; Test Writing owns recognized test files/, /reviewed owner-authorized Git delivery/]) assert.match(jointly, pattern);
+  assert.doesNotMatch(jointly, /mcp__codex|hook-mcp-result|thread begin/);
+  const session = await readFile(resolve(root, 'skills', 'session', 'SKILL.md'), 'utf8');
+  assert.match(session, /fabex:session fresh/);
+  assert.match(session, /Resume, compaction/);
+});
+
+test('README documents Beta SDK transport, install, queue, progress, continuity, privacy, and host limitations', async () => {
+  const readme = await readFile(resolve(root, 'README.md'), 'utf8');
+  for (const pattern of [/^# Fabex — Beta/m, /Mechanically enforced and platform-limited behavior/, /@openai\/codex-sdk/, /npm ci --ignore-scripts/, /plugin marketplace add https:\/\/github\.com\/replayjapan\/fabex\.git/, /runStreamed\(\)/, /resumeThread\(exactId/, /thread\.started/, /durable FIFO/, /Cancellation/, /hard 48 KiB/, /ChatGPT\/Codex subscription/, /no API-key/, /conversation visibility in Codex Desktop depends on the host/, /Resource\s+accounting covers recorded task-owned processes/, /activation is unknown/i]) assert.match(readme, pattern);
+  assert.match(readme, /discussion.*`read-only`/i);
+  assert.match(readme, /implementation.*`workspace-write`/i);
+});
+
+test('1.6.1 changelog documents only the focused mode-message, recovery-route, and pending-cycle fixes', async () => {
+  const changelog = await readFile(resolve(root, 'CHANGELOG.md'), 'utf8');
+  const release = changelog.split('## 1.6.0')[0];
+  for (const pattern of [/## 1\.6\.1 - 2026-09-05/, /byte-for-byte/, /owner-selected-mode/, /schema 9/, /lock contention/, /interrupted/]) assert.match(release, pattern);
+});
+
+test('current implementation and consumer docs contain no obsolete MCP invocation paths', async () => {
+  const currentRoots = ['scripts', 'hooks', 'skills', 'README.md', 'CONTRIBUTING.md'];
+  for (const relative of currentRoots) {
+    const path = resolve(root, relative);
+    const candidates = (await readdirSafe(path)) ?? [path];
+    for (const file of candidates) {
+      const content = await readFile(file, 'utf8');
+      assert.doesNotMatch(content, /mcp__codex__|codex-reply|codex mcp-server|mcp-adapter\.mjs/, file);
+    }
+  }
+});
+
+async function readdirSafe(path) {
+  try {
+    const info = await import('node:fs/promises').then(({ stat }) => stat(path));
+    return info.isDirectory() ? filesUnder(path) : null;
+  } catch { return null; }
+}
+
+test('every shipped JSON file parses', async () => {
+  for (const path of await filesUnder(root)) if (path.endsWith('.json')) assert.doesNotThrow(() => JSON.parse(awaitedContents.get(path)), path);
+});
+
+const awaitedContents = new Map();
+test.before(async () => {
+  for (const path of await filesUnder(root)) if (path.endsWith('.json')) awaitedContents.set(path, await readFile(path, 'utf8'));
+});
+
+test('public tree contains no absolute home-directory paths', async () => {
+  const homeDirectoryPrefix = /[/](?:[Uu]sers|home)[/]/;
+  for (const path of await filesUnder(root)) {
+    const content = await readFile(path, 'utf8');
+    assert.doesNotMatch(content, homeDirectoryPrefix, `${path} contains an absolute home-directory prefix`);
+  }
+});
+
+test('public tree contains no privately configured identifiers', {
+  skip: process.env.FABEX_PRIVACY_HASH_FILE ? false : 'No private denylist supplied; identifier audit not performed'
+}, async () => {
+  const values = JSON.parse(await readFile(process.env.FABEX_PRIVACY_HASH_FILE, 'utf8'));
+  assert.ok(Array.isArray(values) && values.length > 0 && values.every(value => /^[a-f0-9]{64}$/.test(value)), 'Private denylist must contain SHA-256 hashes');
+  const forbiddenHashes = new Set(values);
+  for (const path of await filesUnder(root)) {
+    const content = await readFile(path, 'utf8');
+    const candidates = new Set([...content.matchAll(/[\p{L}\p{N}_][\p{L}\p{N}_.@+-]*/gu)].map((match) => match[0]));
+    for (const candidate of candidates) {
+      const hash = createHash('sha256').update(candidate.toLowerCase()).digest('hex');
+      assert.equal(forbiddenHashes.has(hash), false, `${path} contains a forbidden private identifier`);
+    }
+  }
+});

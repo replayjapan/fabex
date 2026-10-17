@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "devServer": null,
+  "models": {
+    "codex": {
+      "model": null,
+      "reasoningEffort": "high",
+      "networkAccessEnabled": false
+    },
+    "operational": "sonnet"
+  },
+  "collaboration": {
+    "jointByDefault": true
+  },
+  "display": {
+    "replyModeBadge": "always"
+  },
+  "project": {
+    "repositoryRoot": null
+  },
+  "guard": {
+    "allowedCommands": [],
+    "allowedCommandPatterns": [],
+    "externalWriteRoots": [],
+    "readOnlyMcpTools": ["mcp__context7__*", "mcp__ide__getDiagnostics"]
+  }
+}
