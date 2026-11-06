@@ -98,6 +98,10 @@ will be reported rather than silently starting over.
 
 ### What's new?
 
+- **1.13.1:** New explicit partner agreements can resolve older bookkeeping
+  conflicts without losing their review history. Missing-operation recovery and
+  blocked-command guidance identify the required next action. [Details](CHANGELOG.md)
+
 - **1.13.0:** Common settings show current assignments first. Documentation and
   image review use a short choice-and-scope dialog. Agreed unfinished work is
   recorded automatically, and informational notices no longer stop continuation.

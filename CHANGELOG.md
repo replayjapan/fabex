@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.13.1
+
+- Resolve older work-bookkeeping conflicts through a newer explicit partner
+  agreement, retaining the original reviews and a resolution receipt. Questions,
+  genuine blockers, owner decisions and review-integrity failures remain distinct.
+- Preserve reported delivery failures when operation history is pruned, and allow
+  explicit recovery of delivery records whose operations are no longer retained.
+- Identify blocked operations and their recovery commands. Keep supported usage
+  reports and snapshots available to the bound main session during partner review.
+
 ## 1.13.0
 
 - Show Documentation, Image review and Coding assignments on the settings picker;

@@ -49,6 +49,43 @@ export function reviewSessionMatches(state, operation) {
     && parent.request.ownerMessageDigest === operation.request.ownerMessageDigest;
 }
 
+// Only bookkeeping conflicts can be superseded. A blocker, owner decision,
+// failed review or mixed diagnostic requires its own explicit recovery.
+export function dispositionConflictOnly(operation) {
+  const warning = blockingReviewWarning(operation);
+  const values = [operation?.request?.workDisposition, operation?.result?.structured?.workDisposition];
+  return operation?.status === 'completed' && operation.request.phase === 'reconcile'
+    && operation.request.route === 'normal' && !operation.lifecycle?.cancelRequested
+    && !operation.result.error && Boolean(warning)
+    && warning.split('\n').every(line => line.startsWith(DISPOSITION_WARNING))
+    && Boolean(dispositionProblem(...values))
+    && !values.some(value => ['blocked', 'owner-decision'].includes(value?.status));
+}
+
+export function supersedingDisposition(state, conflict) {
+  if (!dispositionConflictOnly(conflict)) return null;
+  const session = conflict.result.relay?.sessionId;
+  const origin = state.operations.findIndex(op => op.id === conflict.request.parentOperationId);
+  const original = state.operations[origin];
+  if (origin < 0 || original.status !== 'completed' || original.request.interrupted || original.lifecycle?.cancelRequested
+    || blockingReviewWarning(original) || original.result?.relay?.sessionId !== session) return null;
+  const parent = state.operations.findLast(op => op.request.phase === 'independent'
+    && op.result?.relay?.sessionId === session && !op.request.interrupted);
+  if (!parent || state.operations.indexOf(parent) <= origin || parent.status !== 'completed' || parent.lifecycle?.cancelRequested
+    || blockingReviewWarning(parent)) return null;
+  const next = state.operations.findLast(op => op.request.parentOperationId === parent.id);
+  if (!next || next.status !== 'completed' || next.request.phase !== 'reconcile' || next.request.route !== 'normal'
+    || next.lifecycle.cancelRequested || next.result.error || blockingReviewWarning(next)
+    || next.result.relay?.sessionId !== session || !reviewSessionMatches(state, next)
+    || !next.externalId || next.externalId !== conflict.externalId || next.externalId !== state.partner.thread.threadId
+    || state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant
+    || state.contextEvidence?.ownerPrompt?.digest !== next.request.ownerMessageDigest
+    || parent.request.ownerMessageDigest !== next.request.ownerMessageDigest
+    || !validDisposition(next.request.workDisposition) || !validDisposition(next.result.structured?.workDisposition)
+    || dispositionProblem(next.request.workDisposition, next.result.structured.workDisposition)) return null;
+  return next;
+}
+
 // Called inside the controller's state transaction. Older results cannot replace
 // the checkpoint or rearm work after a newer instruction/session/mode arrived.
 export function persistWorkDisposition(state, operation, now) {
@@ -104,7 +141,7 @@ export function continuationFailure(state, obligations = []) {
   if (state.modeGrant) return 'An owner activity transition is pending; finish that transition before continuing.';
   const partner = partnerNextAction(state);
   if (partner) return partner;
-  if (obligations.length) return `Owner review is pending for ${obligations.map(item => item.id).join(', ')}; finish those existing deliveries before continuing.`;
+  if (obligations.length) return `Owner review is pending for ${obligations.map(item => item.id).join(', ')}. ${obligations.map(item => item.nextAction ?? 'Finish the existing delivery before continuing.').join(' ')}`;
   if (cp.blocker) return `Work is blocked: ${cp.blocker}. Resolve or update that blocker before continuing.`;
   if (cp.ownerActionRequired) return `Owner decision required: ${cp.ownerActionRequired}`;
   if (!cp.continuation.armed) return 'Work has not been revalidated against the latest owner instructions. Reconcile its explicit disposition; do not ask for another go.';

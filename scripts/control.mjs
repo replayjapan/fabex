@@ -22,7 +22,7 @@ import { recentOwnerPromptEvidence } from './lib/hook-evidence.mjs';
 import { conversationStatus, workspaceStatus, applyWorkspaceGrant, contextGauge, milestoneHandoff, selectTaskRole } from './lib/workspace.mjs';
 import { settingsView } from './lib/settings-view.mjs';
 import { usageControl } from './lib/usage-integration.mjs';
-import { ownerDeliveries, updateOwnerDelivery } from './lib/owner-delivery.mjs';
+import { ownerDeliveries, updateOwnerDelivery, abandonMissingDelivery } from './lib/owner-delivery.mjs';
 
 const USAGE = 'Usage: control.mjs mem | prompts | heavy status|wait [--timeout 1..120] | resources list|retain <id> --note <reason>|release <id> | status [--all|--brief] | config | diagnose | dev start|stop|restart|status|logs [--lines 1..400] | checkpoint [--help|capacity|export|...] | mode <route> --participants <both|claude|codex> --grant <uuid> [--attach <path> ...] | recover | executor-exception | cleanup --path <exact-copy-directory>';
 const CHECKPOINT_USAGE = 'Usage: control.mjs checkpoint capacity|export|snapshot|replace|compact|<field> <bounded-value>';
@@ -267,9 +267,7 @@ async function recover(root, args) {
   let current = await currentState(root);
   let operation = current.state.operations.find((item) => item.id === id);
   if (!operation && action === 'abandon') {
-    const captured = (await ownerDeliveries(root)).find(entry => entry.id === id && entry.sessionId === current.state.workspace.activeSessionId && ['captured', 'failed'].includes(entry.status));
-    if (captured) {
-      await updateOwnerDelivery(root, id, { status: 'failed', error: 'Captured owner delivery abandoned during recovery; task remains unfinished.', failureReportedAt: null });
+    if (await abandonMissingDelivery(root, current.state, id)) {
       process.stdout.write(`Interrupted delivery ${id}; original text and attachment references retained. Report this failure; the task remains unfinished.\n`);
       return;
     }

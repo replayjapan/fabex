@@ -18,12 +18,7 @@ export function stopDecision(input, stateResult, deliveries = []) {
   if (pending.length) {
     const next = partnerNextAction(stateResult.state);
     if (next) return { decision: 'block', reason: next };
-    const recovery = pending.map(item => {
-      const target = stateResult.state.operations.findLast(op => op.request.parentOperationId === item.id)?.id ?? item.id;
-      const operation = stateResult.state.operations.find(op => op.id === target);
-      if (operation && ['queued', 'working'].includes(operation.status)) return `message ${item.id}: controller.mjs wait --operation-id ${target} --timeout 60; then controller.mjs result --operation-id ${target}. Keep waiting after a timeout; do not repeat unchanged status replies`;
-      return `message ${item.id}: controller.mjs result --operation-id ${target}; if unrecoverable, control.mjs recover abandon --operation-id ${target}`;
-    }).join('; ');
+    const recovery = pending.map(item => item.nextAction).join(' ');
     return { decision: 'block', reason: `Owner messages still require partner assessment and reconciliation: ${pending.map(item => item.id).join(', ')}. Continue their existing cycles; do not submit duplicate owner tasks. If a cycle cannot be reconciled, cancel any queued/working target with controller.mjs cancel --operation-id <target-id> and wait for its outcome, then ${recovery}. Report the interrupted delivery with its message ID and any partial edits; preserve unfinished work, never claim completion.` };
   }
   const current = stateResult.state;

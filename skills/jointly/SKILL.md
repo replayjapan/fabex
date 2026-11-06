@@ -258,6 +258,14 @@ outcomes preserve the checkpoint and stop execution until reconciled. New owner
 messages retain the list but pause execution; reconcile their instructions first.
 Never infer completion from an empty list or invent work to populate it.
 
+A newer explicit task disposition can resolve an older bookkeeping-only conflict
+in the same session and thread. Carry every still-authorized step into the new
+remaining-work list; the old list is not automatically appended. Original reviews
+and their resolution receipt remain available. Question-only null does not settle
+an unresolved conflict, and genuine blockers, owner decisions and review-integrity
+failures require their own resolution. Follow operation-specific recovery guidance
+for missing operations; report interruptions without claiming the task is done.
+
 Use `controller.mjs continue --operation-id <review-id>` to endorse the last Codex
 disposition and continue the authorized task. To correct missing or conflicting
 bookkeeping, append `--disposition '<JSON disposition>'` with Claude's explicit

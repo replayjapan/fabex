@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { reviewSessionMatches } from './lib/work-disposition.mjs';
+import { reviewSessionMatches, partnerNextAction } from './lib/work-disposition.mjs';
 import { activityDecision, observeActivity, activitySnapshot, researchAuthorAllowed } from './lib/activity.mjs';
 import { simpleTokens, safeCommandSegments, readOnlyGithub, readOnlySed, readOnlyGit, readOnlyTagArgs } from './vendor/modes/shell.mjs';
 export { readOnlyGithub, readOnlySed };
@@ -724,7 +724,15 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       && state.operations.some(op => op.request.phase === 'reconcile' && op.status === 'completed' && op.result.relay?.sessionId === executor.sessionId && !blockingReviewWarning(op))
       && !state.operations.some(op => op.status === 'working' && op.request.phase !== 'independent' && op.request.sandbox === 'workspace-write')
       && assignedTestCommand(toolInput.command, paths.canonicalRoot, invocationCwd);
-    if ((pending.length || independent || awaitingReceipt) && (WRITE_TOOLS.has(toolName) || toolName === 'Bash' && !control && !controller && !testValidation && !allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot) || toolName.startsWith('mcp__') && !readOnlyMcpTool(toolName, config))) return deny('Owner message assessment, reconciliation and any pending handoff receipt must finish before affected implementation. Continue the existing partner cycle.');
+    if ((pending.length || independent || awaitingReceipt) && (WRITE_TOOLS.has(toolName) || toolName === 'Bash' && !control && !controller && !testValidation && !allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot) || toolName.startsWith('mcp__') && !readOnlyMcpTool(toolName, config))) {
+      const reasons = pending.map(item => item.nextAction);
+      if (independent) reasons.push(partnerNextAction(state));
+      if (awaitingReceipt) {
+        const latest = state.operations.findLast(op => op.request.phase === 'reconcile' && op.result.relay?.sessionId === executor.sessionId && op.status === 'completed');
+        reasons.push(`Reviewed handoff receipt is pending.${latest ? ` Read controller.mjs result --operation-id ${latest.id}; use controller.mjs continue --operation-id ${latest.id} for the receipt turn.` : ' Run control.mjs session status and inspect the saved handoff before starting the receipt turn.'} Implementation remains paused until acknowledgement.`);
+      }
+      return deny(`Partner review must finish before affected implementation. ${[...new Set(reasons.filter(Boolean))].join(' ')} For usage during review, run control.mjs usage report or control.mjs usage snapshot --event progress in the bound main session.`);
+    }
     if (protectedOperation) return defer();
     if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !(claudeEdits && !testTarget) && !testEdit && !documentEdit && !activeExecutorException(state, toolName, executor)) {
       return deny('Application edits belong to Coding; recognized test files belong to Test Writing. Documentation permits text documents only. Ambiguous targets and helpers require their existing permissions');
