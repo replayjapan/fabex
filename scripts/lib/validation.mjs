@@ -117,7 +117,7 @@ function validateOperation(operation, errors) {
   if (!hasExactKeys(operation, ['id', 'kind', 'name', 'status', 'externalId', 'request', 'result', 'lifecycle', 'usage'])) { errors.push('operation record is invalid'); return; }
   if (operation.usage !== null && (!hasExactKeys(operation.usage, ['input_tokens', 'cached_input_tokens', 'output_tokens']) || Object.values(operation.usage).some((value) => !Number.isSafeInteger(value) || value < 0))) errors.push('operation usage is invalid');
   if (!UUID_RE.test(operation.id ?? '') || operation.kind !== 'partner' || operation.name !== 'sdk-turn' || !OPERATION_STATUSES.has(operation.status) || !nullableString(operation.externalId)) errors.push('operation identity is invalid');
-  if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox', 'phase', 'parentOperationId', 'ownerMessageDigest', 'claudeReplyVerified', 'ownerMessage', 'previousReplyStatus', 'previousReply', 'interrupted', 'attachments', 'submissionDigest', ...(Object.hasOwn(operation.request ?? {}, 'workDisposition') ? ['workDisposition'] : [])])) errors.push('operation request shape is invalid');
+  if (!hasExactKeys(operation.request, ['message', 'route', 'participants', 'sandbox', 'phase', 'parentOperationId', 'ownerMessageDigest', 'claudeReplyVerified', 'ownerMessage', 'previousReplyStatus', 'previousReply', 'interrupted', 'attachments', 'submissionDigest', ...(Object.hasOwn(operation.request ?? {}, 'workDisposition') ? ['workDisposition'] : []), ...(Object.hasOwn(operation.request ?? {}, 'requirementReview') ? ['requirementReview'] : [])])) errors.push('operation request shape is invalid');
   else {
     if (operation.request.submissionDigest !== null && !DIGEST_RE.test(operation.request.submissionDigest ?? '')) errors.push('operation submission digest is invalid');
     try { attachmentShape(operation.request.attachments); } catch { errors.push('operation attachments are invalid'); }
@@ -125,7 +125,7 @@ function validateOperation(operation, errors) {
     if (!boundedNullableString(operation.request.message, 192 * 1024)) errors.push('operation message is invalid');
     if (!ROUTES.has(operation.request.route) || operation.request.route === 'recovery-read-only') errors.push('operation route is invalid');
     if (!PARTICIPANTS.has(operation.request.participants) || operation.request.participants === 'claude') errors.push('operation participants are invalid');
-    const expectedSandbox = operation.request.route === 'normal' && operation.request.phase !== 'independent' ? 'workspace-write' : 'read-only';
+    const expectedSandbox = operation.request.route === 'normal' && operation.request.phase !== 'independent' && !operation.request.requirementReview ? 'workspace-write' : 'read-only';
     if (operation.request.sandbox !== expectedSandbox) errors.push('operation sandbox is invalid');
     if (!COLLABORATION_PHASES.has(operation.request.phase)) errors.push('operation collaboration phase is invalid');
     if (operation.request.parentOperationId !== null && !UUID_RE.test(operation.request.parentOperationId ?? '')) errors.push('operation parent id is invalid');
@@ -142,6 +142,12 @@ function validateOperation(operation, errors) {
   if (!hasExactKeys(operation.result, ['finalResponse', 'error', 'structured', 'warning', 'relay', 'attachments']) || !boundedNullableString(operation.result.finalResponse, 32 * 1024) || !boundedNullableString(operation.result.error, 8192) || !boundedNullableString(operation.result.warning, 1024)) errors.push('operation result is invalid');
   if (operation.result.attachments !== null && (!Array.isArray(operation.result.attachments) || operation.result.attachments.length > 6 || operation.result.attachments.some((entry, index) => !hasExactKeys(entry, ['index', 'status']) || entry.index !== index || !['selected', 'submitted', 'delivered', 'failed'].includes(entry.status)))) errors.push('operation attachment delivery metadata is invalid');
   if (Object.hasOwn(operation.request ?? {}, 'workDisposition') && operation.request.workDisposition !== null && !validDisposition(operation.request.workDisposition)) errors.push('operation disposition is invalid');
+  if (Object.hasOwn(operation.request ?? {}, 'requirementReview')) {
+    const review = operation.request.requirementReview;
+    if (!hasExactKeys(review, ['sourceReviewId', 'requirement', 'recordedAt']) || !UUID_RE.test(review?.sourceReviewId ?? '')
+      || !boundedString(review?.requirement, 8192) || !boundedString(review?.recordedAt, 64) || !Number.isFinite(Date.parse(review?.recordedAt))
+      || operation.request.phase !== 'reconcile' || operation.request.route !== 'normal') errors.push('owner requirement review is invalid');
+  }
   if (operation.result.structured !== null && (!validReview(operation.result.structured, operation.request.phase) || operation.result.structured.answer !== operation.result.finalResponse)) errors.push('structured review is invalid');
   if (operation.result.relay !== null && (!hasExactKeys(operation.result.relay, ['label', 'sessionId', 'status']) || !boundedString(operation.result.relay.label, 128) || !/^Codex(?: \([A-Za-z]+\))?:$/.test(operation.result.relay.label) || !boundedString(operation.result.relay.sessionId, 256) || !['pending', 'delivered', 'waived'].includes(operation.result.relay.status))) errors.push('operation relay is invalid');
   if (!hasExactKeys(operation.lifecycle, ['phase', 'detail', 'queuedAt', 'startedAt', 'finishedAt', 'cancelRequested'])) errors.push('operation lifecycle shape is invalid');

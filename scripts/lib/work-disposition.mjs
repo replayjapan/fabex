@@ -1,5 +1,6 @@
 import { blockingReviewWarning } from './review-warnings.mjs';
 import { rejectPayloadLikeText } from './checkpoint.mjs';
+import { createHash } from 'node:crypto';
 
 export const dispositionSchema = {
   type: 'object', additionalProperties: false,
@@ -86,6 +87,48 @@ export function supersedingDisposition(state, conflict) {
   return next;
 }
 
+// Stop and the controller must agree on whether the command they offer can run.
+// A repair enters review, not execution. Age alone never clears an owner action.
+export const continuationSubmissionDigest = reviewId => createHash('sha256').update(`continue:${reviewId}`, 'utf8').digest('hex');
+
+export function continuationEligibility(state, source, obligations = [], { repair = false, handoff = null } = {}) {
+  const denied = reason => ({ ok: false, reason });
+  if (!source || source.status !== 'completed' || source.request.phase !== 'reconcile') return denied('Continuation requires this session’s completed reconciliation; inspect its retained result.');
+  const warning = blockingReviewWarning(source);
+  const handoffPending = handoff && ['prepared', 'awaiting-receipt'].includes(handoff.status);
+  if (warning && !(repair && warning.split('\n').every(line => line.startsWith(DISPOSITION_WARNING)))
+    && !(handoffPending && warning === 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.')) return denied(`Review ${source.id} is blocked: ${warning}. Inspect controller.mjs result --operation-id ${source.id} and resolve that condition.`);
+  const parent = state.operations.find(op => op.id === source.request.parentOperationId);
+  if (!parent || parent.status !== 'completed') return denied('The reconciliation has no completed retained independent parent; inspect the cycle before continuing.');
+  if (parent.request.interrupted || parent.lifecycle?.cancelRequested || source.lifecycle.cancelRequested) return denied('This cycle was cancelled or abandoned; do not resume it. Review any new owner instruction in its own cycle.');
+  if (!reviewSessionMatches(state, source)) return denied('This review belongs to a different session; resume its originating conversation.');
+  if (source.externalId !== state.partner.thread.threadId && !(handoffPending && source.externalId === handoff.predecessor)) return denied('This review belongs to a different Codex thread; use the current thread’s reconciliation or complete the verified handoff.');
+  const newerOwner = state.operations.slice(state.operations.indexOf(parent) + 1).some(op => op.request.phase === 'independent' && !op.request.interrupted);
+  if (newerOwner || state.contextEvidence.ownerPrompt && state.contextEvidence.ownerPrompt.digest !== source.request.ownerMessageDigest) return denied('A newer owner message must be reconciled first; continue from its result, not this older review.');
+  if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant) return denied(continuationFailure(state, obligations));
+  // Retrying the same accepted submission returns its ID, not another turn.
+  // Source/session/cancellation/freshness checks above still apply.
+  const accepted = state.operations.find(op => op.request.submissionDigest === continuationSubmissionDigest(source.id));
+  if (accepted) return { ok: true, existingOperationId: accepted.id };
+  const pending = repair ? obligations.filter(item => item.id !== parent.id) : obligations;
+  const failure = continuationFailure(state, pending);
+  if (!repair || !failure) return failure ? denied(failure) : { ok: true };
+  if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant || partnerNextAction(state) || pending.length) return denied(failure);
+  const cp = state.partner.thread.checkpoint;
+  if (cp.blocker) return denied(failure);
+  if (cp.ownerActionRequired) {
+    const recorded = cp.fieldUpdatedAt?.ownerActionRequired;
+    const beforeCycle = Number.isFinite(Date.parse(recorded)) && Date.parse(recorded) < Date.parse(parent.lifecycle.queuedAt);
+    if (!beforeCycle || !dispositionConflictOnly(source)) return denied(`Owner decision required: ${cp.ownerActionRequired}`);
+    return { ok: true, requirementReview: { sourceReviewId: source.id, requirement: cp.ownerActionRequired, recordedAt: recorded } };
+  }
+  return { ok: true };
+}
+
+export function dispositionRepairEligibility(state, source, obligations = []) {
+  return continuationEligibility(state, source, obligations, { repair: true });
+}
+
 // Called inside the controller's state transaction. Older results cannot replace
 // the checkpoint or rearm work after a newer instruction/session/mode arrived.
 export function persistWorkDisposition(state, operation, now) {
@@ -108,6 +151,12 @@ export function persistWorkDisposition(state, operation, now) {
   if (problem) return problem;
   if (blockingReviewWarning(operation)) return null;
   const disposition = operation.result.structured.workDisposition;
+  const requirement = operation.request.requirementReview;
+  if (requirement && (cp.ownerActionRequired !== requirement.requirement || cp.fieldUpdatedAt.ownerActionRequired !== requirement.recordedAt
+    || cp.blocker || !validDisposition(disposition)
+    || ['done', 'remaining'].includes(disposition.status) && !operation.result.structured.evidence?.some(item => item.trim()))) {
+    return `${DISPOSITION_WARNING} the owner requirement changed or its satisfaction lacks review evidence; preserve it and review the current requirement.`;
+  }
   if (disposition === null) {
     // Preserve the task, completion/blocker fields and timestamps. The question
     // cannot create work or clear a decision; it only revalidates unchanged scope.

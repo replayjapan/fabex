@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { blockingReviewWarning } from './lib/review-warnings.mjs';
-import { partnerNextAction, dispositionProblem } from './lib/work-disposition.mjs';
+import { partnerNextAction, dispositionProblem, dispositionRepairEligibility, continuationEligibility } from './lib/work-disposition.mjs';
+import { activePartnerStop, guardStopProgress, yieldStop } from './lib/stop-progress.mjs';
 import { usageLifecycle } from './lib/usage-integration.mjs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,21 +24,33 @@ export function stopDecision(input, stateResult, deliveries = []) {
   }
   const current = stateResult.state;
   const latest = current.operations.findLast(op => op.status === 'completed' && op.request.phase === 'reconcile' && op.request.route === 'normal' && op.result.relay?.sessionId === input.session_id);
+  let repairFailure = null;
   if (latest && (Object.hasOwn(latest.request, 'workDisposition') || latest.result.warning?.includes('Work disposition requires reconciliation:')) && current.route === 'normal' && !current.modeGrant
     && !hasBlockingPartnerWork(current) && (!current.contextEvidence.ownerPrompt || latest.request.ownerMessageDigest === current.contextEvidence.ownerPrompt.digest)) {
     const problem = dispositionProblem(latest.request.workDisposition, latest.result.structured?.workDisposition);
-    if (problem && (!blockingReviewWarning(latest) || blockingReviewWarning(latest).split('\n').every(line => line.startsWith('Work disposition requires reconciliation:')))) return { decision: 'block', reason: `${problem} Use controller.mjs continue --operation-id ${latest.id} --disposition '<JSON disposition>' to reconcile the corrected outcome. Preserve remaining work; no new owner go-ahead is required.` };
+    if (problem && (!blockingReviewWarning(latest) || blockingReviewWarning(latest).split('\n').every(line => line.startsWith('Work disposition requires reconciliation:')))) {
+      const eligibility = dispositionRepairEligibility(current, latest, obligations);
+      if (!eligibility.ok) repairFailure = eligibility.reason;
+      else return { decision: 'block', reason: `${problem} Use controller.mjs continue --operation-id ${latest.id} --disposition '<JSON disposition>' to reconcile the corrected outcome.${eligibility.requirementReview ? ' This is a read-only review of whether the earlier owner requirement is satisfied; retain it if unresolved.' : ''} Preserve remaining work; no new owner go-ahead is required.` };
+    }
   }
   const failures = obligations.filter(item => item.status === 'failed');
   if (failures.length && !failures.every(item => (input.last_assistant_message ?? '').includes(item.id) && /unavailable|failed|cancelled|interrupted/i.test(input.last_assistant_message ?? ''))) return { decision: 'block', reason: `Partner delivery failed. Report temporary unavailability or interruption with these message IDs, preserve unfinished work, and do not claim completion: ${failures.map(item => `${item.id}: ${item.error}`).join('; ')}` };
   const missing = missingRelays(stateResult.state, input);
   if (missing.length) return { decision: 'block', reason: `Relay the missing Codex summaries and labels verbatim: ${missing.map(op => `controller.mjs relay --operation-id ${op.id}`).join('; ')}. Retrieve full records with controller.mjs result --operation-id <id>. A completed Phase 2 summary replaces its new-format Phase 1 display. Preserve unfinished work; do not resubmit these cycles.` };
   // Task completion never waives an in-flight partner-cycle obligation.
-  if (input?.stop_hook_active !== true && hasBlockingPartnerWork(stateResult.state)) {
+  if ((input?.stop_hook_active !== true || activePartnerStop(current)) && hasBlockingPartnerWork(current)) {
     return { decision: 'block', reason: partnerNextAction(stateResult.state) };
   }
+  // An unavailable repair cannot waive failure reporting or either partner's
+  // relay. Only yield this condition after those checks have passed.
+  if (repairFailure) return yieldStop(repairFailure);
   const state = stateResult.state, checkpoint = state.partner?.thread?.checkpoint;
   if (!failures.length && state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant && checkpoint?.continuation?.armed && checkpoint.openWork?.length && !checkpoint.ownerActionRequired?.trim() && !checkpoint.blocker?.trim()) {
+    if (latest) {
+      const eligibility = continuationEligibility(state, latest, obligations);
+      if (!eligibility.ok) return yieldStop(eligibility.reason);
+    }
     const preview = checkpoint.openWork.slice(0, 3).map(item => item.slice(0, 160)).join('; ') + (checkpoint.openWork.length > 3 ? `; and ${checkpoint.openWork.length - 3} more checkpoint items` : '');
     return { decision: 'block', reason: `Continue authorized feasible work: ${preview}. ${latest ? `Run controller.mjs continue --operation-id ${latest.id} to continue the reviewed task; supply --disposition JSON when correcting its outcome.` : 'Reconcile an explicit workDisposition for the current task.'} Do not ask the owner to say continue.` };
   }
@@ -50,6 +63,7 @@ export async function main() {
   for await (const chunk of process.stdin) chunks.push(chunk);
   let input;
   try { input = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { process.stdout.write('{}\n'); return; }
+  let lastState;
   try {
     const root = await rootFromHookInput(input, process.env);
     if (input.hook_event_name === 'StopFailure') {
@@ -58,6 +72,7 @@ export async function main() {
       return;
     }
     let stateResult = await readState(root, process.env);
+    if (stateResult.ok) lastState = stateResult.state;
     if (stateResult.ok) await syncOwnerDeliveries(root, stateResult.state, process.env);
     let decision = stopDecision(input, stateResult, await ownerDeliveries(root, process.env));
     let usage = null;
@@ -72,9 +87,13 @@ export async function main() {
     // Collection can advance generation or overlap a new owner message. Recheck
     // obligations before acknowledgement instead of using a pre-collection view.
     stateResult = await readState(root, process.env);
+    if (stateResult.ok) lastState = stateResult.state;
     decision = stopDecision(input, stateResult, await ownerDeliveries(root, process.env));
-    if (usage) decision.systemMessage = usage; // Inform the owner without requiring another assistant reply.
-    if (decision.decision !== 'block' && stateResult.ok) {
+    decision = await guardStopProgress(root, input, decision, stateResult.state ?? lastState, process.env);
+    const yielded = decision.yielded === true;
+    delete decision.yielded;
+    if (usage) decision.systemMessage = [decision.systemMessage, usage].filter(Boolean).join('\n');
+    if (decision.decision !== 'block' && !yielded && stateResult.ok) {
       for (const failure of deliveryObligations(await ownerDeliveries(root, process.env), stateResult.state, input.session_id).filter(item => item.status === 'failed')) await updateOwnerDelivery(root, failure.id, { failureReportedAt: new Date().toISOString() }, process.env);
       const pending = pendingRelays(stateResult.state, input.session_id).map((op) => op.id);
       if (pending.length) {
@@ -84,12 +103,12 @@ export async function main() {
           state.generation += 1;
           return state;
         }, { expectedGeneration: stateResult.state.generation, purpose: 'owner-visible-relay' }, process.env);
-        if (!marked.ok) { process.stdout.write(`${JSON.stringify({ decision: 'block', reason: 'Relay acknowledgement could not be saved; retry Stop.' })}\n`); return; }
+        if (!marked.ok) { process.stdout.write(`${JSON.stringify(input.stop_hook_active === true ? { systemMessage: 'Fabex paused: relay acknowledgement could not be saved. Pending replies remain recorded.' } : { decision: 'block', reason: 'Relay acknowledgement could not be saved; retry Stop.' })}\n`); return; }
       }
       await recordOwnerVisibleReplyEvidence(root, input, process.env);
     }
     process.stdout.write(`${JSON.stringify(decision)}\n`);
-  } catch { process.stdout.write(`${JSON.stringify({ decision: 'block', reason: 'Fabex could not verify or acknowledge the complete Codex relay; retry or diagnose before stopping.' })}\n`); }
+  } catch { process.stdout.write(`${JSON.stringify(activePartnerStop(lastState) ?? (input.stop_hook_active === true ? { systemMessage: 'Fabex paused: verification failed again. Pending work and replies remain recorded; inspect diagnostics.' } : { decision: 'block', reason: 'Fabex could not verify or acknowledge the complete Codex relay; retry or diagnose before stopping.' }))}\n`); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

@@ -1,4 +1,4 @@
-import { validDisposition, persistWorkDisposition, continuationFailure, reviewSessionMatches, DISPOSITION_WARNING } from './work-disposition.mjs';
+import { validDisposition, persistWorkDisposition, continuationEligibility, continuationSubmissionDigest } from './work-disposition.mjs';
 import { applyContainedEdits } from '../vendor/modes/contained-edits.mjs';
 import { activitySnapshot, researchRoot, researchAuthorAllowed } from './activity.mjs';
 import { editInstructions, extendSchema, splitEdits, applyEdits } from '../vendor/modes/edits.mjs';
@@ -500,39 +500,32 @@ export async function submitOperation(root, message, env = process.env, { spawnR
 export async function continueOperation(root, reviewId, env = process.env, { spawnRunner = true, spawnImpl = spawn, workDisposition } = {}) {
   const deliveries = await ownerDeliveries(root, env);
   const refresh = await refreshState(root, env);
-  const awaitingReceipt = refresh && ['prepared', 'awaiting-receipt'].includes(refresh.status);
   let operationId;
   const state = await mutate(root, 'continue-agreed-task', async state => {
-    const candidate = state.operations.find(op => op.id === reviewId);
-    const warning = blockingReviewWarning(candidate);
-    if (warning && !(workDisposition && warning.split('\n').every(line => line.startsWith(DISPOSITION_WARNING))) && !(awaitingReceipt && warning === 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.')) throw new ValidationError(`Review ${reviewId} is blocked: ${warning}. Inspect controller.mjs result --operation-id ${reviewId} and resolve that condition.`);
-    const source = state.operations.find(op => op.id === reviewId && op.status === 'completed' && op.request.phase === 'reconcile' && (!blockingReviewWarning(op) || workDisposition && blockingReviewWarning(op)?.split('\n').every(line => line.startsWith(DISPOSITION_WARNING)) || awaitingReceipt && op.result.warning === 'Fresh conversation has not acknowledged the reviewed handoff; implementation remains blocked.'));
-    const parent = source && state.operations.find(op => op.id === source.request.parentOperationId);
+    const source = state.operations.find(op => op.id === reviewId);
     const checkpoint = state.partner.thread.checkpoint;
-    if (!source) throw new ValidationError(`Continuation requires this session’s completed reconciliation: ${reviewId} is missing, unfinished or not a reconciliation. Read controller.mjs result --operation-id ${reviewId}.`);
-    if (!parent) throw new ValidationError('The reconciliation has no retained independent parent; inspect the cycle before continuing.');
-    if (parent.request.interrupted || source.lifecycle.cancelRequested) throw new ValidationError('This cycle was cancelled or abandoned; do not resume it. Review any new owner instruction in its own cycle.');
-    if (!reviewSessionMatches(state, source)) throw new ValidationError('This review belongs to a different session; resume its originating conversation.');
-    if (source.externalId !== state.partner.thread.threadId && !(awaitingReceipt && source.externalId === refresh.predecessor)) throw new ValidationError('This review belongs to a different Codex thread; use the current thread’s reconciliation or complete the verified handoff.');
-    const submissionDigest = textDigest(`continue:${source.id}`);
-    const existing = state.operations.find(op => op.request.submissionDigest === submissionDigest);
-    if (existing) { operationId = existing.id; return; }
-    const newerOwner = state.operations.slice(state.operations.indexOf(parent) + 1).some(op => op.request.phase === 'independent' && !op.request.interrupted);
-    if (newerOwner || state.contextEvidence.ownerPrompt && state.contextEvidence.ownerPrompt.digest !== source.request.ownerMessageDigest) throw new ValidationError('A newer owner message must be reconciled first; continue from its result, not this older review.');
+    if (workDisposition !== undefined && !validDisposition(workDisposition)) throw new ValidationError('Continuation workDisposition is invalid.');
+    const obligations = deliveryObligations(deliveries, state, source?.result?.relay?.sessionId);
+    const eligibility = continuationEligibility(state, source, obligations, { repair: workDisposition !== undefined, handoff: refresh });
+    if (!eligibility.ok) throw new ValidationError(eligibility.reason);
+    if (eligibility.existingOperationId) { operationId = eligibility.existingOperationId; return; }
+    const submissionDigest = continuationSubmissionDigest(reviewId);
+    const parent = state.operations.find(op => op.id === source.request.parentOperationId);
     const questionOnly = source.request.workDisposition === null && source.result.structured?.workDisposition === null;
     const disposition = workDisposition ?? (questionOnly ? { status: 'remaining', remainingWork: [...checkpoint.openWork], reason: 'Continue the unchanged authorized task after question-only review.' } : source.result.structured?.workDisposition);
-    if (workDisposition !== undefined && !validDisposition(workDisposition)) throw new ValidationError('Continuation workDisposition is invalid.');
-    const obligations = deliveryObligations(deliveries, state, source.result.relay.sessionId);
-    const repair = workDisposition && (!state.contextEvidence.ownerPrompt || source.request.ownerMessageDigest === state.contextEvidence.ownerPrompt.digest);
-    const failure = continuationFailure(state, repair ? obligations.filter(item => item.id !== parent.id) : obligations);
-    // A repair only re-enters partner review; it never arms execution itself.
-    if (failure && !(repair && !checkpoint.ownerActionRequired && !hasBlockingPartnerWork(state) && state.route === 'normal' && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant && !obligations.some(item => item.id !== parent.id))) throw new ValidationError(failure);
     if (!validDisposition(disposition)) throw new ValidationError('Continuation requires an explicit workDisposition. Supply --disposition JSON to reconcile the missing bookkeeping.');
     operationId = randomUUID();
-    state.operations.push(operationRecord({ id: operationId, phase: 'reconcile', workDisposition: disposition, route: state.route, participants: state.participants,
+    const next = operationRecord({ id: operationId, phase: 'reconcile', workDisposition: disposition, route: state.route, participants: state.participants,
       parentOperationId: parent.id, ownerMessageDigest: source.request.ownerMessageDigest, claudeReplyVerified: 'unavailable',
       message: `CONTINUATION OF THE AGREED TASK — not a new owner message.\nOWNER MESSAGE (verbatim):\n${await retainedOwnerMessage(root, parent, env)}\n\nPREVIOUS RECONCILIATION:\n${source.result.finalResponse}\n\nCURRENT SHARED CHECKPOINT:\n${buildRecoverySeed(checkpoint, root)}\nCLAUDE WORK DISPOSITION (endorsed by continuation command):\n${JSON.stringify(disposition)}\nContinue only the remaining authorized work. Do not repeat unchanged research or passing checks.`,
-      sessionId: source.result.relay.sessionId, submissionDigest, now: new Date().toISOString() }));
+      sessionId: source.result.relay.sessionId, submissionDigest, now: new Date().toISOString() });
+    if (eligibility.requirementReview) {
+      next.request.requirementReview = eligibility.requirementReview;
+      next.request.sandbox = 'read-only';
+      next.request.message += '\nREQUIREMENT REVIEW ONLY: Determine from the latest owner instructions and retained evidence whether this earlier owner requirement is satisfied: ' + JSON.stringify(eligibility.requirementReview.requirement)
+        + '. Do not implement, change services, apply edits or create new authorization. Supply evidence for satisfaction; if the requirement is unresolved, retain owner-decision. This review does not itself authorize execution.';
+    }
+    state.operations.push(next);
     state.partner.status = 'queued'; state.task.status = 'active'; state.task.joint.status = 'pending';
   }, env);
   if (spawnRunner && state.operations.find(op => op.id === operationId)?.status === 'queued') spawnControllerRunner(root, env, spawnImpl);
@@ -944,12 +937,12 @@ export async function runOperation(root, operation, { createCodex, signal, pause
     const newerMessage = deliveries.some((e, index) => e.sessionId === operation.result.relay?.sessionId && e.id !== (operation.request.parentOperationId ?? operation.id) && (ownerIndex >= 0 ? index > ownerIndex : Date.parse(e.capturedAt) >= Date.parse(operation.lifecycle.queuedAt)) && e.status !== 'reconciled');
     const activity = await activitySnapshot(root, operation.result.relay?.sessionId, env);
     const restrictedActivity = activity.active && activity.activity !== 'work';
-    const researchEdits = restrictedActivity && activity.installed && ['reconcile', 'single'].includes(operation.request.phase) && !newerMessage && !awaitingHandoff;
+    const researchEdits = !operation.request.requirementReview && restrictedActivity && activity.installed && ['reconcile', 'single'].includes(operation.request.phase) && !newerMessage && !awaitingHandoff;
     let appliedResearchFiles = [];
     const sandbox = restrictedActivity || operation.request.phase === 'independent' || newerMessage || awaitingHandoff || operation.request.sandbox === 'workspace-write' && authorship.coder !== 'codex' && !authorship.codexDocuments
       ? 'read-only' : operation.request.sandbox;
     const restrictedTools = restrictedActivity;
-    const limitedTests = !restrictedActivity && authorship.codexTestEdits && operation.request.route === 'normal' && operation.request.phase !== 'independent' && !newerMessage && !awaitingHandoff;
+    const limitedTests = !operation.request.requirementReview && !restrictedActivity && authorship.codexTestEdits && operation.request.route === 'normal' && operation.request.phase !== 'independent' && !newerMessage && !awaitingHandoff;
     const docsBoth = plan.role === 'docs' && plan.executor === 'both' && operation.request.participants === 'both' && operation.request.route === 'normal';
     const roleExecution = operation.request.phase !== 'independent' && ['codex', 'both'].includes(plan.executor);
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;
@@ -968,7 +961,7 @@ export async function runOperation(root, operation, { createCodex, signal, pause
     const seed = expectedId ? null : buildRecoverySeed(before.state.partner.thread.checkpoint, before.paths.canonicalRoot);
     let prompt = turnPrompt({ ...operation, request: { ...operation.request, sandbox } }, operation.request.phase === 'independent' ? null : seed);
     if (awaitingHandoff) prompt += `\nREVIEWED CONTINUATION HANDOFF:\n${refresh.handoff}\nRead this handoff before proceeding. This receipt turn is read-only. Include exactly "Handoff received: sha256:${refresh.digest}" as an evidence entry after reading it. Preserve pending messages and existing task scope.`;
-    if (docsBoth) {
+    if (docsBoth && !operation.request.requirementReview) {
       prompt += '\nDOCUMENTATION BOTH: Collaborate on the same handoff or document. Read the existing file, including the other partner’s edits, and update it in place using its topic structure. Each contributes what it knows; coordinate edits one writer at a time, check the whole handoff for accuracy, preserve relevant disagreements with attribution, and never silently delete the other’s content. Do not create a companion document or require separate author sections. Shared documentation is not a sealed strategy assessment: both may read it at any time. Keep the normal independent assessment and reconciliation of the owner’s request separate from writing the document. Claude’s main model stays host controlled; the Documentation model/effort override applies to Codex on working reconciliation turns.';
     }
 
@@ -983,8 +976,9 @@ export async function runOperation(root, operation, { createCodex, signal, pause
     if (limitedTests) initialInstructions += ` ${testEditInstructions}`;
     if (restrictedTools) initialInstructions += ' Research MCP tools remain available under host permissions: only Mobbin searches/get/list, Context7 resolve-library-id/query-docs and IDE getDiagnostics are authorized. Do not invoke mutating MCPs, browser actions that change real data, publishing or arbitrary remote code. Shell networking is for read-only research. Report unavailable tools or enforcement limits honestly.';
     if (researchEdits) initialInstructions += ` ${editInstructions} Research directory: ${researchRoot(activity.root)}.`;
-    if (docsBoth) initialInstructions += ' Shared handoff and documentation files are collaborative sources, not sealed assessments; both partners may read and update them in turn.';
-    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: restrictedTools ? 'research' : limitedTests ? 'off' : profile['partners.codex.helperServers'] });
+    if (docsBoth && !operation.request.requirementReview) initialInstructions += ' Shared handoff and documentation files are collaborative sources, not sealed assessments; both partners may read and update them in turn.';
+    if (operation.request.requirementReview) initialInstructions += ' This is a read-only owner-requirement review. No implementation, test edits, research edits, service changes or external writes are authorized. Preserve any unsatisfied owner decision; cite evidence before reporting it satisfied.';
+    const codex = await createCodex({ config: { developer_instructions: initialInstructions, compact_prompt: COMPACT_PROMPT } }, { root, operationId: operation.id, env, helperServers: operation.request.requirementReview ? 'off' : restrictedTools ? 'research' : limitedTests ? 'off' : profile['partners.codex.helperServers'] });
     const thread = expectedId ? codex.resumeThread(expectedId, options) : codex.startThread(options);
     await mutate(root, 'sdk-execution-envelope', (state) => {
       state.partner.envelope = { cwd: before.paths.canonicalRoot, sandbox, instructionProfile: 'continuous-canonical-v1' };

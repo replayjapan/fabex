@@ -190,7 +190,7 @@ node "/absolute/plugin/path/scripts/controller.mjs" submit <<'FABEX_PHASE1_7F3A2
 FABEX_PHASE1_7F3A2C91
 ```
 
-Use `controller.mjs status --operation-id <uuid>` for a bounded snapshot or wait with `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal response with `controller.mjs result --operation-id <uuid>`. Do not end the owner turn: the Stop hook blocks while Phase 1 is queued/working and while its Phase 2 is missing. Use `controller.mjs cancel --operation-id <uuid>` when the owner cancels.
+Use `controller.mjs status --operation-id <uuid>` for a bounded snapshot or wait with `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal response with `controller.mjs result --operation-id <uuid>`. Keep the owner cycle open while partner work can progress. Stop initially blocks while Phase 1 is queued/working and while Phase 2 is missing; if it yields an unresolved condition, report that condition once and preserve the cycle rather than repeating waiting replies. Use `controller.mjs cancel --operation-id <uuid>` when the owner cancels.
 
 After Phase 1 is stored, Claude may read it, produce its current owner-visible response, and submit Phase 2 with the exact Phase 1 operation ID and identical owner message:
 
@@ -270,6 +270,17 @@ Use `controller.mjs continue --operation-id <review-id>` to endorse the last Cod
 disposition and continue the authorized task. To correct missing or conflicting
 bookkeeping, append `--disposition '<JSON disposition>'` with Claude's explicit
 outcome; the next partner review must settle it before automatic continuation.
+When eligible, an earlier owner prerequisite may be checked in a read-only
+requirement-review turn. Determine whether it is satisfied from the latest owner
+instructions and evidence; retain an unresolved owner decision. This turn cannot
+implement, edit documents/tests or change services. A proposal alone does not
+clear the requirement.
+
+Stop and continuation share eligibility checks. If recovery is unavailable, or
+Stop yields after repeating an unchanged condition, report the actual requirement
+once and let the turn end. Yielding is not completion or relay acknowledgement:
+keep unfinished work and undelivered partner replies recorded. Do not retry the
+same rejected command or ask for another go merely to repair bookkeeping.
 No new owner go-ahead is needed for this repair. Never bypass a real review failure.
 Legacy checkpoint commands remain available for explicit maintenance, but are
 not a replacement for either partner's disposition.

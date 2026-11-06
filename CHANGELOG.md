@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.13.2
+
+- Use shared eligibility checks for continuation and Stop recovery guidance.
+- Review earlier owner prerequisites in a read-only partner turn before replacing
+  them with an agreed, evidenced outcome. Current owner decisions remain protected.
+- Yield when recovery cannot proceed or a Stop check repeats without progress.
+  Preserve unfinished work, pending replies and delivery failures when yielding;
+  usage and bookkeeping updates do not restart the same loop.
+- Continue awaiting queued or running partner turns. Check failed deliveries and
+  missing summaries before yielding an unavailable repair; recognize new reviews
+  in the same owner cycle as progress.
+
 ## 1.13.1
 
 - Resolve older work-bookkeeping conflicts through a newer explicit partner

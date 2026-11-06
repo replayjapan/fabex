@@ -98,6 +98,10 @@ will be reported rather than silently starting over.
 
 ### What's new?
 
+- **1.13.2:** Stop yields when recovery cannot proceed or the same check repeats
+  without progress. Earlier owner prerequisites can receive a read-only partner
+  review; pending work and replies remain recorded. [Details](CHANGELOG.md)
+
 - **1.13.1:** New explicit partner agreements can resolve older bookkeeping
   conflicts without losing their review history. Missing-operation recovery and
   blocked-command guidance identify the required next action. [Details](CHANGELOG.md)
