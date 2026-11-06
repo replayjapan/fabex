@@ -5,7 +5,7 @@ description: Diagnose Fabex activation, state health, platform facts, hooks, and
 
 # Diagnose
 
-Owner-facing reply: show each participant's own short conclusion under its model-aware label, then Decided. Paste Codex's ownerSummary and label unchanged. Omit resolved disagreements and routine uncertainty; show an open issue only when it affects an owner decision, blocks progress or materially limits the result. Action required appears only when the owner must act. Omit empty sections and absent partners. Keep the complete phase records available through result and relay --full. Wait in bounded slices; a timeout does not complete the task.
+Owner-facing reply: each AI chooses its complete intended response, including detail, evidence and disagreement. Relay Codex's answer and flags unedited under its speaker label; do not substitute a summary or impose brevity or omission rules. Deliver every unread answer, including earlier phases. Use controller relay to retrieve it. Missing delivery is recoverable bookkeeping, never a reason to trap a reply or block unrelated authorized work. A stored answer or hook reminder is not proof of visible delivery. Wait in bounded slices for active partner work; a timeout does not complete the task.
 
 For an attachment problem, verify the current hook-recorded session matches the upload's session directory and that `CLAUDE_CONFIG_DIR` is honored. Do not scan uploads or inspect them outside the Image review assignment. Forward the current host-provided reference through Phase 1 and check indexed attachment delivery. A validated path alone is not proof of delivery.
 

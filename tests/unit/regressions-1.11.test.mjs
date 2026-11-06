@@ -112,7 +112,8 @@ test('capture survives attachment failure and Stop cannot silently accept a miss
   const current = await readState(f.root, f.env);
   assert.equal(current.state.operations.length, 0);
   let entries = await ownerDeliveries(f.root, f.env);
-  assert.equal(stopDecision({ session_id: 'a', last_assistant_message: 'Done.' }, current, entries).decision, 'block');
+  assert.equal(stopDecision({ session_id: 'a', last_assistant_message: 'Done.' }, current, entries).decision, undefined);
+  assert.equal(deliveryObligations(entries, current.state, 'a').length, 1, 'failure stays recorded without trapping Stop');
   assert.equal(stopDecision({ session_id: 'a', last_assistant_message: `Partner delivery failed for ${entry.id}; work remains pending.` }, current, entries).decision, undefined);
   await writeFile(missing, 'fixture image');
   assert.equal((await dispatch(f))[0].status, 'submitted');
@@ -127,7 +128,12 @@ test('independent assessment cannot write; reconciliation can build and continua
   await execute(f, 'independent', (options, _input, context) => {
     assert.equal(options.sandboxMode, 'read-only'); assert.equal(options.approvalPolicy, 'never');
   });
-  assert.equal((await guard(f, 'Write', { file_path: join(f.root, 'handoff.md'), content: 'premature' })).decision, 'deny');
+  const note = { file_path: join(f.root, 'handoff.md'), content: 'authorized documentation' };
+  assert.equal((await guard(f, 'Write', note)).decision, 'deny', 'documentation still needs its assignment');
+  await assert.rejects(selectTaskRole(f.root, 'docs', f.env), /Select the task role before the independent review cycle/);
+  // Keep the implementation assignment reviewed in Phase 1. Preselected
+  // documentation access during a read-only review is covered in 1.14.
+
   const second = await submitOperation(f.root, reconciliationEnvelope(entry.id, entry.text, 'Agreed.'), f.env, { spawnRunner: false });
   await execute(f, 'reconcile', options => assert.equal(options.sandboxMode, 'workspace-write'));
   await updateCheckpoint(f.root, 'openWork', 'Finish the approved patch.', f.env);
@@ -142,13 +148,13 @@ test('independent assessment cannot write; reconciliation can build and continua
   assert.equal((await ownerDeliveries(f.root, f.env)).length, 1);
 });
 
-test('a mid-turn correction makes the earlier reconciliation read-only and blocks edits', async t => {
+test('a mid-turn correction makes the earlier reconciliation read-only without blocking unrelated validation', async t => {
   const f = await fixture(t), entry = await capture(f);
   await dispatch(f); await sealReading(f.root, entry.id, 'Independent.', f.env); await execute(f, 'independent');
   await submitOperation(f.root, reconciliationEnvelope(entry.id, entry.text, 'Agreed.'), f.env, { spawnRunner: false });
   await capture(f, 'Correction: review this before building.'); await dispatch(f);
   await execute(f, 'reconcile', (options, input) => { assert.equal(options.sandboxMode, 'read-only'); });
-  assert.equal((await guard(f, 'Bash', { command: 'npm run build' })).decision, 'deny');
+  assert.equal((await guard(f, 'Bash', { command: 'npm run build' })).decision, 'defer');
 });
 
 test('only confirmed pre-execution capacity refusals retry, bounded and without recovery or substitution', async t => {
@@ -283,12 +289,12 @@ test('assigned test validation of agreed work survives a pending diagnostic with
   await symlink(join(f.dir, 'outside'), join(f.root, 'escape'));
   for (const command of ['npm test', 'npm run test', 'node --test --test-concurrency=1 tests/unit/example.test.mjs']) assert.equal((await guard(f, 'Bash', { command })).decision, 'defer', command);
   for (const command of ["npm --prefix 'nested app' test", "npm --prefix='nested app' run test", 'npm --prefix . test']) assert.equal((await guard(f, 'Bash', { command })).decision, 'defer', command);
-  for (const command of ['npm --prefix ../outside test', 'npm --prefix escape test', 'npm --prefix missing test', "npm --prefix 'nested app' test -- --update", "npm --prefix 'nested app' test && touch app.js"]) assert.equal((await guard(f, 'Bash', { command })).decision, 'deny', command);
-  for (const command of ['npm run build', 'npm test -- --update', 'npm test && touch src.js', 'node --test --import=./mutator.mjs']) assert.equal((await guard(f, 'Bash', { command })).decision, 'deny', command);
+  for (const command of ["npm --prefix 'nested app' test -- --update", "npm --prefix 'nested app' test && touch app.js"]) assert.equal((await guard(f, 'Bash', { command })).decision, 'deny', command);
+  for (const command of ['npm test -- --update', 'npm test && touch src.js']) assert.equal((await guard(f, 'Bash', { command })).decision, 'deny', command);
   assert.equal((await guard(f, 'Write', { file_path: join(f.root, 'app.js'), content: 'changed' })).decision, 'deny');
-  assert.equal((await guard(f, 'Bash', { command: 'npm test' }, { sessionId: 'a', agentId: 'helper' })).decision, 'deny');
+  assert.equal((await guard(f, 'Bash', { command: 'npm test' }, { sessionId: 'a', agentId: 'helper' })).decision, 'defer', 'delivery records grant no additional tool restrictions');
   await updateState(f.root, s => { s.partner.thread.checkpoint.continuation.armed = false; s.generation++; return s; }, {}, f.env);
-  assert.equal((await guard(f, 'Bash', { command: 'npm test' })).decision, 'deny');
+  assert.equal((await guard(f, 'Bash', { command: 'npm test' })).decision, 'defer', 'validation is not gated by armed bookkeeping');
 });
 
 test('migration-deferred waits poll and cancellation signals only the verified active controller without migrating', async t => {
@@ -358,8 +364,8 @@ test('diagnose never calls activation verified when registry and source differ',
 test('abandoning an assessed delivery retains a visible failure instead of an impossible assessment obligation', async t => {
   const f = await fixture(t), entry = await capture(f); await dispatch(f); await sealReading(f.root, entry.id, 'Independent.', f.env); await execute(f, 'independent');
   const pending = stopDecision({ session_id: 'a' }, await readState(f.root, f.env), await ownerDeliveries(f.root, f.env));
-  assert.ok(pending.reason.includes(`result --operation-id ${entry.id}`));
-  assert.match(pending.reason, /awaits reconciliation/);
+  assert.equal(pending.decision, undefined);
+  assert.ok(pending.notices.some(n => n.key.includes(entry.id)));
   const output = spawnSync(process.execPath, [resolve('scripts/control.mjs'), 'recover', 'abandon', '--operation-id', entry.id], { cwd: f.root, env: f.env, encoding: 'utf8' });
   assert.equal(output.status, 0, output.stderr);
   const current = await readState(f.root, f.env); await syncOwnerDeliveries(f.root, current.state, f.env);
@@ -445,14 +451,16 @@ test('capture journal failure reports visibly without blocking the original host
   const failure = JSON.parse(output.stdout);
   assert.equal(failure.decision, undefined);
   assert.match(failure.systemMessage, /Keep the original host message and attachments/);
-  assert.match(failure.hookSpecificOutput.additionalContext, /before affected implementation/);
+  assert.match(failure.hookSpecificOutput.additionalContext, /without blocking unrelated authorized work/);
+  assert.match(failure.hookSpecificOutput.additionalContext, /No new implementation authority was granted/);
   assert.equal((await readState(f.root, f.env)).state.operations.length, 0, 'must not claim failed capture was submitted');
 });
 
 test('captured but unsubmitted delivery has a usable abandon escape and retains original content', async t => {
   const f = await fixture(t), entry = await capture(f, 'Retain this interrupted request.');
   const pending = stopDecision({ session_id: 'a' }, await readState(f.root, f.env), await ownerDeliveries(f.root, f.env));
-  assert.ok(pending.reason.includes(`recover abandon --operation-id ${entry.id}`));
+  assert.equal(pending.decision, undefined);
+  assert.ok(pending.notices.some(n => n.key.includes(entry.id)));
   const output = spawnSync(process.execPath, [resolve('scripts/control.mjs'), 'recover', 'abandon', '--operation-id', entry.id], { cwd: f.root, env: f.env, encoding: 'utf8' });
   assert.equal(output.status, 0, output.stderr);
   const entries = await ownerDeliveries(f.root, f.env);
@@ -541,11 +549,11 @@ test('1.11.1 reconciliation by parent ID preserves exact text and rejects anothe
   assert.ok(op.request.message.includes(`OWNER MESSAGE (verbatim):\n${entry.text}\n`));
 });
 
-test('1.11.1 Stop identifies each missing summary with an exact retrieval command', async t => {
-  const f = await fixture(t), { second } = await cycle(f);
+test('Stop reminds about unread answers without making delivery a work gate', async t => {
+  const f = await fixture(t), { second } = await cycle(f, { status: 'done', remainingWork: [], reason: 'Document complete.' });
   const decision = stopDecision({ session_id: 'a', last_assistant_message: 'Done.' }, await readState(f.root, f.env));
-  assert.equal(decision.decision, 'block');
-  assert.ok(decision.reason.includes(`controller.mjs relay --operation-id ${second.operationId}`));
+  assert.equal(decision.decision, undefined);
+  assert.ok(decision.notices.some(n => n.key.includes(second.operationId)));
 });
 
 test('1.11.1 sibling tracker storage is valid but repository and redirected targets stay denied', async t => {
@@ -593,9 +601,9 @@ test('1.11.1 directory marketplace agreement does not claim observed hook activa
 test('1.11.1 invalid seal and submit delimiters produce actionable refusals', async t => {
   const f = await fixture(t);
   for (const action of ['submit', 'seal --operation-id 12345678-1234-4234-8234-123456789012']) {
-    const command = `node '${resolve('scripts/controller.mjs')}' ${action} <<'END'\n{}\nEND`;
+    const command = `node '${resolve('scripts/controller.mjs')}' ${action} <<'BAD-DASH'\n{}\nBAD-DASH`;
     const result = await guard(f, 'Bash', { command });
-    assert.equal(result.decision, 'deny'); assert.match(result.reason, /8–64/);
+    assert.equal(result.decision, 'deny'); assert.match(result.reason, /1–64/);
   }
 });
 
@@ -619,7 +627,7 @@ test('1.11.1 an unavailable tracker result never becomes a successful usage mark
 });
 
 
-test('1.11.1 npm prefix containment is limited to the pending-cycle test exception', async t => {
+test('1.11.1 pending reviews do not introduce an npm prefix restriction', async t => {
   const f = await fixture(t);
   await cycle(f);
   await updateCheckpoint(f.root, 'openWork', 'Run the approved tests.', f.env);
@@ -629,13 +637,13 @@ test('1.11.1 npm prefix containment is limited to the pending-cycle test excepti
   for (const command of ['npm --prefix ../outside test', 'npm --prefix ../outside dev', 'npm --prefix=../outside run test'])
     assert.equal((await guard(f, 'Bash', { command })).decision, 'defer', command);
   await capture(f, 'Please diagnose the current work.');
-  // Pending review permits only the assigned runner's contained test commands.
+  // A pending review does not change host-controlled ordinary command access.
   for (const command of [
     'npm --prefix ../outside test', 'npm --prefix=../outside run test',
     'npm test --prefix ../outside', 'npm --prefix escape test',
     'npm --prefix missing test', 'npm --prefix test',
     'npm --prefix ../outside dev', 'cd ../outside && npm --prefix . test'
-  ]) assert.equal((await guard(f, 'Bash', { command })).decision, 'deny', command);
+  ]) assert.equal((await guard(f, 'Bash', { command })).decision, 'defer', command);
   for (const command of ['npm --prefix . test', "npm --prefix='nested app' test"])
     assert.equal((await guard(f, 'Bash', { command })).decision, 'defer', command);
 });
@@ -664,7 +672,12 @@ test('1.11.1 Stop displays usage success or failure without forcing a second rep
     };
     // Usage reporting cannot waive missing partner relays either.
     const missing = invoke({ ...input, last_assistant_message: 'Done.' });
-    assert.equal(missing.decision, 'block'); assert.equal(missing.systemMessage, usageLine(result));
+    assert.equal(missing.decision, 'block', 'an unread answer gets one recovery reminder');
+    assert.ok(missing.systemMessage.includes(usageLine(result)));
+    const repeated = invoke({ ...input, last_assistant_message: 'Done.', stop_hook_active: true });
+    assert.equal(repeated.decision, undefined, 'the unchanged unread set cannot block twice');
+    assert.equal(repeated.systemMessage, usageLine(result));
+    assert.ok((await readState(f.root, f.env)).state.operations.some(op => op.result.relay?.status === 'pending'));
     for (let attempt = 0; attempt < 2; attempt++) {
       const output = invoke(input);
       assert.equal(output.decision, undefined);

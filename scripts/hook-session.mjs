@@ -15,6 +15,7 @@ import { registerSession } from './lib/workspace.mjs';
 import { resolveSettings, executionPlan } from './lib/workspace-settings.mjs';
 import { captureOwnerDelivery, ownerDeliveries, ownerDeliveryReplay } from './lib/owner-delivery.mjs';
 import { dispatchOwnerDeliveries } from './lib/sdk-controller.mjs';
+import { pendingRelays } from './lib/review.mjs';
 import { refreshState } from './lib/conversation-refresh.mjs';
 
 async function readInput() {
@@ -25,14 +26,14 @@ async function readInput() {
 
 export function renderSessionContext(route, participants, config, labels = speakerLabels(null, config.models?.codex?.model)) {
   const label = formatMode(route, participants);
-  const badge = `${replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always')} Labels: ${labels.claude} / ${labels.codex}; never invent models. Each AI gives its own short conclusion, then Decided. Relay Codex's ownerSummary and label verbatim. Show only open issues affecting decisions, progress or results. Action required only for owner action. Omit empty sections, absent partners, block quotes and routine none flags. Stop checks the latest summary and label (legacy full-answer fallback). Full phase records remain available.`;
+  const badge = `${replyBadgeInstruction(label, config.display?.replyModeBadge ?? 'always')} Labels: ${labels.claude} / ${labels.codex}; never invent models. Each AI chooses its complete intended answer, including explanations and disagreement. Relay Codex’s full answer and flags unedited. No mandatory shortening, summary substitution or omission rules. Deliver unread earlier answers as well; storing them is not delivery. Missing delivery is recoverable bookkeeping and does not block unrelated authorized work.`;
   if (route === 'normal' && participants === 'both') {
     const joint = config.collaboration.jointByDefault ? 'on' : 'off';
     return `Fabex mode: ${label}. ${badge} Joint default ${joint}; /fabex:jointly. Independent Phase 1 then linked Phase 2 on the canonical Codex SDK thread; verify thread.started. Never relay private reasoning. Owner grants are single-use; questions authorize answers only. Coding, Test Writing and Test Running assignments control their respective work. Reviewed Git delivery: Claude or operational agent under host permissions. Use automatically queued message IDs; legacy digest forwarding remains available. Phase 1 is read-only; reconciled owner-authorized work can build. Continue agreed work with controller continue --operation-id <completed-reconciliation-id>; never invent another owner task. Heavy jobs run sequentially: inspect heavy status and mem, wait up to 120 seconds, repeat exit 3 while feasible. Never bypass the queue or waive review/relay. Heavy recovery needs verified ownership evidence or recorded owner-named authorization. Release unused owned resources; retain requested previews. Arm open-work only for authorized work; clear finished items. New prompts disarm old work: revalidate scope. Stop only for completion, owner-action-required or a real blocker. No cumulative continuation quota.`;
   }
   if (route === 'normal' && participants === 'codex') return `Fabex participants: Codex only. ${badge} Relay Codex’s answer without adding a separate Claude assessment. Host/Modes permissions and task assignments still apply; participant selection does not grant code authorship.`;
   if (route === 'normal' && participants === 'claude') {
-    return `Fabex mode: ${label}. ${badge} Questions authorize answers only. Do not consult Codex or place raw Claude-only questions/answers in its checkpoint. For implementation, use the assigned Coding AI; change participants only through owner-selected /fabex:settings participants. Claude project writes are allowlist-controlled unless a structured owner-named executor exception is active. Delegate the full Git delivery lane to fabex-operational.`;
+    return `Fabex mode: ${label}. ${badge} Questions authorize answers only. Do not consult Codex or place raw Claude-only questions/answers in its checkpoint. For implementation, use the assigned Coding AI; change participants only through owner-selected /fabex:settings participants. Project writes follow the selected Coding, Test Writing and Documentation assignments. Delegate the full Git delivery lane to fabex-operational.`;
   }
   if (route === 'discussion' && participants === 'both') return `Fabex mode: ${label}. ${badge} Persistent joint discussion. Use independent Phase 1 then linked Phase 2; never relay private reasoning or tool logs. Each phase resumes the canonical SDK thread with a read-only sandbox. Modes or the host determines the activity.`;
   if (route === 'discussion' && participants === 'claude') return `Fabex mode: ${label}. ${badge} Persistent Claude-only read-only discussion. Do not submit a Codex SDK turn or checkpoint raw Claude-only questions or answers. Use /modes:work or the host permissions to change activity.`;
@@ -140,6 +141,10 @@ export async function main() {
     context += returnWarning;
     context += workspaceWarning;
     context += deliveryContext;
+    if (result.ok) {
+      const unread = pendingRelays(result.state, input.session_id);
+      if (unread.length) context += ` Unread partner answers remain to be delivered in full: ${unread.map(op => `controller.mjs relay --operation-id ${op.id}`).join('; ')}. Retrieve them after sealing any required independent assessment. Do not rewrite them or treat a newer answer as delivery of an earlier one. Their pending status does not block unrelated work.`;
+    }
     const refresh = await refreshState(root, process.env);
     if (refresh && ['prepared', 'awaiting-receipt'].includes(refresh.status)) context += ' A checked handoff is awaiting receipt by the fresh Codex conversation. Preserve the predecessor; do not implement until receipt is verified.';
     if (result.ok && result.state.workspace?.sessions[input.session_id]) {
@@ -166,7 +171,7 @@ export async function main() {
     }
     process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: context } })}\n`);
   } catch (error) {
-    const reason = `Fabex could not safely capture or deliver this owner message: ${error.message}. Keep the original host message and attachments; do not ask the owner to retype them. Report the delivery failure visibly, diagnose, and retry delivery from the retained message before affected implementation. No new implementation authority was granted.`;
+    const reason = `Fabex could not safely capture or deliver this owner message: ${error.message}. Keep the original host message and attachments; do not ask the owner to retype them. Report the delivery failure visibly, diagnose, and retry delivery from the retained message without blocking unrelated authorized work. No new implementation authority was granted.`;
     // A UserPromptSubmit block discards the host prompt. Keep it in the host
     // conversation even when private capture failed; never claim it was queued.
     process.stdout.write(`${JSON.stringify({ systemMessage: reason, hookSpecificOutput: { hookEventName, additionalContext: reason } })}\n`);

@@ -59,8 +59,7 @@ test('older disposition conflict, newer review, continue and documentation write
   const before = (await readState(f.root, f.env)).state;
   const conflict = before.operations.find(op => op.id === old);
   const denial = await guard(f);
-  assert.equal(denial.decision, 'deny'); assert.ok(denial.reason.includes(old));
-  assert.ok(denial.reason.includes('continue --operation-id'));
+  assert.equal(denial.decision, 'defer', 'conflicting bookkeeping does not lock assigned documentation');
   const latest = await cycle(f, 'Continue with the agreed document review.');
   let current = await readState(f.root, f.env);
   let entries = await ownerDeliveries(f.root, f.env);
@@ -95,7 +94,7 @@ test('a newer explicit done outcome permits Stop; null questions do not resolve 
   await cycle(f, 'Explain the current progress only.', null, null);
   let current = await readState(f.root, f.env);
   assert.equal(deliveryObligations(await ownerDeliveries(f.root, f.env), current.state, 'session').length, 1);
-  assert.equal((await guard(f)).decision, 'deny');
+  assert.equal((await guard(f)).decision, 'defer', 'unresolved bookkeeping is retained without a tool lock');
   await cycle(f, 'Cancel the remaining document work.', { ...done, reason: 'Owner cancelled the work.' }, { ...done, reason: 'Owner cancelled the work.' });
   current = await readState(f.root, f.env);
   assert.deepEqual(current.state.partner.thread.checkpoint.openWork, []);
@@ -186,7 +185,7 @@ test('supported usage controls stay available during review; ordinary tracker co
   }
   const tracker = { command: '/opt/synthetic-usage/track status' };
   const denied = await guard(f, 'Bash', tracker);
-  assert.equal(denied.decision, 'deny'); assert.match(denied.reason, /usage report/);
+  assert.equal(denied.decision, 'defer', 'ordinary usage reads do not wait for disposition recovery');
   await cycle(f, 'Continue the document review.');
   assert.equal((await guard(f, 'Bash', tracker)).decision, 'defer');
 });

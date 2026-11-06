@@ -20,12 +20,20 @@ changes. You stay in control of permissions and settings.
   chat references. Spaces in chat names are fine; renaming does not change identity.
 - **Choose your team:** project defaults and chat-specific model/task preferences.
 - **Reduce babysitting:** continuation, recovery tools and RAM-conscious scheduling.
-- **See what happened:** short partner summaries, decisions and genuine action items.
+- **See what happened:** each partner’s complete answer, explanations and disagreements.
 
 Fabex is beta software. It adds coordination, not infallibility: review important
 changes, keep backups and expect the host's normal permission checks. VS Code's
 Claude Code integration is the primary workflow. Some capabilities depend on the host;
 see [platform limitations](#mechanically-enforced-and-platform-limited-behavior).
+
+### What’s new in 1.14.0
+
+Each partner chooses its full owner-facing answer. Fabex relays it unedited,
+without a summary substitute or mandatory brevity. Unread answers stay pending
+until their visible delivery is confirmed. Missing replies and interrupted records
+produce reminders without trapping replies or blocking unrelated authorized work.
+Waiting for active partner work, writing assignments and conflicting-edit checks remain.
 
 ### Install
 
@@ -403,7 +411,7 @@ summary is at most five sentences (instructional guidance, not a mechanical cap)
 Keep detailed logs in the record or a requested Details section. Omit Action
 required unless the owner genuinely must decide or act; never ask for a message
 merely to restart authorized, feasible work. Both review phases, separately
-authored summaries, verbatim relay, owner-only modes and source authorship remain.
+authored answers, verbatim relay, owner-only modes and source authorship remain.
 
 ### Forward the recorded message, without retyping
 
@@ -544,7 +552,7 @@ Image filenames in Bash/MCP no longer trigger blanket rejection: metadata and ca
 
 ### Relay and speaker labels
 
-Owner-visible relay presents the Codex-authored summary unchanged under its speaker label. Material open issues remain visible; routine JSON metadata is omitted. Evidence, assumptions, recommendations, changed files and tests remain available through `controller result`. `controller relay` prints the ready-to-paste block; `relay --full` shows complete phase answers. Stop checks the required relay and label.
+Owner-visible relay presents the complete Codex answer and flags unchanged under its speaker label. `controller result` retains the structured phase record; `controller relay` prints the full answer for delivery. Missing replies remain pending without blocking unrelated work.
 
 Run each mode command standalone from the workstream directory: no `cd` prefix, `&&` chain, trailing command or pipe. A composed mode command is still denied, now with command-shape guidance rather than an image-inspection accusation. Actual image reads remain restricted.
 
@@ -624,34 +632,42 @@ At most six PNG, JPG/JPEG, WebP, or GIF files are allowed, each nonempty and at 
 
 Every both-participant phase requests `outputSchema` fields: `scopeMismatch`, `parityConcern`, `answer`, `evidence`, `assumptions`, `uncertainties`, `recommendation`, `changedFiles`, and `tests` (`command`, `exitCode`; null means not known). Reconciliation also requires `disagreements`. `answer` is Codex's complete owner-facing answer, including flags, not a summary derived by Fable. The controller retains the validated object in `result.structured` and the exact answer in `result.finalResponse`. Invalid JSON or schema output falls back to the raw response with `structured: null` and an explicit warning; it does not itself fail the operation. Codex-only turns retain free text.
 
-Answers have the existing 32 KiB storage bound. Structured objects have a 48 KiB total bound, 16 entries per array, and 2048 bytes per supplemental string. Overflow falls back visibly, and truncation is explicitly labeled rather than called a complete quote. Token usage is not a context-capacity or billing meter.
+Fabex sets no length limit on answers or their flags; answers are retained in full; transport failures are reported rather than shortening the quote; older completed cycles are pruned by count, never by trimming an answer; token usage is not a context-capacity or billing meter.
 
-### Concise owner-facing relay
+### Full owner-facing relay
 
-The default order is the mode badge, Claude's own summary with its model label,
-Codex's own summary relayed unchanged, Decided, Action required, and TODO tagged
-Claude or Codex. Empty sections and absent partners are omitted. Claude never
-rewrites Codex's summary. No personal name is embedded in labels or templates.
+Each partner chooses its complete intended answer. `controller relay` prints that
+answer and its flags unedited; `relay --full` remains a compatibility alias.
+Legacy summaries stay readable but do not replace answers. There is no Fabex
+answer-length cap or truncation. Host transport and machine resources still apply.
 
-`ownerSummary` is required in both phase schemas and bounded to 1200 characters.
-Schema 15 identifies this review shape. Schema 14 migrates losslessly using the
-existing live-runner gate; old complete answers and pending operations stay intact.
-An older or missing summary prints a visible fallback and the full answer.
-The completed Phase 2 summary satisfies its linked new-format independent
-reading's display obligation, not unrelated cycles or legacy records. Full
-answers remain available with `relay --full` and `result` while retained in the
-bounded history; there is no permanent transcript archive. Material risks and
-disagreements remain visible without automatically dumping the transcript.
+Each unread answer stays pending, including an earlier phase when a later answer
+exists. Stop only acknowledges answers and flags present in the visible assistant
+reply. Emitting a hook message or saving text does not count as delivery. Notices
+are recorded separately and never mark work complete. For unread answers or a
+missing Phase 2, Stop offers one recovery prompt per unchanged set, then lets
+the reply end. Usage updates do not reset that reminder. Session context identifies
+unread answers for retrieval and later delivery without trapping the session.
+Delivered history may be pruned; unread answers and their parent cycles remain.
 
-Waits accept 1–120 seconds per invocation. Repeat on exit 3 (still working),
-prefer shorter slices, and never interpret timeout as completion or failure.
-Host permission checks also apply to controller waits.
+Stop continues to wait for runnable queued or running partner operations and
+genuinely armed work. A queued turn held behind an earlier Phase 2 receives the
+once-only review reminder instead of an endless wait. Delivery failures and work-record disagreements are reminders, not tool
+permissions. Unrelated reads, private copies and external preparation can proceed;
+project writes still respect task assignments and active writers. When a writable
+partner's file targets are unknown, project writes wait conservatively; external
+preparation remains available.
 
-Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+Modes is a separate plugin. Its Discussion policy currently limits writes to text
+plans and isolated research, and requires contained execution for research experiments.
+Fabex removes its additional pending-review gate and read-command wrapper but does not override Modes or
+host permissions. Supporting ordinary memory notes and direct read-only searches
+under Modes requires a matching change in that plugin.
 
-Owner-facing reply: mode badge first; Claude-authored summary with model-aware label; Codex ownerSummary from relay unchanged; Decided; Action required; TODO tagged Claude or Codex. Omit empty/absent-partner sections, routine none flags and JSON. Ordinary paragraphs, no block quotes. Preserve risks and unresolved disagreement. Both internal phases still run; result and relay --full expose complete answers within bounded history retention. Missing summaries fall back visibly. Wait in slices of at most 120 seconds, repeat on exit 3, never treat timeout as completion.
+Waits accept 1–120 seconds per invocation. Repeat on exit 3 (still working) and
+never interpret a timeout as completion or failure.
 
-For an owner-requested interruption, `control.mjs recover abandon --operation-id <uuid>` waives the completed cycle's relay and any missing Phase 2 while preserving its stored answers and canonical thread. Cancel working/queued operations before abandonment. This escape is instructional owner authority, not a new cryptographic grant. Never use it merely to shorten an answer. If the host omits `last_assistant_message`, Stop cannot verify delivery; relay explicitly or use the owner-requested escape, rather than claiming verification.
+For an owner-requested interruption, `control.mjs recover abandon --operation-id <uuid>` waives the completed cycle's relay and any missing Phase 2 while preserving its stored answers and canonical thread. Cancel working/queued operations before abandonment. This escape is instructional owner authority, not a new cryptographic grant. Never use it merely to shorten an answer. If the host omits `last_assistant_message`, answers remain pending. Stop offers one recovery prompt per unchanged set, then lets the reply end. Do not claim verified delivery.
 
 ### Permission-profile compatibility
 
@@ -721,7 +737,7 @@ The controller retrieves the stored independent answer itself; callers cannot su
 
 Stop records the final owner-visible Fable reply and its digest. Schema 13 retains **one complete reply of at most 32 KiB**, session-bound and replaced by the next accepted Stop; it never reads transcripts, reasoning or tool logs. Oversized, absent, interrupted or Claude-only replies remain unavailable, never truncated and called complete. `previousReplyStatus: "recorded"` lets the controller insert the matching stored reply; `provided` with exact `previousReply` remains supported. Recorded text stays out of the 48 KiB recovery seed and status output. Missing evidence produces an explicit unavailable phase header and `claudeReplyVerified: "unavailable"`. Private state and pending operations are local retention; clearing state removes them, not the separate SDK history.
 
-Use `controller.mjs relay --operation-id <uuid>` to print only the ready-to-paste block. Paste the completed Phase 2 summary unchanged; legacy records retain full-answer checks.
+Use `controller.mjs relay --operation-id <uuid>` to print only the ready-to-paste block. Deliver each unread answer and its flags unchanged; a later phase does not replace an unread earlier phase.
 
 Controller writes now wait for locks with bounded backoff (50 ms doubling to 400 ms, about 3 seconds); submission retries generation conflicts by rereading and revalidating. Locks are never stolen. Queued selections and paused grants survive state reload. Cancellation removes terminal operation paths; it does not delete the owner's images or automatically retry ambiguous SDK work.
 
@@ -735,7 +751,7 @@ Each phase returns a UUID immediately. While it runs, status reports only genuin
 - `tests` when a command is recognizable verification;
 - `completed`, `failed`, or `cancelled` at a genuine terminal outcome.
 
-Reasoning events and command output are never exposed as progress. Claude may block with `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal `result`. Completed independent results retain the exact owner message for Phase 2 and return it from `controller result`; it is erased when Phase 2 completes or the cycle is abandoned. Stop remains blocked through queued/working Phase 1, an uninterrupted Phase 2 gap, and queued/working Phase 2. Messages and activity changes never cancel an active turn or waive its pending review. Queued messages are reviewed before further building. When the owner asks to stop, Claude uses the explicit controller `cancel` command; `recover abandon --operation-id <phase1-id>` remains the explicit manual escape.
+Reasoning events and command output are never exposed as progress. Claude may block with `controller.mjs wait --operation-id <uuid> --timeout <seconds>`, then read the bounded terminal `result`. Completed independent results retain the exact owner message for Phase 2 and return it from `controller result`; it is erased when Phase 2 completes or the cycle is abandoned. Stop waits through queued/working Phase 1 and queued/working Phase 2. A Phase 2 gap or unread answers receive one recovery prompt per unchanged set, then the reply can end without losing those records. Messages and activity changes never cancel an active turn or waive its pending review. Queued messages are reviewed before further building. When the owner asks to stop, Claude uses the explicit controller `cancel` command; `recover abandon --operation-id <phase1-id>` remains the explicit manual escape.
 
 A `PostToolUse` `asyncRewake` hook can wake Claude when a submitted phase becomes terminal. Fabex permits only one live watcher per project; `wait` remains the reliable fallback because Claude Code creates a process for every asynchronous hook invocation and does not deduplicate them.
 
@@ -891,7 +907,7 @@ Task status is non-sticky: submission and successful completion are `active`; an
 
 ## Privacy and retention
 
-Per-workstream state is stored under the plugin data directory with restrictive permissions. A mode command temporarily retains its trailing owner text until the transition succeeds; a completed independent turn retains that owner message until Phase 2 completes or the cycle is abandoned. Other terminal prompts and all terminal attachment paths are erased. Fabex retains the structured checkpoint, bounded structured reviews, and normally at most 24 terminal records. Linked phases are pruned together, with additional byte-budget pruning; unrelayed answers and unfinished cycles are protected, so retention may exceed 24 but never the hard 1 MiB state limit. New writes fail visibly if that limit is reached. Context state retains SHA-256 digests, byte counts, timestamps and session identifiers; the private 1.9.2 owner-prompt sidecar also retains eligible original text for forwarding. Relay acknowledgements retain only session, label, and status beside the already-stored answer. The owner-prompt sidecar retains at most eight records and 2 MiB, with at most 192 KiB of raw text per eligible message, private mode 0600 and no raw Claude-only Q&A. Fabex does not store image bytes, a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
+Per-workstream state is stored under the plugin data directory with restrictive permissions. A mode command temporarily retains its trailing owner text until the transition succeeds; a completed independent turn retains that owner message until Phase 2 completes or the cycle is abandoned. Other terminal prompts and all terminal attachment paths are erased. Fabex retains the structured checkpoint, complete structured reviews, and normally at most 24 terminal records. Linked phases are pruned together, with additional byte-budget pruning; unrelayed answers and unfinished cycles are protected, so retention may exceed the normal history budget. Retained answers are not truncated; storage or transport failures must be reported without claiming delivery. Context state retains SHA-256 digests, byte counts, timestamps and session identifiers; the private 1.9.2 owner-prompt sidecar also retains eligible original text for forwarding. Relay acknowledgements retain only session, label, and status beside the already-stored answer. The owner-prompt sidecar retains at most eight records and 2 MiB, with at most 192 KiB of raw text per eligible message, private mode 0600 and no raw Claude-only Q&A. Fabex does not store image bytes, a full Codex transcript, reasoning events, command output, compaction summaries, notification payloads, or raw Claude-only Q&A.
 
 The SDK and Codex CLI persist the canonical thread under Codex's own storage and may retain data under their policies. Claude Code and host applications may retain their own data independently.
 

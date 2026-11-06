@@ -91,11 +91,49 @@ test('item 2: named package-manager verification scripts remain non-writing', as
 
 test('item 3: quote-aware safe composition validates every segment', async (t) => {
   const { project } = await fixture(t); const ctx = await context(project);
-  const safe = [`node ${control} status | head -20`, 'pnpm test 2>&1 | tail -12', 'grep -rn -E "alpha|beta" dir | head -5', 'git status && git log -1'];
-  const denied = ['ls | xargs rm', 'pnpm test | tee out.txt', 'echo changed > project.txt', "sh -c 'git commit -m hidden'"];
+  const safe = [`node ${control} status | head -20`, 'pnpm test 2>&1 | tail -12', 'grep -rn -E "alpha|beta" dir | head -5', 'git status && git log -1', "sh -c 'git commit -m hidden'"];
+  const denied = ['ls | xargs rm', 'pnpm test | tee out.txt', 'echo changed > project.txt'];
   for (const command of safe) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx })).decision, 'defer', command);
   for (const command of denied) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx })).decision, 'deny', command);
-  assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: 'git commit -m release | tee out.txt' }, ...ctx, executor: { agentId: 'delivery', agentType: 'fabex:fabex-operational' } })).decision, 'deny');
+  assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: "sh -c 'git commit -m release'" }, ...ctx, executor: { agentId: 'unassigned-helper' } })).decision, 'deny', 'a shell wrapper does not grant delivery authority');
+  const executor = { agentId: 'delivery', agentType: 'fabex:fabex-operational' };
+  for (const command of [
+    'git commit -m release | tee out.txt',
+    'git commit -m release > out.txt',
+    'git commit -m release >> out.txt',
+    'git commit -m release && cp original.js replacement.js',
+    "sh -c 'git commit -m release | tee out.txt'"
+  ]) assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx, executor })).decision, 'deny', command);
+  for (const command of ['git commit -m release', 'git commit -m release && git status', 'git commit -m release > /dev/null', "git -C . commit -m 'restore the documentation'"])
+    assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx, executor })).decision, 'defer', command);
+});
+
+test('Git commit messages keep quoted angle brackets literal while real redirects retain authorship checks', async t => {
+  const { project } = await fixture(t), ctx = await context(project);
+  const executor = { agentId: 'delivery', agentType: 'fabex:fabex-operational' };
+  const quoted = 'git commit -m "Release update" -m "Co-Authored-By: Example Reviewer <reviewer@example.invalid>"';
+  const classify = command => classifyToolUse({ toolName: 'Bash', toolInput: { command }, ...ctx, executor });
+  for (const command of [
+    quoted,
+    "git commit -m 'Co-Authored-By: Example Reviewer <reviewer@example.invalid>'",
+    String.raw`git commit -m "A \"quoted\" reviewer <reviewer@example.invalid>"`,
+    String.raw`git commit -m reviewer\<reviewer@example.invalid\>`,
+    `${quoted} > /dev/null`,
+    `${quoted} 2>&1`,
+    'git commit -m "comparison $((2 > 1))"'
+  ]) assert.equal((await classify(command)).decision, 'defer', command);
+  for (const command of [
+    `${quoted} > out.txt`,
+    `${quoted} >> "out file.txt"`,
+    `${quoted} | tee out.txt`,
+    'git commit -m "$(printf receipt > out.txt)"',
+    'git commit -m "`printf receipt > out.txt`"',
+    String.raw`git commit -m "reviewer\\" > out.txt`
+  ]) {
+    const result = await classify(command);
+    assert.equal(result.decision, 'deny', command);
+    assert.match(result.reason, /project source authorship/);
+  }
 });
 
 test('item 4: external scratch writes require one target inside an explicit root', async (t) => {

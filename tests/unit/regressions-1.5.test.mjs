@@ -155,8 +155,8 @@ test('item 8: revised work policy retains source-authoring checks without routin
   const { project } = await fixture(t); const state = initialState({ projectId: 'id', canonicalRoot: project }); const paths = { canonicalRoot: project };
   const classify = (toolName, toolInput, executor = {}) => classifyToolUse({ toolName, toolInput, state, paths, executor });
   assert.equal((await classify('Edit', { file_path: join(project, 'x') }, { agentId: 'sub', agentType: 'worker' })).decision, 'deny');
-  for (const command of ['grep x file', "sed -n '1,2p' file", 'git status', 'pnpm test']) assert.equal((await classify('Bash', { command })).decision, 'defer', command);
-  for (const command of ["sed -i 's/x/y/' file", 'echo x > file', 'env touch file', 'find . -delete', 'git branch -D old', 'git branch new', 'git diff --output=patch.txt', 'pnpm test -- --update']) assert.equal((await classify('Bash', { command })).decision, 'deny', command);
+  for (const command of ['grep x file', "sed -n '1,2p' file", 'git status', 'pnpm test', 'git branch new']) assert.equal((await classify('Bash', { command })).decision, 'defer', command);
+  for (const command of ["sed -i 's/x/y/' file", 'echo x > file', 'env touch file', 'find . -delete', 'git branch -D old', 'git diff --output=patch.txt', 'pnpm test -- --update']) assert.equal((await classify('Bash', { command })).decision, 'deny', command);
   const config = { guard: { externalWriteRoots: [join(project, '..')] } };
   assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: `echo x > ${join(project, '..', 'outside.txt')}` }, state, paths, config })).decision, 'defer');
   const outside = join(project, '..', 'outside-note');

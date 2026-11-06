@@ -9,7 +9,6 @@ import { STATE_SCHEMA_VERSION, ValidationError, validateState } from './validati
 import { emptyWorkspace } from './workspace-settings.mjs';
 
 process.umask(0o077);
-const MAX_STATE_BYTES = 1024 * 1024;
 export const DEFAULT_READ_LOCK_WAIT_MS = 3000;
 
 function processAlive(pid) {
@@ -102,7 +101,7 @@ async function writeJsonSynced(path, value, flags = 'w') {
 
 async function parseJsonFile(path) {
   const info = await stat(path);
-  if (!info.isFile() || info.size > MAX_STATE_BYTES) throw new StateStoreError('corrupt', 'state file is not a bounded regular file');
+  if (!info.isFile()) throw new StateStoreError('corrupt', 'state file is not a regular file');
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { throw new StateStoreError('corrupt', 'state JSON is corrupt', error); }
 }
 

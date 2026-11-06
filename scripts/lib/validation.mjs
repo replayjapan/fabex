@@ -139,7 +139,7 @@ function validateOperation(operation, errors) {
     if (operation.request.phase !== 'independent' && (operation.request.ownerMessage !== null || operation.request.previousReplyStatus !== null || operation.request.previousReply !== null || operation.request.interrupted)) errors.push('only independent operations retain phase context');
     if (operation.request.phase === 'independent' && operation.request.previousReplyStatus === 'provided' && operation.request.previousReply === null) errors.push('provided previous reply is missing');
   }
-  if (!hasExactKeys(operation.result, ['finalResponse', 'error', 'structured', 'warning', 'relay', 'attachments']) || !boundedNullableString(operation.result.finalResponse, 32 * 1024) || !boundedNullableString(operation.result.error, 8192) || !boundedNullableString(operation.result.warning, 1024)) errors.push('operation result is invalid');
+  if (!hasExactKeys(operation.result, ['finalResponse', 'error', 'structured', 'warning', 'relay', 'attachments']) || !(operation.result.finalResponse === null || typeof operation.result.finalResponse === 'string') || !boundedNullableString(operation.result.error, 8192) || !boundedNullableString(operation.result.warning, 1024)) errors.push('operation result is invalid');
   if (operation.result.attachments !== null && (!Array.isArray(operation.result.attachments) || operation.result.attachments.length > 6 || operation.result.attachments.some((entry, index) => !hasExactKeys(entry, ['index', 'status']) || entry.index !== index || !['selected', 'submitted', 'delivered', 'failed'].includes(entry.status)))) errors.push('operation attachment delivery metadata is invalid');
   if (Object.hasOwn(operation.request ?? {}, 'workDisposition') && operation.request.workDisposition !== null && !validDisposition(operation.request.workDisposition)) errors.push('operation disposition is invalid');
   if (Object.hasOwn(operation.request ?? {}, 'requirementReview')) {
@@ -193,7 +193,6 @@ export function validateState(state, identity) {
     const parent = state.operations.find((candidate) => candidate.id === operation.request.parentOperationId);
     if (!parent || parent.request?.phase !== 'independent' || parent.request?.ownerMessageDigest !== operation.request.ownerMessageDigest) errors.push('reconcile operation does not match an independent parent');
   }
-  if (Buffer.byteLength(JSON.stringify(state), 'utf8') > 1024 * 1024) errors.push('state exceeds the hard 1 MiB storage limit');
   if (errors.length) throw new ValidationError('invalid state', errors);
   return state;
 }

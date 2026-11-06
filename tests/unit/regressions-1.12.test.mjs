@@ -57,8 +57,8 @@ test('restricted activity cannot use a stale work route to start servers or bypa
   const command = `node ${join(rootRepo,'scripts/activity-control.mjs')} write ${f.root} a ${encoded}`;
   if(process.platform==='darwin') assert.equal((await guard(f,'Bash',{command})).decision,'defer');
   await captureOwnerDelivery(f.root,{...f.input,prompt:'Review this plan'},(await readState(f.root,f.env)).state,f.env);
-  assert.equal((await guard(f,'Write',plan)).decision,'deny');
-  assert.equal((await guard(f,'Bash',{command})).decision,'deny');
+  assert.equal((await guard(f,'Write',plan)).decision,'defer', 'pending review does not lock permitted plans');
+  if(process.platform==='darwin') assert.equal((await guard(f,'Bash',{command})).decision,'defer');
 });
 
 test('research reconciliation uses native read-only and validates plan proposals after the turn',async t => {

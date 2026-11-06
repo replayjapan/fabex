@@ -1,14 +1,19 @@
+import { queueSelection } from './operation-queue.mjs';
 import { createHash } from 'node:crypto';
 import { changePrivate } from './private-store.mjs';
 
-export function yieldStop(reason) {
+export function yieldStop() {
   // Internal flag: main removes it before emitting the host hook response.
-  return { yielded: true, systemMessage: `Fabex paused: ${reason} Unfinished work and undelivered replies remain recorded; yielding does not mark them complete.` };
+  return { yielded: true, systemMessage: 'Fabex has paused automatic continuation because a pending check has not progressed. Your unfinished work and unread replies remain saved; neither has been marked complete.' };
 }
 
 export function activePartnerStop(state) {
-  const operation = state?.operations?.find(op => op.status === 'working')
-    ?? state?.operations?.find(op => op.status === 'queued');
+  let operation = state?.operations?.find(op => op.status === 'working');
+  if (!operation) {
+    const selection = queueSelection(state?.operations ?? [], state?.workspace?.seals);
+    if (selection.review) return null; // recovery reminder handles this gap once
+    operation = selection.operation ?? state?.operations?.find(op => op.status === 'queued');
+  }
   return operation ? { decision: 'block', reason: `Partner operation ${operation.id} is ${operation.status}. Run controller.mjs wait --operation-id ${operation.id} --timeout 60, then read its result. Keep waiting after a timeout; do not resubmit or repeat unchanged status replies.` } : null;
 }
 

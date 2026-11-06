@@ -22,45 +22,43 @@ function op(phase = 'reconcile') {
     result: { finalResponse: fields().answer, structured: fields(phase), relay: { label: 'Codex (Astra):', status: 'pending', sessionId: 'session' }, warning: null } };
 }
 
-test('1.9.1 schema requires bounded author-owned summaries while stored legacy reviews remain valid', () => {
+test('review schema uses full answers and accepts legacy summaries without a brevity cap', () => {
   for (const phase of ['independent', 'reconcile']) {
-    assert.ok(reviewSchema(phase).required.includes('ownerSummary'));
+    assert.ok(!reviewSchema(phase).required.includes('ownerSummary'));
     assert.equal(validReview(fields(phase), phase), true);
-    for (const ownerSummary of ['', ' ', 'x'.repeat(1201), null]) assert.equal(validReview({ ...fields(phase), ownerSummary }, phase), false);
-    const legacy = fields(phase); delete legacy.ownerSummary;
-    assert.equal(validReview(legacy, phase), true);
-    assert.equal(validReview(legacy, phase, { allowLegacy: false }), false);
-    assert.equal(parseReview(JSON.stringify(legacy), phase).finalResponse, legacy.answer);
+    assert.equal(validReview({ ...fields(phase), ownerSummary: 'x'.repeat(1201) }, phase), true);
+    for (const ownerSummary of ['', ' ', null]) assert.equal(validReview({ ...fields(phase), ownerSummary }, phase), false);
+    const value = fields(phase); delete value.ownerSummary;
+    if (phase === 'reconcile') value.workDisposition = null;
+    assert.equal(validReview(value, phase, { allowLegacy: false }), true);
+    assert.equal(parseReview(JSON.stringify(value), phase).finalResponse, value.answer);
   }
 });
 
-test('1.9.1 relay uses summary paragraphs, flags and difference notice without JSON or transcript dumping', () => {
-  const operation = op(); const before = structuredClone(operation);
-  assert.equal(relayBlock(operation), `Codex (Astra):\n\n${operation.result.structured.ownerSummary}`);
+test('relay preserves full answer and flags without summary substitution', () => {
+  const operation = op(), before = structuredClone(operation);
+  assert.equal(relayBlock(operation), `Codex (Astra):\n\n${operation.result.finalResponse}`);
   assert.deepEqual(operation, before);
   Object.assign(operation.result.structured, { scopeMismatch: 'One check remains.', disagreements: ['Direct delivery is not verified.'], uncertainties: ['Host behavior remains unknown.'] });
   const block = relayBlock(operation);
   assert.match(block, /Scope mismatch: One check remains/);
-  assert.match(block, /independent and reconciled answers in full/);
-  assert.doesNotMatch(block, /> |```|internal detail|Complete phase record/);
-  const full = relayBlock(operation, { full: true });
-  assert.match(full, /Phase 2/); assert.ok(full.includes(operation.result.finalResponse));
+  assert.match(block, /Disagreement: Direct delivery is not verified/);
+  assert.ok(block.includes(operation.result.finalResponse));
+  assert.equal(relayBlock(operation, { full: true }), block);
   delete operation.result.structured.ownerSummary;
-  assert.match(relayBlock(operation), /Summary unavailable/);
-  assert.ok(relayBlock(operation).includes(operation.result.finalResponse));
+  assert.equal(relayBlock(operation), block);
 });
 
-test('1.9.1 Stop verifies linked Phase 2 summary and label, retains legacy and independent obligations', () => {
+test('relay acknowledgement retains every unread independent and reconciled answer', () => {
   const parent = op('independent'), child = op();
-  parent.result.structured.ownerSummary = 'Independent reading.';
+  parent.result.finalResponse = parent.result.structured.answer = 'Independent reading.';
   const state = { operations: [parent, child] };
   const input = { session_id: 'session', last_assistant_message: relayBlock(child) };
-  assert.deepEqual(missingRelays(state, input), []);
-  assert.equal(missingRelays(state, { ...input, last_assistant_message: child.result.structured.ownerSummary }).length, 1);
-  assert.equal(missingRelays(state, { ...input, last_assistant_message: relayBlock(child).replace('ready', 'done') }).length, 1);
-  assert.equal(missingRelays({ operations: [parent] }, input).length, 1);
-  const unrelated = op('independent'); unrelated.id = 'other'; unrelated.result.structured.ownerSummary = 'Another owner cycle.';
-  assert.equal(missingRelays({ operations: [...state.operations, unrelated] }, input).length, 1);
+  assert.deepEqual(missingRelays(state, input), [parent]);
+  assert.equal(missingRelays(state, { ...input, last_assistant_message: child.result.structured.ownerSummary }).length, 2);
+  assert.equal(missingRelays(state, { ...input, last_assistant_message: relayBlock(child).replace('Complete', 'Modified') }).length, 2);
+  const unrelated = op('independent'); unrelated.id = 'other'; unrelated.result.finalResponse = 'Another owner cycle.';
+  assert.equal(missingRelays({ operations: [...state.operations, unrelated] }, input).length, 2);
   delete parent.result.structured.ownerSummary;
   assert.equal(missingRelays(state, input).length, 1);
   assert.deepEqual(missingRelays(state, { ...input, last_assistant_message: `${relayBlock(parent)}\n${relayBlock(child)}` }), []);
@@ -107,7 +105,7 @@ test('1.9.1 controller wait cap and exact relay --full shape retain read-only ac
   await assert.rejects(waitForOperation(plugin, id, 121), /120/);
 });
 
-test('1.9.1 controller relay --full prints full stored answer and default prints owner summary', async t => {
+test('1.9.1 controller relay and --full both print the complete stored answer', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'fabex-relay-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const project = join(directory, 'project'); await mkdir(project);
@@ -123,7 +121,7 @@ test('1.9.1 controller relay --full prints full stored answer and default prints
   const run = extra => spawnSync(process.execPath, [join(plugin, 'scripts/controller.mjs'), 'relay', '--operation-id', operation.id, ...extra], { cwd: project, env, encoding: 'utf8' });
   const normal = run([]), full = run(['--full']);
   assert.equal(normal.status, 0, normal.stderr); assert.equal(full.status, 0, full.stderr);
-  assert.ok(normal.stdout.includes(fields().ownerSummary)); assert.ok(!normal.stdout.includes(fields().answer));
+  assert.ok(normal.stdout.includes(fields().answer)); assert.ok(!normal.stdout.includes(fields().ownerSummary));
   assert.ok(full.stdout.includes(fields().answer));
   assert.equal((await readState(project, env)).ok, true);
   await submitOperation(project, reconciliationEnvelope(operation.id, 'test', 'Claude agrees.'), env, { spawnRunner: false });

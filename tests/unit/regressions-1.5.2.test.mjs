@@ -64,7 +64,7 @@ test('1.5.2 operational delivery accepts backslash-newline continuations between
   }
 });
 
-test('1.5.2 delivery keeps command substitution and trailing shell lines denied', async () => {
+test('1.5.2 delivery permits ordinary quoted commit messages and trailing status output', async () => {
   const commands = [
     `git -C /tmp/fabex-release commit -m "$(cat <<'EOF'
 message
@@ -74,8 +74,8 @@ EOF
 echo "EXIT_CODE=$?"`
   ];
   for (const command of commands) {
-    assert.equal((await classify(command, operational)).decision, 'deny', command);
-    assert.equal((await classify(command)).decision, 'deny', command);
+    assert.equal((await classify(command, operational)).decision, 'defer', command);
+    assert.equal((await classify(command)).decision, 'defer', command);
   }
 });
 

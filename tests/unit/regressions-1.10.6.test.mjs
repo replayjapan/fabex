@@ -67,7 +67,10 @@ test('1.10.6 the Coding selection applies across roles and named helper exceptio
   assert.equal((await classify(f, 'Edit', edit)).decision, 'defer');
   assert.equal((await classify(f, 'Edit', edit, { executor: { sessionId: 'a', agentId: 'helper-one' } })).decision, 'deny');
   const { state } = await readState(f.root, f.env);
-  const busy = { ...state, controller: { ...state.controller, activeOperationId: 'active-docs-turn' } };
+  const busy = { ...state, controller: { ...state.controller, activeOperationId: 'active-docs-turn' },
+    operations: [...state.operations, { id: 'active-docs-turn', status: 'working', request: { phase: 'reconcile', sandbox: 'workspace-write' } }] };
+  const readonly = { ...busy, operations: busy.operations.map(op => ({ ...op, request: { ...op.request, sandbox: 'read-only' } })) };
+  assert.equal((await classify(f, 'Edit', { file_path: join(f.root, 'HANDOFF.md') }, { state: readonly })).decision, 'defer');
   assert.equal((await classify(f, 'Edit', { file_path: join(f.root, 'HANDOFF.md') }, { state: busy })).decision, 'deny', 'shared document edits remain serial even when Claude owns Coding');
   state.executorException = { executor: 'helper-one', scope: 'project file edits' };
   assert.equal((await classify(f, 'Edit', edit, { state, executor: { sessionId: 'a', agentId: 'helper-one' } })).decision, 'defer');

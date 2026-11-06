@@ -87,11 +87,11 @@ test('earlier owner prerequisite plus conflicting outcomes permits only read-onl
   const source = current.state.operations.find(op => op.id === id);
   assert.equal(dispositionRepairEligibility(current.state, source, deliveryObligations(entries, current.state, 'session')).ok, true);
   const first = stopDecision(stopInput(current.state), current, entries);
-  assert.equal(first.decision, 'block'); assert.match(first.reason, /read-only review/);
-  assert.equal((await hook(f, stopInput(current.state))).decision, 'block');
+  assert.equal(first.decision, undefined); assert.ok(first.notices.some(n => n.key.startsWith('disposition:')));
+  assert.equal((await hook(f, stopInput(current.state))).decision, undefined);
   const yielded = await hook(f, { ...stopInput(current.state), stop_hook_active: true });
   assert.equal(yielded.decision, undefined);
-  assert.match(yielded.systemMessage, /same check is still unresolved/);
+  assert.equal(yielded.systemMessage, undefined, 'unchanged notices are not repeated');
   assert.equal((await readState(f.root, f.env)).state.partner.thread.checkpoint.ownerActionRequired, ownerDecision.reason);
   const next = await continueOperation(f.root, id, f.env, { spawnRunner: false, workDisposition: done });
   current = await readState(f.root, f.env);
@@ -100,7 +100,7 @@ test('earlier owner prerequisite plus conflicting outcomes permits only read-onl
   assert.equal(repair.request.requirementReview.requirement, ownerDecision.reason);
   assert.equal(current.state.partner.thread.checkpoint.ownerActionRequired, ownerDecision.reason);
   assert.equal(current.state.partner.thread.checkpoint.continuation.armed, false);
-  assert.equal((await guard(f)).decision, 'deny', 'review submission must not unlock writes');
+  assert.equal((await guard(f)).decision, 'defer', 'a read-only requirement review does not block unrelated assigned documentation');
   await execute(f, 'reconcile', done, options => {
     assert.equal(options.sandboxMode, 'read-only'); assert.equal(options.approvalPolicy, 'never');
   });
@@ -155,8 +155,7 @@ test('a same-cycle owner decision refuses repair and Stop yields the actual requ
   input.last_assistant_message += `\nPartner delivery failed for ${parentId}; the owner requirement remains unresolved.`;
   const decision = stopDecision(input, current, await ownerDeliveries(f.root, f.env));
   assert.equal(decision.decision, undefined);
-  assert.equal(decision.yielded, true);
-  assert.ok(decision.systemMessage.includes(ownerDecision.reason));
+  assert.ok(decision.notices.some(n => n.message.includes(ownerDecision.reason)));
 });
 
 test('repair eligibility and controller agree on cancellation, newer instructions and genuine blockers', async t => {
@@ -183,7 +182,7 @@ test('repair eligibility and controller agree on cancellation, newer instruction
 test('repeat fingerprint ignores bookkeeping and unrelated operations but observes the relevant outcome', async t => {
   const f = await fixture(t), id = await staleRequirement(f);
   const current = await readState(f.root, f.env);
-  const input = stopInput(current.state), decision = stopDecision(input, current, await ownerDeliveries(f.root, f.env));
+  const input = stopInput(current.state), decision = { decision: 'block', reason: `Continue authorized work from ${id}` };
   const first = repeatStopDecision(input, decision, current.state);
   assert.equal(first.decision.decision, 'block');
   const changed = structuredClone(current.state);
@@ -204,26 +203,25 @@ test('persistent repeat guard is session-specific and does not change canonical 
   const f = await fixture(t);
   await staleRequirement(f);
   const current = await readState(f.root, f.env), input = stopInput(current.state);
-  const decision = stopDecision(input, current, await ownerDeliveries(f.root, f.env));
+  const decision = { decision: 'block', reason: `Continue authorized work from ${current.state.operations.at(-1).id}` };
   assert.equal((await guardStopProgress(f.root, input, decision, current.state, f.env)).decision, 'block');
   assert.equal((await guardStopProgress(f.root, { ...input, stop_hook_active: true }, decision, current.state, f.env)).yielded, true);
   assert.equal((await guardStopProgress(f.root, { ...input, session_id: 'another', stop_hook_active: true }, decision, current.state, f.env)).decision, 'block');
   assert.deepEqual((await readState(f.root, f.env)).state, current.state);
 });
 
-test('yielding a repeated missing-relay block never acknowledges delivery in the real hook entry point', async t => {
+test('once-only unread-answer reminders never acknowledge delivery in the real hook entry point', async t => {
   const f = await fixture(t);
   await cycle(f, 'Complete the approved document.', done, done);
   const before = (await readState(f.root, f.env)).state;
   const input = { session_id: 'session', last_assistant_message: 'Waiting for a reply.' };
   const first = await hook(f, input);
-  assert.equal(first.decision, 'block'); assert.match(first.reason, /Relay the missing/);
+  assert.equal(first.decision, 'block'); assert.match(first.systemMessage, /Codex answers have not been shown/);
   const second = await hook(f, { ...input, stop_hook_active: true });
-  assert.equal(second.decision, undefined); assert.match(second.systemMessage, /undelivered replies remain recorded/);
+  assert.equal(second.decision, undefined); assert.equal(second.systemMessage, undefined);
   assert.equal(Object.hasOwn(second, 'yielded'), false, 'internal metadata is not sent to the host');
   const after = (await readState(f.root, f.env)).state;
   assert.deepEqual(after.operations.map(op => op.result.relay), before.operations.map(op => op.result.relay));
-  assert.deepEqual(after.contextEvidence.ownerVisibleReply, before.contextEvidence.ownerVisibleReply);
   const delivered = await hook(f, { ...stopInput(after), stop_hook_active: true });
   assert.equal(delivered.decision, undefined);
   assert.equal((await readState(f.root, f.env)).state.operations.at(-1).result.relay.status, 'delivered');
@@ -243,13 +241,13 @@ test('failed-delivery and armed-work blocks get one reminder and yield without d
   const failed = structuredClone(current);
   failed.state.operations.at(-1).result.warning = 'Unknown review integrity failure';
   const failure = stopDecision(input, failed, entries);
-  assert.match(failure.reason, /Partner delivery failed/);
+  assert.equal(failure.decision, undefined); assert.ok(failure.notices.some(n => n.key.startsWith('delivery:')));
   const receipt = repeatStopDecision(input, failure, failed.state).fingerprint;
-  assert.equal(repeatStopDecision({ ...input, stop_hook_active: true }, failure, failed.state, receipt).decision.yielded, true);
+  assert.equal(repeatStopDecision({ ...input, stop_hook_active: true }, failure, failed.state, receipt).decision.decision, undefined);
   assert.equal(deliveryObligations(entries, failed.state, 'session').length, 1);
 });
 
-test('ineligible repair reports failed delivery and missing relays before yielding', async t => {
+test('ineligible repair reports notices without blocking or clearing the owner requirement', async t => {
   const f = await fixture(t), id = await cycle(f, 'Finish the approved document.', remaining, done);
   await updateState(f.root, state => {
     const cp = state.partner.thread.checkpoint;
@@ -261,18 +259,18 @@ test('ineligible repair reports failed delivery and missing relays before yieldi
   const parentId = before.operations.find(op => op.id === id).request.parentOperationId;
   const input = { session_id: 'session', last_assistant_message: 'Waiting for the owner.' };
   const failure = await hook(f, input);
-  assert.equal(failure.decision, 'block');
-  assert.match(failure.reason, /Partner delivery failed/);
+  assert.equal(failure.decision, 'block', 'unread answers receive one recovery reminder');
+  assert.match(failure.systemMessage, /interrupted|could not be recovered/);
   const report = `Partner delivery failed for ${parentId}; the owner requirement remains unresolved.`;
   const relay = await hook(f, { ...input, stop_hook_active: true, last_assistant_message: report });
-  assert.equal(relay.decision, 'block');
-  assert.match(relay.reason, /Relay the missing Codex summaries/);
+  assert.equal(relay.decision, undefined);
+  assert.equal(relay.systemMessage, undefined);
   const paused = await hook(f, { ...stopInput(before), stop_hook_active: true,
     last_assistant_message: `${report}\n${stopInput(before).last_assistant_message}` });
   assert.equal(paused.decision, undefined);
-  assert.ok(paused.systemMessage.includes(ownerDecision.reason));
+  assert.equal(paused.systemMessage, undefined);
   const after = (await readState(f.root, f.env)).state;
-  assert.deepEqual(after.operations.map(op => op.result.relay), before.operations.map(op => op.result.relay));
+  assert.ok(after.operations.every(op => op.result.relay.status === 'delivered'), 'full answers in the visible reply are acknowledged');
   assert.equal(after.partner.thread.checkpoint.ownerActionRequired, ownerDecision.reason);
   assert.equal((await ownerDeliveries(f.root, f.env)).find(entry => entry.id === parentId).failureReportedAt ?? null, null);
 });

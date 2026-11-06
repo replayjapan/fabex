@@ -118,7 +118,11 @@ test('1.7 item 2: both-participant outputSchema and lossless malformed-output fa
   assert.ok(calls[1].turnOptions.outputSchema.required.includes('disagreements'));
   assert.equal(second.result.finalResponse, answer);
   assert.equal(parseReview(JSON.stringify({ answer: 'missing fields' }), 'independent').structured, null);
-  assert.equal(parseReview(JSON.stringify({ ...structured('independent'), answer: 'x'.repeat(32769) }), 'independent').structured, null);
+  const long = { ...structured('independent'), answer: 'x'.repeat(32769) };
+  const parsed = parseReview(JSON.stringify(long), 'independent');
+  assert.deepEqual(parsed.structured, long);
+  assert.equal(parsed.finalResponse, long.answer);
+  assert.equal(parsed.warning, null);
 });
 
 test('1.7 item 2: Codex-only retains free text without outputSchema', async (t) => {
@@ -128,24 +132,25 @@ test('1.7 item 2: Codex-only retains free text without outputSchema', async (t) 
   assert.equal(calls[0].turnOptions.outputSchema, undefined); assert.equal(op.result.finalResponse, 'free text'); assert.equal(op.result.structured, null); assert.equal(op.result.warning, null);
 });
 
-test('1.7 item 3: Stop rejects truncated or unlabeled quotes, accepts full quotes and records delivery', async (t) => {
+test('1.7 item 3: Stop retains truncated or unlabeled quotes as unread and acknowledges full answers', async (t) => {
   const { project, env } = await fixture(t); const calls = [];
   const first = await execute(project, env, submissionEnvelope('owner'), calls, 'independent');
   const second = await execute(project, env, reconciliationEnvelope(first.id, 'owner', 'Fable review'), calls, 'reconcile', JSON.stringify({ ...structured('reconcile'), answer: `${answer}\nPhase 2 correction: a distinct final position.` }));
   const stateResult = await readState(project, env);
-  assert.equal(stopDecision({ last_assistant_message: relayBlock(first) }, stateResult).decision, 'block');
-  assert.equal(stopDecision({ last_assistant_message: `Codex:\n${answer.slice(0, 45)}`, stop_hook_active: true }, stateResult).decision, 'block');
-  assert.equal(stopDecision({ last_assistant_message: answer }, stateResult).decision, 'block');
+  assert.equal(stopDecision({ last_assistant_message: relayBlock(first) }, stateResult).decision, undefined);
+  assert.ok(stopDecision({ last_assistant_message: relayBlock(first) }, stateResult).notices.length);
+  assert.equal(stopDecision({ last_assistant_message: `Codex:\n${answer.slice(0, 45)}`, stop_hook_active: true }, stateResult).decision, undefined);
+  assert.equal(stopDecision({ last_assistant_message: answer }, stateResult).decision, undefined);
   const visible = `${relayBlock(first)}\n\n${relayBlock(second)}\n\nClaude: My separate answer.`;
   assert.deepEqual(stopDecision({ last_assistant_message: visible }, stateResult), {});
   const stopped = spawnSync(process.execPath, [join(root, 'scripts/hook-stop.mjs')], { cwd: project, env, encoding: 'utf8', input: JSON.stringify({ cwd: project, session_id: 'session', hook_event_name: 'Stop', last_assistant_message: visible }) });
-  assert.equal(stopped.status, 0, stopped.stderr); assert.deepEqual(JSON.parse(stopped.stdout), {});
+  assert.equal(stopped.status, 0, stopped.stderr); assert.equal(JSON.parse(stopped.stdout).decision, undefined);
   assert.ok((await readState(project, env)).state.operations.every((op) => op.result.relay.status === 'delivered'));
   const result = spawnSync(process.execPath, [join(root, 'scripts/controller.mjs'), 'result', '--operation-id', second.id], { cwd: project, env, encoding: 'utf8' });
-  assert.equal(result.status, 0); assert.match(JSON.parse(result.stdout).relayBlock, /Summary unavailable; complete answer follows/);
+  assert.equal(result.status, 0); assert.ok(JSON.parse(result.stdout).relayBlock.includes(answer));
 });
 
-test('1.7 relay session binding survives a later prompt and absent Stop text fails closed', async (t) => {
+test('1.7 relay session binding survives a later prompt and absent Stop text leaves answers pending without blocking', async (t) => {
   const { project, env } = await fixture(t);
   const { recordOwnerPromptEvidence } = await import('../../scripts/lib/hook-evidence.mjs');
   await recordOwnerPromptEvidence(project, { prompt: 'owner', session_id: 'first-session' }, env);
@@ -154,7 +159,8 @@ test('1.7 relay session binding survives a later prompt and absent Stop text fai
   await runOperation(project, await claimNextOperation(project, env), { createCodex: fakeSdk([], 'independent') }, env);
   const current = await readState(project, env);
   assert.equal(current.state.operations[0].result.relay.sessionId, 'first-session');
-  assert.equal(stopDecision({ session_id: 'first-session', stop_hook_active: true }, current).decision, 'block');
+  assert.equal(stopDecision({ session_id: 'first-session', stop_hook_active: true }, current).decision, undefined);
+  assert.equal(current.state.operations[0].result.relay.status, 'pending');
   // Another session must not acknowledge or waive the first session's relay.
   assert.deepEqual(stopDecision({ session_id: 'second-session', stop_hook_active: true }, current), {});
 });

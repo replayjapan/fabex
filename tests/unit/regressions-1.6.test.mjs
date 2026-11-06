@@ -123,12 +123,12 @@ test('1.6 item 4: owner-typed mode grant is bound, single-use, and AI mode skill
   assert.equal(modeGrantMatches(expired, { id: expired.id, sessionId: 'session-a', route: 'normal', participants: 'both' }), false);
 });
 
-test('1.6 item 5: Stop blocks the Phase 2 gap and explicit recovery releases it', async (t) => {
+test('1.6 item 5: Stop offers a recovery reminder for the Phase 2 gap and explicit recovery releases it', async (t) => {
   const { project, env } = await fixture(t); await initializeState(project, env);
   const submitted = await submitOperation(project, submissionEnvelope('review'), env, { spawnRunner: false });
   const phase1 = await claimNextOperation(project, env);
   await runOperation(project, phase1, { createCodex: sdkFactory(['independent']), signal: new AbortController().signal }, env);
-  let stateResult = await readState(project, env); assert.equal(stopDecision({}, stateResult).decision, 'block');
+  let stateResult = await readState(project, env); assert.match(stopDecision({}, stateResult).reminder.reason, /existing Phase 2 review/);
   const abandoned = await run(control, ['recover', 'abandon', '--operation-id', submitted.operationId], { cwd: project, env });
   assert.equal(abandoned.code, 0, abandoned.stderr);
   stateResult = await readState(project, env); assert.deepEqual(stopDecision({}, stateResult), {});

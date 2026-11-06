@@ -113,7 +113,7 @@ export function continuationEligibility(state, source, obligations = [], { repai
   const pending = repair ? obligations.filter(item => item.id !== parent.id) : obligations;
   const failure = continuationFailure(state, pending);
   if (!repair || !failure) return failure ? denied(failure) : { ok: true };
-  if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant || partnerNextAction(state) || pending.length) return denied(failure);
+  if (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant || partnerNextAction(state)) return denied(failure);
   const cp = state.partner.thread.checkpoint;
   if (cp.blocker) return denied(failure);
   if (cp.ownerActionRequired) {
@@ -178,6 +178,7 @@ export function persistWorkDisposition(state, operation, now) {
 export function partnerNextAction(state) {
   const working = state.operations.find(op => op.status === 'working');
   const independent = state.operations.find(op => op.request.phase === 'independent' && op.status === 'completed'
+    && (!state.contextEvidence.ownerPrompt || op.request.ownerMessageDigest === state.contextEvidence.ownerPrompt.digest)
     && !op.request.interrupted && !state.operations.some(child => child.request.parentOperationId === op.id));
   if (!working && independent) return `Operation ${independent.id} awaits reconciliation. Read controller.mjs result --operation-id ${independent.id} and submit its matching Phase 2 with an explicit workDisposition.`;
   const active = working ?? state.operations.find(op => op.status === 'queued');
@@ -190,7 +191,6 @@ export function continuationFailure(state, obligations = []) {
   if (state.modeGrant) return 'An owner activity transition is pending; finish that transition before continuing.';
   const partner = partnerNextAction(state);
   if (partner) return partner;
-  if (obligations.length) return `Owner review is pending for ${obligations.map(item => item.id).join(', ')}. ${obligations.map(item => item.nextAction ?? 'Finish the existing delivery before continuing.').join(' ')}`;
   if (cp.blocker) return `Work is blocked: ${cp.blocker}. Resolve or update that blocker before continuing.`;
   if (cp.ownerActionRequired) return `Owner decision required: ${cp.ownerActionRequired}`;
   if (!cp.continuation.armed) return 'Work has not been revalidated against the latest owner instructions. Reconcile its explicit disposition; do not ask for another go.';

@@ -1,3 +1,4 @@
+import { nextClaimableOperation } from './operation-queue.mjs';
 import { validDisposition, persistWorkDisposition, continuationEligibility, continuationSubmissionDigest } from './work-disposition.mjs';
 import { applyContainedEdits } from '../vendor/modes/contained-edits.mjs';
 import { activitySnapshot, researchRoot, researchAuthorAllowed } from './activity.mjs';
@@ -59,16 +60,6 @@ export function pruneOperations(operations, terminalLimit = TERMINAL_OPERATION_L
   return [...terminal, ...pending];
 }
 
-function nextClaimableOperation(operations, seals = {}) {
-  for (const independent of operations.filter((operation) => operation.request?.phase === 'independent' && operation.status === 'completed' && !operation.request.interrupted)) {
-    const reconciliation = operations.find((candidate) => candidate.request?.parentOperationId === independent.id);
-    if (!reconciliation) return null;
-    if (reconciliation.status === 'queued') return reconciliation;
-    if (reconciliation.status === 'working') return null;
-  }
-  const next = operations.find((operation) => operation.status === 'queued') ?? null;
-  return next && seals[next.id] && !seals[next.id].reading ? null : next;
-}
 
 export function awaitingPhase2Operation(state) {
   return state.operations.find((operation) => operation.request?.phase === 'independent'
@@ -162,9 +153,9 @@ export function sandboxForRoute(route, phase = 'single') {
 export function developerInstructions() {
   return [
     'You are Codex, a full equal Fabex partner. Keep Claude/Fable as the owner-facing interface.',
-    'Report scope mismatch and partnership-parity concerns in their structured fields, null when absent. Do not open the answer or ownerSummary with routine none flags.',
-    'Do not expose private reasoning. Return concise conclusions, evidence, changed files, tests with exit codes, risks, and decisions needed.',
-    'When an output schema is supplied, answer is the complete phase record. Write ownerSummary yourself: at most 1200 characters of plain-language conclusions for the owner, preserving material risks and unresolved disagreements. It is relayed verbatim, never rewritten by Claude. Keep answer within 32 KiB, each other supplemental string within 2048 bytes, each array within 16 entries, and the entire object within 48 KiB. Only owner-approved image attachments belong in the independent phase; current Fable annotations belong in reconciliation.',
+    'Report scope mismatch and partnership-parity concerns in their structured fields, null when absent. Author the owner-facing answer in your own words.',
+    'Do not expose private reasoning. Return your conclusions, evidence, changed files, tests with exit codes, risks, and decisions needed.',
+    'When an output schema is supplied, answer is your complete intended owner-facing response. Choose its length and content yourself, including explanations, evidence and disagreement. It is relayed unedited, never replaced with a summary. Fabex imposes no brevity or omission rule. Only owner-approved image attachments belong in the independent phase; current Fable annotations belong in reconciliation.',
     'Keep Claude as the delivery interface. Claude may perform reviewed owner-authorized Git delivery directly under host permissions or use fabex-operational. Do not perform Git delivery yourself unless separately authorized and permitted by the active host instructions.',
     'Each both-participant owner cycle has two turns on the same canonical thread. In Phase 1, form an independent reading from OWNER MESSAGE and PREVIOUS CLAUDE REPLY only. In Phase 2, review that stored reading alongside FABLE RESPONSE and correct mistakes plainly.',
     'For every normal-route task reconciliation, return workDisposition with status remaining, done, blocked or owner-decision, remainingWork (at most 16 concise authorized steps) and reason. Missing bookkeeping is never completion. Review Claude’s disposition against the latest owner instructions; preserve unfinished work across status questions, honor changed scope and cancellation. For a question-only turn that leaves task scope unchanged, both partners explicitly supply workDisposition: null; this preserves any existing task, blocker and owner decision without marking completion. Omitted fields are not this exemption. Discussion and ask-only turns do not require task dispositions.',
@@ -288,13 +279,10 @@ export function boundedUsage(value) {
   return Object.fromEntries(fields.map((field) => [field, value[field]]));
 }
 
-function boundedFinalResponse(value) {
-  if (typeof value !== 'string') return null;
-  if (Buffer.byteLength(value, 'utf8') <= 32 * 1024) return value;
-  let result = value;
-  while (result && Buffer.byteLength(result, 'utf8') > 32 * 1024 - 3) result = result.slice(0, Math.floor(result.length * 0.9));
-  while (result && Buffer.byteLength(result, 'utf8') > 32 * 1024 - 3) result = result.slice(0, -1);
-  return `${result}...`;
+function retainedFinalResponse(value) {
+  // Preserve the full owner-facing answer. Host transport limits are reported,
+  // never implemented by silently shortening retained text.
+  return typeof value === 'string' ? value : null;
 }
 
 function operationRecord({ workDisposition, id, message, route, participants, phase, parentOperationId, ownerMessageDigest, claudeReplyVerified, ownerMessage = null, previousReplyStatus = null, previousReply = null, interrupted = false, attachments = [], sessionId = '', submissionDigest = null, now }) {
@@ -1080,8 +1068,7 @@ export async function runOperation(root, operation, { createCodex, signal, pause
       review.structured.evidence = [...review.structured.evidence.slice(0, 15), `Controller applied ${appliedResearchFiles.length} contained research/plan edit(s).`];
     }
     const unbounded = review.finalResponse;
-    finalResponse = boundedFinalResponse(unbounded);
-    if (finalResponse !== unbounded) review.warning = 'Codex answer exceeded the 32 KiB storage bound and was truncated; this is not the complete original answer.';
+    finalResponse = retainedFinalResponse(unbounded);
     review.warning = mergeWarnings(await finishAudit(), review.warning, appliedTestFiles.length ? `Controller applied ${appliedTestFiles.length} validated test-file edit(s). Test execution remains assigned separately.` : null);
     const model = options.model ? { id: options.model, source: 'requested SDK model', verified: false } : await codexModelSource(config, env);
     const relay = finalResponse ? { label: speakerLabels(null, model.id).codex, sessionId: operation.result.relay?.sessionId ?? '', status: 'pending' } : null;

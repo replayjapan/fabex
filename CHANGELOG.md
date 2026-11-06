@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.14.0
+
+- Deliver each partner's full answer and flags without summary substitution,
+  mandatory brevity or answer truncation. Keep unread earlier answers pending.
+- Offer one recovery prompt for an unchanged set of unread answers or unfinished
+  partner reviews, then let the reply end. Interrupted deliveries and work-record
+  disagreements are notices. Only visible full-answer delivery acknowledges a reply.
+- Preserve normal review-cycle queue ordering while allowing newly received,
+  independently assessed instructions past an older unfinished review.
+- Allow unrelated authorized work while partner reviews or delivery records are
+  pending. Preserve writing assignments and protection against overlapping edits.
+- Retain waiting for runnable or working partner operations and continuation of
+  authorized work. A queued turn waiting for an earlier review receives a recovery
+  prompt instead of an endless wait.
+- Accept ordinary short quoted heredoc delimiters for controller commands.
+- Keep Modes-owned Discussion restrictions explicit and separate from Fabex policy.
+
 ## 1.13.2
 
 - Use shared eligibility checks for continuation and Stop recovery guidance.

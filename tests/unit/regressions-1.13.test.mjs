@@ -180,12 +180,12 @@ test('new owner instructions pause work; reconciled cancellation clears it and o
   assert.deepEqual((await readState(f.root, f.env)).state.partner.thread.checkpoint.openWork, []);
 });
 
-test('missing disposition blocks Stop with an existing-operation recovery command', async t => {
+test('missing disposition is non-blocking and retains its existing-operation repair', async t => {
   const f = await fixture(t), id = await cycle(f, 'Implement the approved change.', remaining, null);
   const current = await readState(f.root, f.env);
   assert.equal(current.state.partner.thread.checkpoint.continuation.armed, false);
   const decision = stopDecision({ session_id: 'session' }, current, await ownerDeliveries(f.root, f.env));
-  assert.equal(decision.decision, 'block'); assert.ok(decision.reason.includes(`continue --operation-id ${id} --disposition`));
+  assert.equal(decision.decision, undefined); assert.ok(decision.notices.some(n => n.key.startsWith('disposition:')));
   await continueOperation(f.root, id, f.env, { spawnRunner: false, workDisposition: remaining });
   await execute(f, 'reconcile');
   assert.equal((await readState(f.root, f.env)).state.partner.thread.checkpoint.continuation.armed, true);

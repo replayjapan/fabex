@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-import { reviewSessionMatches, partnerNextAction } from './lib/work-disposition.mjs';
+import { reviewSessionMatches } from './lib/work-disposition.mjs';
 import { activityDecision, observeActivity, activitySnapshot, researchAuthorAllowed } from './lib/activity.mjs';
 import { simpleTokens, safeCommandSegments, readOnlyGithub, readOnlySed, readOnlyGit, readOnlyTagArgs } from './vendor/modes/shell.mjs';
 export { readOnlyGithub, readOnlySed };
 import { decodeEdits } from './vendor/modes/edits.mjs';
 import { writableTarget } from './vendor/modes/policy.mjs';
 import { writePlan } from './vendor/modes/contained-edits.mjs';
-import { readPlan } from './vendor/modes/runner.mjs';
 import { authorshipPolicy, isDocumentationTarget, isTestTarget } from './lib/authorship.mjs';
 import { recordWorkspaceQuestion, matchesWorkspaceQuestion } from './lib/workspace.mjs';
 import { resolveSettings, executionPlan, ROLE_NAMES } from './lib/workspace-settings.mjs';
@@ -22,8 +21,7 @@ import { modeGrantMatches, modeTargetForSkill } from './lib/hook-evidence.mjs';
 import { isPlainObject, UUID_RE } from './lib/validation.mjs';
 import { developmentProbe } from './lib/development.mjs';
 import { beginHeavy, heavyShape, wrappedHeavyInput } from './lib/heavy.mjs';
-import { ownerDeliveries, deliveryObligations, ownsResearchHelper, blockingReviewWarning } from './lib/owner-delivery.mjs';
-import { refreshState } from './lib/conversation-refresh.mjs';
+import { ownsResearchHelper } from './lib/owner-delivery.mjs';
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
@@ -113,7 +111,7 @@ export function parseControlCommand(command) {
   if (typeof command === 'string' && command.includes('\n')) {
     const lines = command.split('\n');
     if (lines.at(-1) === '') lines.pop();
-    const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+checkpoint\s+(replace\s+(constraint|decision|relevant-file|unresolved-problem|open-work)|snapshot)\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
+    const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+checkpoint\s+(replace\s+(constraint|decision|relevant-file|unresolved-problem|open-work)|snapshot)\s+<<'([A-Za-z][A-Za-z0-9_]{0,63})'$/.exec(lines[0] ?? '');
     if (header && resolve(header[1] ?? header[2] ?? header[3]) === CONTROL_PATH && lines.at(-1) === header[6]) {
       const body = lines.slice(1, -1).join('\n');
       if (Buffer.byteLength(body, 'utf8') <= 48 * 1024) return { kind: header[4] === 'snapshot' ? 'checkpoint-snapshot' : 'checkpoint-replace' };
@@ -171,7 +169,7 @@ export function parseControlCommand(command) {
 export function parseControllerCommand(command, { participants = null } = {}) {
   if (typeof command === 'string' && command.includes('\n')) {
     const lines = command.trimEnd().split('\n');
-    const match = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+seal\s+--operation-id\s+([a-f0-9-]{36})\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0]);
+    const match = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+seal\s+--operation-id\s+([a-f0-9-]{36})\s+<<'([A-Za-z][A-Za-z0-9_]{0,63})'$/.exec(lines[0]);
     if (match && resolve(match[1] ?? match[2] ?? match[3]) === CONTROLLER_PATH && UUID_RE.test(match[4]) && lines.at(-1) === match[5] && Buffer.byteLength(lines.slice(1, -1).join('\n')) <= 16000) return { kind: 'controller-seal', operationId: match[4] };
   }
   const acceptedSubmit = (message) => {
@@ -183,7 +181,7 @@ export function parseControllerCommand(command, { participants = null } = {}) {
   if (typeof command === 'string' && command.includes('\n')) {
     const lines = command.split('\n');
     if (lines.at(-1) === '') lines.pop();
-    const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+submit\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'$/.exec(lines[0] ?? '');
+    const header = /^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+submit\s+<<'([A-Za-z][A-Za-z0-9_]{0,63})'$/.exec(lines[0] ?? '');
     if (header && resolve(header[1] ?? header[2] ?? header[3]) === CONTROLLER_PATH && lines.at(-1) === header[4]) {
       const message = lines.slice(1, -1).join('\n');
       if (message.trim() && Buffer.byteLength(message, 'utf8') <= 192 * 1024) return acceptedSubmit(message);
@@ -368,6 +366,39 @@ function containedNpmPrefix(prefix, root, cwd) {
   } catch { return false; }
 }
 
+// Locate output redirects in executable shell text, not literal argv content.
+// Command substitutions have their own quoting context even inside double quotes.
+function outputRedirectionTargets(command) {
+  const targets = [], frames = [{ quote: null, end: null, depth: 0 }];
+  for (let i = 0; i < command.length; i++) {
+    const frame = frames.at(-1), char = command[i], next = command[i + 1];
+    if (frame.quote === "'") {
+      if (char === "'") frame.quote = null;
+      continue;
+    }
+    if (char === '\\' && (frame.quote !== '"' || ['"', '\\', '$', '`', '\n'].includes(next))) { i++; continue; }
+    if (char === '`' && frame.end === '`') { frames.pop(); continue; }
+    if (char === '`' || char === '$' && next === '(') {
+      const arithmetic = char === '$' && command[i + 2] === '(';
+      frames.push({ quote: null, end: char === '`' ? '`' : ')', depth: arithmetic ? 1 : 0, arithmetic });
+      if (char === '$') i += arithmetic ? 2 : 1;
+      continue;
+    }
+    if (char === '"') { frame.quote = frame.quote === '"' ? null : '"'; continue; }
+    if (frame.quote) continue;
+    if (char === "'") { frame.quote = char; continue; }
+    if (frame.end === ')') {
+      if (char === '(') { frame.depth++; continue; }
+      if (char === ')') { if (frame.depth === 0) frames.pop(); else frame.depth--; continue; }
+    }
+    if (char !== '>' || frame.arithmetic) continue;
+    const match = /^>>?\s*("[^"]*"|'[^']*'|&[12]|[^\s;&|]+)/.exec(command.slice(i));
+    targets.push(match?.[1]?.replace(/^['"]|['"]$/g, ''));
+    if (next === '>') i++;
+  }
+  return targets;
+}
+
 export function workCommandDenial(command, root, cwd = root, config = null) {
   if (typeof command !== 'string' || !command.trim() || command.includes('\0')) return 'malformed command';
   if (allowedDiscussionReads(command, config, root)) return null;
@@ -382,14 +413,13 @@ export function workCommandDenial(command, root, cwd = root, config = null) {
     ['unverified process termination', /(?:^|[\s;&|/])(?:kill|pkill|killall)(?:\s|$)/i]
   ];
   for (const [rule, pattern] of destructive) if (pattern.test(command)) return rule;
-  if (/\b(?:git|gh)\b/.test(command) && /\$\(|`/.test(command)) return 'unparseable Git delivery substitution';
   if (/(?:^|[;&|]\s*)ps\s+(?:e|auxe|eww|-axo\s+(?:command|args|environment))(?:\s|$)/.test(command)) return 'unbounded process environment disclosure';
   if (/\b(?:xargs|find)\b[\s\S]*\b(?:rm|mv|cp|tee|touch|chmod|sed|perl)\b/.test(command) && !allowedDiscussionReads(command, config, root)) return 'project source authorship (indirect file command)';
   if (/(?:^|[\s;&|])(?:--fix|--write|--update|--update-snapshot)(?:\s|$)/.test(command)) return 'project source authorship (rewrite flag)';
   if (/\bfind\b[\s\S]*\s-delete\b/.test(command)) return 'project source authorship (find delete)';
   if (/\bgit\b[\s\S]*--output(?:=|\s)/.test(command)) return 'project source authorship (git output)';
   if (/\benv\s+(?:[\w]+=[^\s]+\s+)*(?:touch|rm|cp|mv|tee|sed|perl)\b/.test(command)) return 'project source authorship (env file command)';
-  if (/\b(?:node|python\d*|ruby|perl)\s+(?:-e|-c)\b/.test(command) && /\b(?:writeFile\w*|appendFile\w*|unlink\w*|rename\w*|write_text|write_bytes|rmtree)\b/.test(command)) return 'project source authorship (inline writer)';
+  if (/\b(?:node|python\d*|ruby|perl)\s+(?:-e|-c)\b/.test(command) && /\b(?:writeFile\w*|appendFile\w*|unlink\w*|rename\w*|write_text|write_bytes|rmtree)\b/.test(command) && !externalInlineWriter(command, root)) return 'project source authorship (inline writer)';
   for (const segment of safeCommandSegments(command) ?? []) {
     const words = simpleTokens(segment);
     if (words && executableName(words[commandIndex(words)]) === 'sed' && !readOnlySed(words.slice(commandIndex(words) + 1))) return 'unverified sed effects (in-place, file writes, execution or unsupported script)';
@@ -407,8 +437,7 @@ export function workCommandDenial(command, root, cwd = root, config = null) {
   };
   // Output redirection writes authored files as well as logs; external scratch
   // redirection remains available. Prefer host background-task logs otherwise.
-  for (const match of command.matchAll(/(?:^|[^>])>>?\s*("[^"]*"|'[^']*'|[^\s;&|]+)/g)) {
-    const target = match[1].replace(/^['"]|['"]$/g, '');
+  for (const target of outputRedirectionTargets(command)) {
     if (target === '&1' || target === '&2' || target === '/dev/null') continue;
     if (targetsWorkstream(target)) return 'project source authorship (redirection)';
   }
@@ -421,6 +450,13 @@ export function workCommandDenial(command, root, cwd = root, config = null) {
     }
     const index = commandIndex(tokens); const executable = executableName(tokens[index]); const args = tokens.slice(index + 1);
     if (executable === 'cd' && args.length === 1) { currentCwd = resolve(currentCwd, args[0]); continue; }
+    if (['bash', 'dash', 'fish', 'sh', 'zsh'].includes(executable)) {
+      const scriptIndex = args.indexOf('-c');
+      if (scriptIndex >= 0 && typeof args[scriptIndex + 1] === 'string') {
+        const nested = workCommandDenial(args[scriptIndex + 1], root, currentCwd, config);
+        if (nested) return nested;
+      }
+    }
     if (executable === 'rm' && args.some(arg => ['/', '/tmp', '/private/tmp', '.', '..'].includes(arg))) return 'destructive root removal';
     if (executable === 'curl') {
       for (let i = 0; i < args.length; i++) {
@@ -429,12 +465,49 @@ export function workCommandDenial(command, root, cwd = root, config = null) {
       }
     }
     if (['tee', 'cp', 'mv', 'rm', 'rmdir', 'mkdir', 'touch', 'ln', 'chmod', 'patch'].includes(executable) || ['sed', 'perl'].includes(executable) && args.some(arg => /^-[A-Za-z]*i/.test(arg))) {
-      if (!args.length || args.filter(arg => !arg.startsWith('-')).some(target => targetsWorkstream(target, currentCwd))) return `project source authorship (${executable})`;
+      const operands = args.filter(arg => !arg.startsWith('-'));
+      const targetOption = args.findIndex(arg => ['-t', '--target-directory'].includes(arg));
+      const targetValue = args.find(arg => arg.startsWith('--target-directory='));
+      const targets = executable === 'cp' ? (targetOption >= 0 ? [args[targetOption + 1]] : targetValue ? [targetValue.slice('--target-directory='.length)] : operands.slice(-1)) : operands;
+      if (!targets.length || targets.some(target => targetsWorkstream(target, currentCwd))) return `project source authorship (${executable})`;
     }
-    if (executable === 'git' && /\b(?:apply|checkout|restore|clean|reset)\b|\bstash\s+(?:pop|apply)\b/.test(args.join(' '))) return 'project source authorship (git worktree mutation)';
-    if (executable === 'git' && args[0] === 'branch' && args.length > 1 && !args.slice(1).every(arg => ['--show-current', '--list', '-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose'].includes(arg))) return 'Git branch mutation requires delivery review';
+    if (executable === 'git') {
+      let actionIndex = 0;
+      while (args[actionIndex]?.startsWith('-')) actionIndex += GIT_OPTIONS_WITH_VALUES.has(args[actionIndex]) ? 2 : 1;
+      const action = args[actionIndex], actionArgs = args.slice(actionIndex + 1);
+      if (action === 'branch' && actionArgs.some(arg => ['-d', '-D', '--delete'].includes(arg))) return 'branch deletion requires explicit owner authorization';
+      // Match the actual Git action, not words in a quoted commit message.
+      if (['apply', 'checkout', 'restore', 'clean', 'reset'].includes(action)
+        || action === 'stash' && ['pop', 'apply'].includes(actionArgs[0])) return 'project source authorship (git worktree mutation)';
+    }
   }
   return null;
+}
+
+function externalInlineWriter(command, root) {
+  const calls = [...command.matchAll(/(?:writeFileSync|writeFile|appendFileSync|appendFile)\s*\(\s*(['"])([^'"\n]+)\1/g)];
+  if (!calls.length || /\b(?:unlink\w*|rename\w*|write_text|write_bytes|rmtree)\b/.test(command)) return false;
+  const count = (command.match(/\b(?:writeFileSync|writeFile|appendFileSync|appendFile)\s*\(/g) ?? []).length;
+  return calls.length === count && calls.every(match => isAbsolute(match[2]) && externalCanonicalTarget(match[2], root));
+}
+
+function externalCanonicalTarget(target, root) {
+  const canonical = path => {
+    try { return realpathSync(path); }
+    catch (error) { if (error.code !== 'ENOENT' || dirname(path) === path) throw error; return join(canonical(dirname(path)), basename(path)); }
+  };
+  try { return !/[$`*?~]/.test(target) && !insideRoot(canonical(resolve(target)), canonical(root)); }
+  catch { return false; }
+}
+
+function projectWriteEffect(toolName, input, root, cwd, config) {
+  if (WRITE_TOOLS.has(toolName)) return !externalCanonicalTarget(resolve(root, writeTarget(input) ?? '.'), root);
+  if (toolName === 'Bash' || typeof input.command === 'string') {
+    const rule = workCommandDenial(input.command, root, cwd, config);
+    return Boolean(rule?.startsWith('project source authorship') || rule?.includes('source-writing')
+      || /(?:^|[\s;&|])git\s+(?:[^;&|\n]*\s)?(?:merge|rebase|cherry-pick|pull|checkout|restore|reset|clean|apply)(?:\s|$)/.test(input.command));
+  }
+  return /(?:write|edit|create|delete|move|patch)/i.test(toolName) && (!writeTarget(input) || insideRoot(writeTarget(input), root));
 }
 
 function allowedSafeSegment(segment, config, root) {
@@ -485,7 +558,7 @@ function permittedExternalTarget(target, root, config) {
 
 function externalOnlyWriteCommand(command, root, config) {
   const lines = typeof command === 'string' ? command.split('\n') : [];
-  const heredoc = /^\s*cat\s+<<'([A-Za-z][A-Za-z0-9_]{7,63})'\s*(>|>>)\s*("[^"]+"|'[^']+'|\/[^\s;]+)\s*$/.exec(lines[0] ?? '');
+  const heredoc = /^\s*cat\s+<<'([A-Za-z][A-Za-z0-9_]{0,63})'\s*(>|>>)\s*("[^"]+"|'[^']+'|\/[^\s;]+)\s*$/.exec(lines[0] ?? '');
   if (heredoc) {
     const target = heredoc[3].replace(/^['"]|['"]$/g, '');
     return lines.at(-1) === heredoc[1] && permittedExternalTarget(target, root, config);
@@ -580,12 +653,12 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   const documentTarget = isDocumentationTarget(writeTarget(toolInput), paths.canonicalRoot);
   const testTarget = isTestTarget(writeTarget(toolInput), paths.canonicalRoot);
   const claudeTestEdits = bound && main && authorship.testWriter === 'claude'
-    && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt && !state.controller.activeOperationId;
+    && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt;
   const testEdit = claudeTestEdits && testTarget;
   const claudeEdits = bound && main && authorship.coder === 'claude'
-    && !(task.role === 'docs' && documentTarget && state.controller.activeOperationId);
+;
   const claudeDocuments = bound && main && authorship.claudeDocuments
-    && !state.controller.activeOperationId && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt;
+    && state.ownerSelectedMode?.route === 'normal' && !state.modeGrant?.pausedAt;
   const documentEdit = claudeDocuments && documentTarget;
   const claudeImages = bound && main && ['claude', 'both'].includes(profile['roles.imageReview.executor']);
   if (toolName === 'Skill' && /^(?:fabex:)?(?:settings|milestone|session)$/.test(toolInput.skill ?? '') && (toolInput.args ?? '').trim()) return deny('settings changes require an owner-typed slash command');
@@ -662,10 +735,9 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
   if (protectedOperation && (state.route !== 'normal' || state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt || ((executor.agentId || executor.agentType) && !isOperationalExecutor(executor)))) {
     return deny(`${protectedOperation} requires owner-selected work mode and the main session or verified ${OPERATIONAL_AGENT} subagent`);
   }
-  if (protectedOperation && !allowedOperationalDelivery(toolInput.command, config, paths.canonicalRoot)) return deny('Git delivery commands must be direct, parseable, and composed only with allowlisted read or delivery segments');
   if (toolName === 'Bash') {
     if (invokesFabexScript(toolInput.command, CONTROL_PATH) && !control && !allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot)) return deny('only exact Fabex controls or composed read-only controls are allowed');
-    if (invokesFabexScript(toolInput.command, CONTROLLER_PATH) && !controller) return deny('only exact Fabex controller entry points are allowed; seal/submit heredocs require a single-quoted delimiter of 8–64 characters, starting with a letter and containing only letters, digits or underscore, with a matching closing line');
+    if (invokesFabexScript(toolInput.command, CONTROLLER_PATH) && !controller) return deny('only exact Fabex controller entry points are allowed; seal/submit heredocs require a single-quoted delimiter of 1–64 characters, starting with a letter and containing only letters, digits or underscore, with a matching closing line');
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
     if (controller?.kind === 'controller-submit' && state.route === 'recovery-read-only') return deny('recovery-read-only denies new Codex SDK turns');
   }
@@ -679,7 +751,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     if (permission.installed && words?.[0] === 'node' && trusted.includes(words[1]) && words[3] === permission.root && words[4] === executor.sessionId) {
       if (words[2] === 'status' && words.length === 5 || words[2] === 'read' && words.length === 6) return defer();
       if (words[2] === 'write' && words.length === 6) {
-        if (!bound || !main || state.modeGrant || state.operations.some(op => ['queued','working'].includes(op.status)) || deliveryObligations(await ownerDeliveries(paths.canonicalRoot, env), state, executor.sessionId).length) return deny('Contained writes require the bound main session and completed partner review.');
+        if (!bound || !main || state.modeGrant) return deny('Contained writes require the bound main session.');
         try {
           writePlan(permission.root);
           const edits = decodeEdits(words[5]);
@@ -687,7 +759,7 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
           return defer();
         } catch (e) { return deny(e.message); }
       }
-      if (words[2] === 'run' && bound && main && task.executor === 'claude' && words.length >= 7 && !state.operations.some(op => ['queued','working'].includes(op.status)) && !deliveryObligations(await ownerDeliveries(paths.canonicalRoot, env), state, executor.sessionId).length) return defer();
+      if (words[2] === 'run' && bound && main && task.executor === 'claude' && words.length >= 7) return defer();
     }
   }
   if (executor.sessionId && state.route !== 'recovery-read-only' && !control && !controller) {
@@ -695,45 +767,29 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       await ownsResearchHelper(paths.canonicalRoot, executor.sessionId, toolInput.recipient ?? toolInput.task_id, env));
     if (activity.decision === 'deny') return deny(activity.reason);
     if (activity.permission.installed && activity.permission.activity !== 'work') {
-      const pending = deliveryObligations(await ownerDeliveries(paths.canonicalRoot, env), state, executor.sessionId);
-      const independent = state.operations.some(op => op.result.relay?.sessionId === executor.sessionId && op.request.phase === 'independent' && !op.request.interrupted && (['queued','working'].includes(op.status) || op.status === 'completed' && !state.operations.some(child => child.request.parentOperationId === op.id && child.status === 'completed')));
       if (WRITE_TOOLS.has(toolName) && (!bound || !main || !researchAuthorAllowed(activity.permission.root, writeTarget(toolInput), authorship, 'claude'))) return deny('Research source and text retain their Coding, Test Writing and Documentation assignments.');
-      if (WRITE_TOOLS.has(toolName) && (pending.length || independent)) return deny('Research edits wait for owner-message assessment and reconciliation.');
-      if (toolName === 'Bash') {
-        try {
-          readPlan(activity.permission.root, toolInput.command);
-          const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
-          return { decision: 'defer', updatedInput: { ...toolInput, command: `node ${quote(resolve(PLUGIN_ROOT, 'scripts/activity-control.mjs'))} read ${quote(activity.permission.root)} ${quote(executor.sessionId)} ${quote(toolInput.command)}` } };
-        } catch (e) { return deny(e.message); }
-      }
+      // Modes has already classified these shell effects as read-only. Do not
+      // add another Fabex runner/shape restriction to ordinary reads.
       return defer();
     }
   }
   if (state.route === 'normal' || activity?.permission.installed && activity.permission.activity === 'work') {
-    const pending = executor.sessionId ? deliveryObligations(await ownerDeliveries(paths.canonicalRoot, env), state, executor.sessionId) : [];
-    const refresh = executor.sessionId ? await refreshState(paths.canonicalRoot, env) : null;
-    const awaitingReceipt = refresh && ['prepared', 'awaiting-receipt'].includes(refresh.status);
-    const independent = state.operations.some(op => op.result.relay?.sessionId === executor.sessionId && op.request.phase === 'independent' && !op.request.interrupted && (['queued', 'working'].includes(op.status) || op.status === 'completed' && !state.operations.some(child => child.request.parentOperationId === op.id && child.status === 'completed')));
-    // Validation of already reconciled work is not new implementation. Keep the
-    // exception tied to the assigned runner and armed work, with no code turn
-    // writing concurrently. Ordinary writes and new builds remain gated.
-    const checkpoint = state.partner.thread.checkpoint;
-    const testValidation = toolName === 'Bash' && bound && main && authorship.testRunner === 'claude'
-      && checkpoint.continuation.armed && checkpoint.openWork.length > 0 && !checkpoint.blocker && !checkpoint.ownerActionRequired
-      && !awaitingReceipt && !state.modeGrant?.pausedAt
-      && state.operations.some(op => op.request.phase === 'reconcile' && op.status === 'completed' && op.result.relay?.sessionId === executor.sessionId && !blockingReviewWarning(op))
-      && !state.operations.some(op => op.status === 'working' && op.request.phase !== 'independent' && op.request.sandbox === 'workspace-write')
-      && assignedTestCommand(toolInput.command, paths.canonicalRoot, invocationCwd);
-    if ((pending.length || independent || awaitingReceipt) && (WRITE_TOOLS.has(toolName) || toolName === 'Bash' && !control && !controller && !testValidation && !allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot) || toolName.startsWith('mcp__') && !readOnlyMcpTool(toolName, config))) {
-      const reasons = pending.map(item => item.nextAction);
-      if (independent) reasons.push(partnerNextAction(state));
-      if (awaitingReceipt) {
-        const latest = state.operations.findLast(op => op.request.phase === 'reconcile' && op.result.relay?.sessionId === executor.sessionId && op.status === 'completed');
-        reasons.push(`Reviewed handoff receipt is pending.${latest ? ` Read controller.mjs result --operation-id ${latest.id}; use controller.mjs continue --operation-id ${latest.id} for the receipt turn.` : ' Run control.mjs session status and inspect the saved handoff before starting the receipt turn.'} Implementation remains paused until acknowledgement.`);
-      }
-      return deny(`Partner review must finish before affected implementation. ${[...new Set(reasons.filter(Boolean))].join(' ')} For usage during review, run control.mjs usage report or control.mjs usage snapshot --event progress in the bound main session.`);
+    // Pending reviews, missing receipts and interrupted deliveries are not tool
+    // permissions. Only a potentially overlapping project write waits for a
+    // writable partner operation. Read-only partner reviews do not lock files.
+    const writer = state.operations.find(op => ['queued', 'working'].includes(op.status)
+      && op.request.sandbox === 'workspace-write' && op.request.phase !== 'independent');
+    if (writer && projectWriteEffect(toolName, toolInput, paths.canonicalRoot, invocationCwd, config)) {
+      return deny(`A partner is editing this project; this write may overlap. Wait for operation ${writer.id} or use a verified separate target. Reads and external preparation remain available.`);
     }
-    if (protectedOperation) return defer();
+    if (protectedOperation) {
+      const rule = workCommandDenial(toolInput.command, paths.canonicalRoot, invocationCwd, config);
+      // Delivery permission covers Git itself, not additional project-file
+      // writes in a pipeline, redirection or companion command.
+      if (rule && (!rule.startsWith('project source authorship')
+        || !claudeEdits && !activeExecutorException(state, toolName, executor))) return deny(`work policy: ${rule}`);
+      return defer();
+    }
     if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !(claudeEdits && !testTarget) && !testEdit && !documentEdit && !activeExecutorException(state, toolName, executor)) {
       return deny('Application edits belong to Coding; recognized test files belong to Test Writing. Documentation permits text documents only. Ambiguous targets and helpers require their existing permissions');
     }

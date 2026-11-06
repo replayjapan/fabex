@@ -52,7 +52,7 @@ test('1.10.5 both partners update the existing handoff through the ordinary cont
       requests.push({ input, options, schema: runOptions.outputSchema });
       return { events: (async function* () {
         yield { type: 'thread.started', thread_id: 'shared-handoff-thread' };
-        assert.equal((await classify(f)).decision, 'deny', 'Claude waits while Codex edits');
+        assert.equal((await classify(f)).decision, active.request.sandbox === 'workspace-write' ? 'deny' : 'defer', 'only a writable partner turn locks overlapping documentation edits');
         assert.equal((await classify(f, 'Read', { file_path: file })).decision, 'defer');
         const existing = await readFile(file, 'utf8');
         assert.match(existing, /Claude verified the owner decision/);
@@ -72,7 +72,7 @@ test('1.10.5 both partners update the existing handoff through the ordinary cont
   };
   active = await claimNextOperation(f.root, f.env);
   await runOperation(f.root, active, { createCodex }, f.env);
-  assert.equal((await classify(f)).decision, 'deny', 'both partners wait for reconciliation before editing');
+  assert.equal((await classify(f)).decision, 'defer', 'an unfinished read-only review does not lock assigned documentation');
   const afterCodex = await readFile(file, 'utf8');
   assert.doesNotMatch(afterCodex, /Codex implemented the fix/);
   const review = await submitOperation(f.root, reconciliationEnvelope(first.operationId, owner, 'I read the same handoff and agree to implement the authorized update; I will review the result.'), f.env, { spawnRunner: false });

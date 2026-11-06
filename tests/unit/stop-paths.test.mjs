@@ -21,7 +21,7 @@ test('Stop blocks queued or working partner operations', () => {
   assert.deepEqual(stopDecision({}, stateResult([{ ...running, status: 'completed' }])), {});
   assert.equal(stopDecision({}, stateResult([running])).decision, 'block');
   assert.equal(stopDecision({}, stateResult([{ ...running, status: 'queued' }])).decision, 'block');
-  assert.equal(stopDecision({}, stateResult([{ ...running, status: 'completed', request: { phase: 'independent', parentOperationId: null } }])).decision, 'block');
+  assert.equal(stopDecision({}, stateResult([{ ...running, status: 'completed', request: { phase: 'independent', parentOperationId: null } }])).decision, undefined);
   assert.equal(stopDecision({ stop_hook_active: true }, stateResult([running])).decision, 'block', 'a repeated Stop must not end a working partner turn');
 });
 

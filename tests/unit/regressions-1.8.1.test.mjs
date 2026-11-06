@@ -38,11 +38,11 @@ test('1.8.1 relay omits JSON, renders only non-empty flags, and preserves exact-
   } };
   const original = structuredClone(operation);
   let block = relayBlock(operation, { full: true });
-  assert.equal(block, `Codex (Astra): Phase 2 — reconciliation/corrections\n\n${answer.split('\n').map(line => '> ' + line).join('\n')}`);
+  assert.equal(block, `Codex (Astra):\n\n${answer}`);
   assert.deepEqual(operation, original);
   Object.assign(operation.result.structured, { scopeMismatch: 'Read-only scope', parityConcern: 'Keep complete words', disagreements: ['Different conclusion', ' '], uncertainties: ['Not observed live', ''] });
   block = relayBlock(operation, { full: true });
-  for (const text of ['Codex flags:', '- Scope mismatch: Read-only scope', '- Parity concern: Keep complete words', '- Disagreement: Different conclusion', '- Uncertainty: Not observed live']) assert.ok(block.includes(text));
+  for (const text of ['Scope mismatch: Read-only scope', 'Parity concern: Keep complete words', 'Disagreement: Different conclusion', 'Uncertainty: Not observed live']) assert.ok(block.includes(text));
   assert.doesNotMatch(block, /Structured review fields|```json|internal-|internal evidence|internal assumption|internal recommendation/);
   assert.deepEqual(missingRelays({ operations: [operation] }, { session_id: 'session-a', last_assistant_message: block }), []);
   assert.equal(missingRelays({ operations: [operation] }, { session_id: 'session-a', last_assistant_message: block.replace('Final paragraph.', '') }).length, 1);

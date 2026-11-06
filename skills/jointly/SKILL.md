@@ -37,7 +37,7 @@ No new owner prompt is required. A historical
 compaction count alone is not a refresh trigger.
 
 
-Owner-facing reply: show each participant's own short conclusion under its model-aware label, then Decided. Paste Codex's ownerSummary and label unchanged. Omit resolved disagreements and routine uncertainty; show an open issue only when it affects an owner decision, blocks progress or materially limits the result. Action required appears only when the owner must act. Omit empty sections and absent partners. Keep the complete phase records available through result and relay --full. Wait in bounded slices; a timeout does not complete the task.
+Owner-facing reply: each AI chooses its complete intended response, including detail, evidence and disagreement. Relay Codex's answer and flags unedited under its speaker label; do not substitute a summary or impose brevity or omission rules. Deliver every unread answer, including earlier phases. Use controller relay to retrieve it. Missing delivery is recoverable bookkeeping, never a reason to trap a reply or block unrelated authorized work. A stored answer or hook reminder is not proof of visible delivery. Wait in bounded slices for active partner work; a timeout does not complete the task.
 
 Phone uploads: when the host supplies an upload file reference for the current owner message, forward that exact path in the independent Phase 1 `attachments` array without opening or describing the image. Do not put the host note in `ownerMessage`; preserve the owner's bare text and digest. Do not scan uploads, guess the newest file, or reuse another message's photo. The controller permits only the hook-recorded session's directory under `CLAUDE_CONFIG_DIR/uploads` (default Claude config directory when unset), not sibling sessions. Images are limited to six and 16 MiB each; unsupported formats must be converted through an authorized workflow, never silently omitted. If validation fails, stop visibly and report the error; never retry the same request as text-only. Before running a mode command, forward each current host upload reference as a repeated --attach argument alongside the owner grant; never start Phase 1 first and add the missing image in Phase 2. Host-note forwarding is coordination, not an automatic hook capture or proof of current-message attachment provenance.
 
@@ -74,7 +74,7 @@ FABEX_SEAL_7F3A2C91
 Then wait and read Codex's result. The queued turn cannot run before the seal;
 the controller automatically supplies it in reconciliation. Do not await Codex
 before sealing. Existing pre-upgrade cycles finish using their existing protocol.
-No private reasoning is required: seal only the concise owner-facing first opinion.
+No private reasoning is required: seal your independently authored owner-facing first opinion.
 
 Milestones keep private transcript references, summaries and their own Codex threads.
 Use `/fabex:milestone` for the named stage in the owner's plan. A new chat never creates or renames a milestone. Save a
@@ -106,7 +106,7 @@ For a mode command, the owner can explicitly select an image with a separate tra
 
 Both phase JSON envelopes optionally accept `attachments`, an array of at most six absolute png/jpg/jpeg/webp/gif file paths, each at most 16 MiB. Paths must resolve inside the workstream/repository or configured externalWriteRoots. Use only owner-approved images; do not annotate or insert your current opinion in Phase 1 images. Unless Image review includes Claude, Fable forwards approved paths without reviewing their images. Keep files stable until execution. Attachment metadata paths are erased on terminal state, not from verbatim owner text or SDK history. No image bytes enter Fabex state. No attachment means text-only behavior is unchanged.
 
-Both phases require ownerSummary (at most 1200 characters) alongside the complete answer and evidence. Codex authors its own summary; Claude never rewrites it. Stop verifies the latest completed Phase 2 summary and label, or the independent summary when no child exists. Legacy records retain full-answer checks. No silent summary omission.
+Both phases provide the complete owner-facing answer and evidence. The legacy ownerSummary field is accepted when reading older records but never substitutes for the answer. Each unread phase remains pending until its full answer and flags appear in the visible reply. Stop offers one recovery prompt per unchanged set of unread answers or unfinished reviews, then lets the reply end. It never blocks unrelated authorized work.
 
 Scope and parity fields are null when absent; only material flags appear in the relay, never routine none lines.
 
@@ -138,7 +138,7 @@ work; it is not a pair of strategy assessments.
 - Update the existing file directly. Do not create a companion document, require
   author headings, or store and assemble private drafts. Create a handoff only
   when the project has none and the task calls for one.
-- Keep the normal independent assessment, reconciliation and owner-summary relay
+- Keep the normal independent assessment, reconciliation and full-answer relay
   for the owner's request. Those assessments remain separate from the shared
   document: sealing an assessment never requires sealing a document.
 - Include the shared handoff's path in the existing continuity checkpoint and
