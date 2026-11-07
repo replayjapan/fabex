@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.14.1
+
+- Honor Documentation and Test Writing assignments independently of the current
+  task role. Preserve file-type, Discussion and overlapping-write boundaries.
+- Allow role selection between partner turns, including an unfinished review
+  cycle; queued turns use the selected role. Running turns retain their assignment.
+- Recognize short `/work`, `/discussion` and `/ask` commands without capturing a
+  duplicate owner-message cycle.
+- Permit assigned test execution without a task-role switch, and recognize
+  read-only shell lookups with computed line ranges. Check accompanying writes.
+- Explain file-edit refusals using the actual writer assignment or session boundary.
+- Accept an explicit scope-preserving response alongside a valid partner work
+  record without a missing-record warning. Retain unfinished work and owner
+  decisions until a shared disposition changes them. Show a one-time non-blocking
+  notice when reported remaining work is not yet held in the checkpoint.
+
 ## 1.14.0
 
 - Deliver each partner's full answer and flags without summary substitution,

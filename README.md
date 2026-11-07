@@ -27,7 +27,12 @@ changes, keep backups and expect the host's normal permission checks. VS Code's
 Claude Code integration is the primary workflow. Some capabilities depend on the host;
 see [platform limitations](#mechanically-enforced-and-platform-limited-behavior).
 
-### What’s new in 1.14.0
+### What’s new in 1.14.1
+
+Documentation and test-writing permissions follow their assigned writers without
+requiring a task-role switch. Roles can change between partner turns; the next
+turn uses the new role. Short Modes commands create one review cycle. Read-only
+line-range lookups accept computed addresses without being mistaken for edits.
 
 Each partner chooses its full owner-facing answer. Fabex relays it unedited,
 without a summary substitute or mandatory brevity. Unread answers stay pending
@@ -718,6 +723,12 @@ use `workDisposition: null`. This preserves existing work, blockers and owner
 decisions; it does not declare completion or authorize a new task. Discussion and
 ask-only reconciliations do not require task dispositions. An omitted field is
 not the explicit question-only exemption.
+If one partner explicitly reports no task change while the other supplies a
+valid disposition, Fabex retains both assessments without a missing-record
+warning when completion is reported or the remaining work is already in the
+checkpoint. Unrecorded remaining work receives a one-time non-blocking notice
+so it cannot disappear silently. The existing checkpoint stays in force; that
+single disposition does not clear unfinished work, blockers or owner decisions.
 Completion requires an explicitly empty list and `done`; missing bookkeeping
 never means completion. Matching outcomes update the checkpoint atomically;
 newer instructions, changed sessions and cancellation prevent stale rearming.

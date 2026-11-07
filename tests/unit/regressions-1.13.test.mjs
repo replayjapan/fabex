@@ -16,6 +16,7 @@ import { captureOwnerDelivery, deliveryObligations, ownerDeliveries } from '../.
 import { dispatchOwnerDeliveries, submitOperation, reconciliationEnvelope, normalizeSubmissionEnvelope, claimNextOperation, runOperation, continueOperation } from '../../scripts/lib/sdk-controller.mjs';
 import { relayBlock } from '../../scripts/lib/review.mjs';
 import { stopDecision } from '../../scripts/hook-stop.mjs';
+import { stopNoticesOnce } from '../../scripts/lib/delivery-feedback.mjs';
 
 const advisory = 'Host-managed MCP permissions require live verification; only the declared read-only research tools are authorized.';
 const remaining = { status: 'remaining', remainingWork: ['Validate the approved change.'], reason: 'Validation remains.' };
@@ -38,8 +39,8 @@ test('advisories remain visible without blocking; mixed and unknown failures sti
 test('dispositions distinguish explicit completion, missing bookkeeping and genuine blockers', () => {
   for (const value of [remaining, done, disposition('blocked'), disposition('owner-decision')]) assert.equal(validDisposition(value), true);
   for (const value of [null, {}, { ...remaining, remainingWork: [] }, { ...done, remainingWork: ['Hidden unfinished task'] }, { ...done, reason: '' }]) assert.equal(validDisposition(value), false);
-  assert.match(dispositionProblem(null, done), /Claude/);
-  assert.match(dispositionProblem(done, null), /Codex/);
+  assert.equal(dispositionProblem(null, done), null);
+  assert.equal(dispositionProblem(done, null), null);
   assert.match(dispositionProblem(remaining, done), /different outcomes/);
 });
 
@@ -62,7 +63,7 @@ test('matching dispositions persist and arm work atomically; completion and bloc
 });
 
 test('missing or disputed outcomes preserve unfinished work and cannot silently complete', () => {
-  for (const pair of [[null, done], [done, null], [remaining, done]]) {
+  for (const pair of [[undefined, done], [done, undefined], [remaining, done]]) {
     const { state, operation, cp } = stateFor(...pair);
     cp.openWork = ['Previously authorized work.']; cp.continuation.armed = true;
     assert.match(persistWorkDisposition(state, operation, '2026-01-01T00:00:00.000Z'), /requires reconciliation/);
@@ -180,12 +181,15 @@ test('new owner instructions pause work; reconciled cancellation clears it and o
   assert.deepEqual((await readState(f.root, f.env)).state.partner.thread.checkpoint.openWork, []);
 });
 
-test('missing disposition is non-blocking and retains its existing-operation repair', async t => {
+test('unrecorded remaining work with an explicit null gives one non-blocking notice and retains its repair', async t => {
   const f = await fixture(t), id = await cycle(f, 'Implement the approved change.', remaining, null);
   const current = await readState(f.root, f.env);
   assert.equal(current.state.partner.thread.checkpoint.continuation.armed, false);
   const decision = stopDecision({ session_id: 'session' }, current, await ownerDeliveries(f.root, f.env));
   assert.equal(decision.decision, undefined); assert.ok(decision.notices.some(n => n.key.startsWith('disposition:')));
+  const notices = decision.notices.filter(n => n.key.startsWith('disposition:'));
+  assert.match(await stopNoticesOnce(f.root, 'session', notices, f.env), /work records need reconciliation/);
+  assert.equal(await stopNoticesOnce(f.root, 'session', notices, f.env), null);
   await continueOperation(f.root, id, f.env, { spawnRunner: false, workDisposition: remaining });
   await execute(f, 'reconcile');
   assert.equal((await readState(f.root, f.env)).state.partner.thread.checkpoint.continuation.armed, true);
@@ -197,7 +201,7 @@ test('question-only null is explicit; omitted fields remain missing bookkeeping'
   assert.equal(normalizeSubmissionEnvelope(JSON.stringify({ ...body, workDisposition: null }), 'both').workDisposition, null);
   assert.equal(normalizeSubmissionEnvelope(JSON.stringify(body), 'both').workDisposition, undefined);
   assert.equal(dispositionProblem(null, null), null);
-  for (const pair of [[undefined, undefined], [undefined, null], [null, undefined], [null, remaining]]) assert.match(dispositionProblem(...pair), /requires reconciliation/);
+  for (const pair of [[undefined, undefined], [undefined, null], [null, undefined]]) assert.match(dispositionProblem(...pair), /requires reconciliation/);
   const { state, operation, cp } = stateFor();
   delete operation.request.workDisposition;
   operation.result.structured.workDisposition = null;

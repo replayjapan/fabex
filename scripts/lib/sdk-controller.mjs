@@ -4,7 +4,7 @@ import { applyContainedEdits } from '../vendor/modes/contained-edits.mjs';
 import { activitySnapshot, researchRoot, researchAuthorAllowed } from './activity.mjs';
 import { editInstructions, extendSchema, splitEdits, applyEdits } from '../vendor/modes/edits.mjs';
 import { testEditInstructions, testEditSchema, splitTestEdits, applyTestEdits } from './test-edits.mjs';
-import { authorshipPolicy } from './authorship.mjs';
+import { authorshipPolicy, isTestTarget } from './authorship.mjs';
 import { captureAuthorship, authorshipWarning, mergeWarnings, interruptedChangesWarning } from './authorship-audit.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
@@ -896,11 +896,16 @@ export async function runOperation(root, operation, { createCodex, signal, pause
   let verifiedId = null;
   let expectedId = null;
   let attachmentDelivered = false, turnCompleted = false;
-  let authorshipBefore = null, auditWarning = null, auditFinished = false, appliedTestFiles = [];
+  let authorshipBefore = null, auditWarning = null, auditFinished = false, appliedTestFiles = [], nativeTestWrites = false;
   let changesBefore = null;
   const finishAudit = async () => {
     if (authorshipBefore && !auditFinished) {
-      auditWarning = authorshipWarning(authorshipBefore, await captureAuthorship(authorshipBefore.root), new Set(appliedTestFiles));
+      const after = await captureAuthorship(authorshipBefore.root);
+      const allowedTests = new Set(appliedTestFiles);
+      if (nativeTestWrites) for (const name of new Set([...authorshipBefore.files.keys(), ...after.files.keys()])) {
+        if (isTestTarget(name, authorshipBefore.root)) allowedTests.add(name);
+      }
+      auditWarning = authorshipWarning(authorshipBefore, after, allowedTests);
       auditFinished = true;
     }
     return auditWarning;
@@ -930,7 +935,11 @@ export async function runOperation(root, operation, { createCodex, signal, pause
     const sandbox = restrictedActivity || operation.request.phase === 'independent' || newerMessage || awaitingHandoff || operation.request.sandbox === 'workspace-write' && authorship.coder !== 'codex' && !authorship.codexDocuments
       ? 'read-only' : operation.request.sandbox;
     const restrictedTools = restrictedActivity;
-    const limitedTests = !operation.request.requirementReview && !restrictedActivity && authorship.codexTestEdits && operation.request.route === 'normal' && operation.request.phase !== 'independent' && !newerMessage && !awaitingHandoff;
+    const limitedTests = !operation.request.requirementReview && !restrictedActivity && authorship.codexTestEdits && !authorship.codexDocuments && operation.request.route === 'normal' && operation.request.phase !== 'independent' && !newerMessage && !awaitingHandoff;
+    // Document permission already uses native file tools. Honor the separate
+    // test-writing assignment there too; retain contained edits when no native
+    // document grant exists. Neither path transfers application authorship.
+    nativeTestWrites = sandbox === 'workspace-write' && authorship.codexTestEdits;
     const docsBoth = plan.role === 'docs' && plan.executor === 'both' && operation.request.participants === 'both' && operation.request.route === 'normal';
     const roleExecution = operation.request.phase !== 'independent' && ['codex', 'both'].includes(plan.executor);
     const repositoryDirectory = config.project.repositoryRoot ? await resolveRepositoryDirectory(before.paths.canonicalRoot, config) : null;

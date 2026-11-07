@@ -23,10 +23,18 @@ export function validDisposition(value) {
 }
 
 export const DISPOSITION_WARNING = 'Work disposition requires reconciliation:';
-export function dispositionProblem(claude, codex) {
-  // Explicit null from both partners means a question-only, scope-preserving turn.
-  // Undefined (omitted) is missing bookkeeping, never an exemption.
+export function dispositionProblem(claude, codex, checkpoint = null) {
+  // An explicit null is a scope-preserving response, not missing bookkeeping.
+  // Keep a valid counterpart's assessment in the operation without turning it
+  // into unilateral completion. Undefined is still a missing record.
   if (claude === null && codex === null) return null;
+  if (claude === null && validDisposition(codex) || codex === null && validDisposition(claude)) {
+    const reported = claude ?? codex;
+    if (reported.status === 'remaining' && reported.remainingWork.some(item => !checkpoint?.openWork?.includes(item))) {
+      return `${DISPOSITION_WARNING} a partner reported unfinished work not yet held in the checkpoint; retain its recorded assessment and reconcile the remaining work.`;
+    }
+    return null;
+  }
   if (!validDisposition(claude)) return `${DISPOSITION_WARNING} Claude must supply an explicit disposition; missing bookkeeping is not completion.`;
   if (!validDisposition(codex)) return `${DISPOSITION_WARNING} Codex must supply an explicit disposition; missing bookkeeping is not completion.`;
   if (claude.status !== codex.status) return `${DISPOSITION_WARNING} partners reported different outcomes (${claude.status}, ${codex.status}); settle the outcome before resuming.`;
@@ -146,11 +154,12 @@ export function persistWorkDisposition(state, operation, now) {
     cp.continuation.armed = false;
     return null;
   }
-  const problem = dispositionProblem(operation.request.workDisposition, operation.result.structured?.workDisposition);
+  const problem = dispositionProblem(operation.request.workDisposition, operation.result.structured?.workDisposition, cp);
   cp.continuation.armed = false;
   if (problem) return problem;
   if (blockingReviewWarning(operation)) return null;
-  const disposition = operation.result.structured.workDisposition;
+  const disposition = operation.request.workDisposition === null || operation.result.structured.workDisposition === null
+    ? null : operation.result.structured.workDisposition;
   const requirement = operation.request.requirementReview;
   if (requirement && (cp.ownerActionRequired !== requirement.requirement || cp.fieldUpdatedAt.ownerActionRequired !== requirement.recordedAt
     || cp.blocker || !validDisposition(disposition)

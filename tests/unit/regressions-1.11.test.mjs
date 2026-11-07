@@ -129,10 +129,8 @@ test('independent assessment cannot write; reconciliation can build and continua
     assert.equal(options.sandboxMode, 'read-only'); assert.equal(options.approvalPolicy, 'never');
   });
   const note = { file_path: join(f.root, 'handoff.md'), content: 'authorized documentation' };
-  assert.equal((await guard(f, 'Write', note)).decision, 'deny', 'documentation still needs its assignment');
-  await assert.rejects(selectTaskRole(f.root, 'docs', f.env), /Select the task role before the independent review cycle/);
-  // Keep the implementation assignment reviewed in Phase 1. Preselected
-  // documentation access during a read-only review is covered in 1.14.
+  assert.equal((await guard(f, 'Write', note)).decision, 'defer', 'Documentation Both applies without a role switch');
+  await selectTaskRole(f.root, 'docs', f.env);
 
   const second = await submitOperation(f.root, reconciliationEnvelope(entry.id, entry.text, 'Agreed.'), f.env, { spawnRunner: false });
   await execute(f, 'reconcile', options => assert.equal(options.sandboxMode, 'workspace-write'));

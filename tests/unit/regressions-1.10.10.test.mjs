@@ -75,7 +75,7 @@ test('milestone-only writer and runner choices survive new chats but do not leak
 const review = edits => JSON.stringify({ scopeMismatch: null, parityConcern: null, answer: 'Proposed tests.', ownerSummary: 'Proposed tests.', evidence: [], assumptions: [], uncertainties: [], disagreements: [], recommendation: null, changedFiles: [], tests: [], testEdits: edits });
 test('split Codex test writer stays read-only with no helpers and controller applies tests only after successful authorized turns', async t => {
   for (const outcome of ['success','failure','scope-change','cancelled','truncated']) {
-    const f = await fixture(t); await settings(f, 'roles.implementation.executor=claude roles.testWriting.executor=codex roles.testRunning.executor=claude'); await selectTaskRole(f.root, 'testWriting', f.env);
+    const f = await fixture(t); await settings(f, 'roles.implementation.executor=claude roles.testWriting.executor=codex roles.testRunning.executor=claude roles.docs.executor=claude'); await selectTaskRole(f.root, 'testWriting', f.env);
     const owner = 'Write the tests.'; await recordAuthorizedPrompt(f.root, owner, 'a', f.env);
     const queued = await submitOperation(f.root, submissionEnvelope(owner), f.env, { spawnRunner: false }); await sealReading(f.root, queued.operationId, 'Independent review.', f.env);
     const firstReview = JSON.parse(review([])); delete firstReview.testEdits; delete firstReview.disagreements;

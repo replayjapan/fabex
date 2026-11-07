@@ -118,7 +118,7 @@ test('1.10.5 shared documentation authoring stays session-bound, serial and work
   await observeActivity(f.root, { session_id: 'a', permission_mode: 'default' }, f.env);
   assert.equal((await classify(f, 'Edit', undefined, { state: { ...state, modeGrant: { pausedAt: Date.now() } } })).decision, 'deny');
   await selectTaskRole(f.root, 'implementation', f.env);
-  assert.equal((await classify(f)).decision, 'deny', 'Docs Both does not change the coding role');
+  assert.equal((await classify(f)).decision, 'defer', 'Docs Both applies independently of the coding role');
 });
 
 test('1.10.5 single-writer Docs choices still control Claude authoring', async t => {

@@ -25,7 +25,7 @@ export function stopDecision(input, stateResult, deliveries = []) {
     message: item.status === 'failed' ? 'A partner message was interrupted or could not be recovered. Its unfinished work is still recorded, and unrelated authorized work can continue.'
       : 'A partner review is still unfinished. It remains recorded while unrelated authorized work continues.' });
   const latest = state.operations.findLast(op => op.status === 'completed' && op.request.phase === 'reconcile' && op.request.route === 'normal' && op.result.relay?.sessionId === input.session_id);
-  const problem = latest && dispositionProblem(latest.request.workDisposition, latest.result.structured?.workDisposition);
+  const problem = latest && dispositionProblem(latest.request.workDisposition, latest.result.structured?.workDisposition, state.partner?.thread?.checkpoint);
   if (problem) notices.push({ key: `disposition:${latest.id}:${problem}`, message: 'The partners’ work records need reconciliation. Remaining work and your existing decisions are still recorded; unrelated authorized work can continue.' });
   const ownerAction = state.partner?.thread?.checkpoint?.ownerActionRequired;
   if (ownerAction) notices.push({ key: `owner-action:${ownerAction}`, message: `Fabex is waiting for your input on: ${ownerAction}` });
@@ -77,7 +77,7 @@ export async function main() {
       if (latest) {
         usage = await usageLifecycle(root, 'checkpoint', latest.id, input.session_id, process.env);
         const cp = stateResult.state.partner.thread.checkpoint;
-        if (latest.result.structured?.workDisposition?.status === 'done' && !dispositionProblem(latest.request.workDisposition, latest.result.structured.workDisposition) && !blockingReviewWarning(latest) && !cp.openWork.length && !cp.blocker && !cp.ownerActionRequired) usage = await usageLifecycle(root, 'end', latest.id, input.session_id, process.env);
+        if (latest.request.workDisposition?.status === 'done' && latest.result.structured?.workDisposition?.status === 'done' && !dispositionProblem(latest.request.workDisposition, latest.result.structured.workDisposition) && !blockingReviewWarning(latest) && !cp.openWork.length && !cp.blocker && !cp.ownerActionRequired) usage = await usageLifecycle(root, 'end', latest.id, input.session_id, process.env);
       }
     }
     // Collection can advance generation or overlap a new owner message. Recheck

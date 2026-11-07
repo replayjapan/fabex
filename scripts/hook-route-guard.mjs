@@ -399,6 +399,25 @@ function outputRedirectionTargets(command) {
   return targets;
 }
 
+// The strict tokenizer deliberately rejects expansions. A printed sed range
+// often uses a computed line number, however. Recognize that read-only form
+// without overlooking other commands or redirects in the same shell input.
+function withoutReadOnlySedLookups(command) {
+  const word = `(?:"[^"\\n]*"|'[^'\\n]*'|[^\\s;&|<>"']+)`;
+  const lookup = new RegExp(`(^|[;&|\\n]\\s*)\\s*((?:/(?:usr/)?bin/)?sed[ \\t]+${word}(?:[ \\t]+${word})*[ \\t]*)(?=$|[;&|\\n])`, 'g');
+  return command.replace(lookup, (whole, boundary, invocation) => {
+    // Scalar references and arithmetic addresses are data, not command
+    // substitutions. Leave executable substitutions and parameter operators
+    // to the existing command checks.
+    const normalized = invocation
+      .replace(/\$\(\([\w\s+*/%()-]+\)\)/g, '1')
+      .replace(/\$\{[A-Za-z_]\w*\}|\$[A-Za-z_]\w*/g, '1');
+    const words = simpleTokens(normalized);
+    if (!words || !readOnlySed(words.slice(1))) return whole;
+    return `${boundary} : `;
+  });
+}
+
 export function workCommandDenial(command, root, cwd = root, config = null) {
   if (typeof command !== 'string' || !command.trim() || command.includes('\0')) return 'malformed command';
   if (allowedDiscussionReads(command, config, root)) return null;
@@ -445,7 +464,7 @@ export function workCommandDenial(command, root, cwd = root, config = null) {
   for (const segment of safeCommandSegments(command) ?? [command]) {
     const tokens = simpleTokens(segment);
     if (!tokens) {
-      if (/(?:^|[\s;&|])(?:tee|cp|mv|rm|rmdir|mkdir|touch|ln|chmod|patch|sed|perl)\b/.test(segment)) return 'unresolved source-writing command';
+      if (/(?:^|[\s;&|])(?:tee|cp|mv|rm|rmdir|mkdir|touch|ln|chmod|patch|sed|perl)\b/.test(withoutReadOnlySedLookups(segment))) return 'unresolved source-writing command';
       continue;
     }
     const index = commandIndex(tokens); const executable = executableName(tokens[index]); const args = tokens.slice(index + 1);
@@ -791,7 +810,11 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       return defer();
     }
     if (WRITE_TOOLS.has(toolName) && insideRoot(writeTarget(toolInput), paths.canonicalRoot) && !(claudeEdits && !testTarget) && !testEdit && !documentEdit && !activeExecutorException(state, toolName, executor)) {
-      return deny('Application edits belong to Coding; recognized test files belong to Test Writing. Documentation permits text documents only. Ambiguous targets and helpers require their existing permissions');
+      if (!bound || !main) return deny('This writer is not the bound main Claude session. Use that session or an explicitly assigned helper for this edit.');
+      if (documentTarget && authorship.claudeDocuments) return deny('Documentation is assigned to this writer, but the current activity or pending mode transition does not permit project edits. Finish the transition to Work before editing this document.');
+      if (documentTarget) return deny(`Documentation is assigned to ${profile['roles.docs.executor']}. That writer can edit this document; the current task role does not change this assignment.`);
+      if (testTarget) return deny(`Test Writing is assigned to ${authorship.testWriter}. That writer can edit this test; Test Running is a separate assignment.`);
+      return deny(`Coding is assigned to ${authorship.coder}. This target is not an ordinary text document or recognized test (scripts, configuration, instruction files and linked targets keep their existing permissions). Use the assigned Coding writer for this edit.`);
     }
     if (WRITE_TOOLS.has(toolName)) return defer();
     if (READ_TOOLS.has(toolName) || isPluginSkill(toolName, toolInput)) return defer();
@@ -802,7 +825,6 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       const rule = workCommandDenial(toolInput.command, paths.canonicalRoot, invocationCwd, config);
       if (rule && !rule.startsWith('project source authorship')) return deny(`work policy: ${rule}`);
       if (activeExecutorException(state, toolName, executor)) return defer();
-      if (bound && main && authorship.coder !== 'claude' && task.role === 'testWriting' && !allowedDiscussionReads(toolInput.command, config, paths.canonicalRoot)) return deny('Test Writing uses Write/Edit on recognized test files. Select Test Running for assigned execution; application-writing shell commands remain denied.');
       if (rule && !claudeEdits) return deny(`work policy: ${rule}; only the selected Coding AI authors project source`);
       return defer();
     }

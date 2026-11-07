@@ -397,7 +397,9 @@ export async function conversationStatus(root, env = process.env, sessionId) {
 export async function selectTaskRole(root, role, env = process.env) {
   if (!ROLE_NAMES.includes(role)) throw new Error(`role must be ${ROLE_NAMES.join(', ')}`);
   await mutate(root, 'session-task-role', state => {
-    if (cycleBusy(state)) throw new Error('Select the task role before the independent review cycle.');
+    // Completed reviews and queued turns do not own the next turn's settings.
+    // A running turn has already read its assignment; don't change it mid-turn.
+    if (state.operations.some(op => op.status === 'working')) throw new Error('A Codex turn is running with its current assignment. Change the task role when that turn finishes; queued turns will use the new role.');
     const session = state.workspace.sessions[state.workspace.activeSessionId];
     if (!session) throw new Error('No bound session.');
     session.activeRole = role;

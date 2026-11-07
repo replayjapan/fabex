@@ -176,7 +176,7 @@ export function modeGrantMatches(grant, { id = null, sessionId = null, route, pa
 }
 
 export function ownerFabexCommand(prompt) {
-  return typeof prompt === 'string' && /^\s*\/(?:fabex|modes):[A-Za-z][A-Za-z0-9-]*(?:\s|$)/.test(prompt);
+  return typeof prompt === 'string' && /^\s*\/(?:(?:fabex|modes):[A-Za-z][A-Za-z0-9-]*|work|discussion|ask)(?:\s|$)/.test(prompt);
 }
 
 export async function recordOwnerPromptEvidence(root, input, env = process.env, { updateCanonicalState = true, retainText = true } = {}) {
