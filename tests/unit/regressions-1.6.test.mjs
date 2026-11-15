@@ -66,7 +66,7 @@ test('1.6 item 1: strict Phase 1 rejects trailing Fable text and Phase 2 is a se
   const guardState = (await readState(project, env)).state;
   const submitCommand = `node ${join(pluginRoot, 'scripts', 'controller.mjs')} submit <<'FABEX_PHASE1_TEST'\n${trailing}\nFABEX_PHASE1_TEST`;
   assert.equal((await classifyToolUse({ toolName: 'Bash', toolInput: { command: submitCommand }, state: guardState, paths: { canonicalRoot: project }, executor: { sessionId: 'session-a' } })).decision, 'deny');
-  await assert.rejects(submitOperation(project, JSON.stringify({ phase: 'independent', ownerMessage: 'owner words', previousReplyStatus: 'none', fableFraming: 'current opinion' }), env, { spawnRunner: false }), /trailing Fable fields/i);
+  await assert.rejects(submitOperation(project, JSON.stringify({ phase: 'independent', ownerMessage: 'owner words', previousReplyStatus: 'none', fableFraming: 'current opinion' }), env, { spawnRunner: false }), /independent envelope fields: missing \[\]; unexpected \[fableFraming\]/);
   const phase1Submission = await submitOperation(project, submissionEnvelope('owner may literally say FABLE NOTE'), env, { spawnRunner: false });
   const phase1 = await claimNextOperation(project, env); const prompts = [];
   await runOperation(project, phase1, { createCodex: sdkFactory(['independent finding', 'converged finding'], prompts), signal: new AbortController().signal }, env);
@@ -128,7 +128,7 @@ test('1.6 item 5: Stop offers a recovery reminder for the Phase 2 gap and explic
   const submitted = await submitOperation(project, submissionEnvelope('review'), env, { spawnRunner: false });
   const phase1 = await claimNextOperation(project, env);
   await runOperation(project, phase1, { createCodex: sdkFactory(['independent']), signal: new AbortController().signal }, env);
-  let stateResult = await readState(project, env); assert.match(stopDecision({}, stateResult).reminder.reason, /existing Phase 2 review/);
+  let stateResult = await readState(project, env); assert.match(stopDecision({}, stateResult).reminder.reason, /still needs reconciliation.*controller\.mjs submit/);
   const abandoned = await run(control, ['recover', 'abandon', '--operation-id', submitted.operationId], { cwd: project, env });
   assert.equal(abandoned.code, 0, abandoned.stderr);
   stateResult = await readState(project, env); assert.deepEqual(stopDecision({}, stateResult), {});
@@ -262,6 +262,6 @@ test('1.6 live fix 4: cancel and abandon recover a working operation whose runne
   const result = await run(control, ['recover', 'abandon', '--operation-id', abandoned.operationId], { cwd: second.project, env: second.env });
   assert.equal(result.code, 0, result.stderr);
   current = await readState(second.project, second.env);
-  assert.equal(current.state.operations.some((operation) => operation.id === abandoned.operationId), false);
+  assert.equal(current.state.operations.find((operation) => operation.id === abandoned.operationId).request.interrupted, true);
   assert.equal(current.state.route, 'normal'); assert.equal(current.state.controller.activeOperationId, null);
 });

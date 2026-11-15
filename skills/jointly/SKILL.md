@@ -106,7 +106,7 @@ For a mode command, the owner can explicitly select an image with a separate tra
 
 Both phase JSON envelopes optionally accept `attachments`, an array of at most six absolute png/jpg/jpeg/webp/gif file paths, each at most 16 MiB. Paths must resolve inside the workstream/repository or configured externalWriteRoots. Use only owner-approved images; do not annotate or insert your current opinion in Phase 1 images. Unless Image review includes Claude, Fable forwards approved paths without reviewing their images. Keep files stable until execution. Attachment metadata paths are erased on terminal state, not from verbatim owner text or SDK history. No image bytes enter Fabex state. No attachment means text-only behavior is unchanged.
 
-Both phases provide the complete owner-facing answer and evidence. The legacy ownerSummary field is accepted when reading older records but never substitutes for the answer. Each unread phase remains pending until its full answer and flags appear in the visible reply. Stop offers one recovery prompt per unchanged set of unread answers or unfinished reviews, then lets the reply end. It never blocks unrelated authorized work.
+Both phases provide the complete owner-facing answer and evidence. The legacy ownerSummary field is accepted when reading older records but never substitutes for the answer. Each unread phase remains pending until its full answer and flags appear in the visible reply. Stop offers one recovery prompt per unread answer, unfinished review or unsealed request, then lets the reply end. It never blocks unrelated authorized work.
 
 Scope and parity fields are null when absent; only material flags appear in the relay, never routine none lines.
 
@@ -312,3 +312,17 @@ Use `checkpoint capacity` before long projects. Compact or export and atomically
 ## Message and attachment handling
 
 Use `controller.mjs relay --operation-id <uuid>` to obtain only the exact relayBlock, and paste it unmodified. Ordinary both-participant image-only requests use `ownerMessage: ""` with attachments; mode uploads use repeated `--attach` arguments before grant consumption. Prefer `previousReplyStatus: "recorded"`; unavailable evidence must be reported, not invented or truncated. Discussion/Ask writes must stay within the effective activity policy: validated research locations and text plans when permitted, or external scratch/memory roots. Application edits remain denied. Image restrictions remain in unhealthy states. Report attachment delivery from recorded status; do not infer successful forwarding from a valid path alone.
+
+For a new-chat recovery, select the existing milestone using its owner-issued
+settings grant; inspect `control.mjs milestone` for unfinishedReviews. Preserve
+all reviews and their original questions. Retrieve completed answers with result
+and relay; retrieve an unsealed queued request with status before seal. Resume
+reconciliation for every original request, not just the latest. Do not use
+abandon or a null disposition to clear a recovery backlog. See README's resume
+procedure for the exact envelope and commands.
+
+Index-only staging/unstaging belongs to the Git Delivery executor. On a host
+index.lock permission denial, stop retrying or delegating it: supply one exact
+owner command `git -C "<actual absolute repository>" restore --staged -- "<actual excluded path>"`
+and explain that it only excludes the file from the next commit, leaving its
+working copy intact. Do not ask for an approval already supplied.

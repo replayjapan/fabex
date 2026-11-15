@@ -1,3 +1,4 @@
+import { retainedOwnerMessage } from './hook-evidence.mjs';
 import { prepareOwnerRotation, clearRotationReceipt } from './conversation-refresh.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { discoverTracker } from './tracker-discovery.mjs';
@@ -280,18 +281,49 @@ export function parseSettingsArgs(text) {
   }
   return result;
 }
+// Owner-selected recovery of the current milestone, not a general settings or
+// rotation bypass. All checks and the transfer are repeated under the state lock.
+export function milestoneRecoveryOperations(state, grant) {
+  const w = state.workspace;
+  if (grant?.command !== 'milestone' || !w?.sessions[grant.sessionId] || state.controller.activeOperationId
+    || state.operations.some(op => op.status === 'working')) return null;
+  const matches = Object.values(w.milestones).filter(m => m.id === grant.args.trim() || m.name === grant.args.trim());
+  if (matches.length !== 1 || matches[0].id !== w.activeMilestoneId) return null;
+  const pending = state.operations.filter(op => {
+    const session = w.sessions[op.result.relay?.sessionId];
+    if (!session || session.milestoneId !== w.activeMilestoneId || op.request.interrupted || op.request.phase !== 'independent') return false;
+    return op.status === 'completed' && !state.operations.some(child => child.request.parentOperationId === op.id)
+      || op.status === 'queued';
+  });
+  if (!pending.length) return null;
+  if (state.operations.some(op => op.status === 'queued' && !pending.includes(op))) return null;
+  const thread = state.partner.thread.threadId;
+  if (pending.some(op => op.externalId && op.externalId !== thread
+    || w.sessions[op.result.relay.sessionId].conversationId && w.sessions[op.result.relay.sessionId].conversationId !== w.activeConversationId)) return null;
+  return pending;
+}
+function transferMilestoneReviews(state, sessionId, pending) {
+  const w = state.workspace, session = w.sessions[sessionId];
+  // Preserve the canonical thread/checkpoint even when a new chat normally starts fresh.
+  session.milestoneId = w.activeMilestoneId;
+  session.conversationId = w.activeConversationId;
+  delete session.freshPending;
+  for (const op of pending) op.result.relay.sessionId = sessionId;
+  w.activeSessionId = sessionId;
+}
 export async function applyWorkspaceGrant(root, grantId, env = process.env) {
   const config = (await loadEffectiveConfig(root, env)).config;
   const before = await readState(root, env); if (!before.ok) throw new Error(before.health);
   const grant = before.state.workspace.grants[grantId];
   if (!grant || grant.expiresAt < Date.now()) throw new Error('owner settings grant missing or expired');
-  if (cycleBusy(before.state)) throw new Error('Apply settings between completed review cycles.');
+  if (cycleBusy(before.state) && !milestoneRecoveryOperations(before.state, grant)) throw new Error('Apply settings between completed review cycles. To resume saved reviews in another chat, select their current milestone when no partner turn is running.');
   if (grant.flow && (![2, 3, 4, 5, 6].includes(grant.flow.version) || !grant.selection)) throw new Error('Choose and apply a setting in the owner dialog, or type an explicit scoped command.');
   if (grant.options && (!grant.selection || !grant.options.includes(grant.selection))) throw new Error('Choose an offered setting in the owner dialog, or type an explicit scoped settings command.');
   const parsed = grant.command === 'settings' ? parseSettingsArgs(grant.selection ?? grant.args) : null;
   const state = await mutate(root, 'workspace-apply-owner-grant', async state => {
     const w = state.workspace, current = w.grants[grantId];
-    if (!current || current.expiresAt < Date.now() || cycleBusy(state)) throw new Error('settings grant expired or cycle started; retry safely');
+    const recovery = current && milestoneRecoveryOperations(state, current);
+    if (!current || current.expiresAt < Date.now() || cycleBusy(state) && !recovery) throw new Error('settings grant expired or cycle started; retry safely');
     if (!isDeepStrictEqual(current, grant)) throw new Error('settings grant changed; retry safely');
     if (state.route === 'recovery-read-only' && grant.command !== 'settings') throw new Error('Recover the current thread before changing milestones; a milestone is not a recovery action.');
     const session = w.sessions[grant.sessionId]; if (!session) throw new Error('session not registered; submit a normal owner message first');
@@ -354,7 +386,13 @@ export async function applyWorkspaceGrant(root, grantId, env = process.env) {
         session.settings = structuredClone(session.profiles[id]?.settings ?? {});
         session.activeRole = session.profiles[id]?.activeRole ?? 'implementation';
       }
-      bind(state, id, grant.sessionId); session.milestoneId = id;
+      if (recovery) {
+        // Hydrate journal-backed prompts before changing the session binding.
+        // The immutable journal remains attributed to its original capture.
+        for (const op of recovery) op.request.ownerMessage = await retainedOwnerMessage(root, op, env);
+        transferMilestoneReviews(state, grant.sessionId, recovery);
+      }
+      bind(state, id, grant.sessionId, Boolean(recovery)); session.milestoneId = id;
       await clearRotationReceipt(root, env);
     }
     if (w.conversations) rememberConversation(state);
@@ -382,7 +420,7 @@ export async function workspaceStatus(root, env = process.env, sessionId) {
   const resolved = resolveSettings(config, current.state, sessionId);
   const milestoneId = current.state.workspace.sessions[resolved.sessionId]?.milestoneId ?? current.state.workspace.activeMilestoneId;
   const milestone = current.state.workspace.milestones[milestoneId];
-  return { ...resolved, typedCommands: typedSettingsReference(), models: { claude: await claudeModelSource(current.state.claudeModel?.sessionId === resolved.sessionId ? current.state.claudeModel : null, env), codex: await codexModelSource({ ...config, models: { ...config.models, codex: { ...config.models.codex, model: resolved.values['partners.codex.model'] } } }, env) }, project: root, milestone: { id: milestoneId, name: milestone.name }, tracking: { installation: await discoverTracker(resolved.values, env), project: config.settings?.['usageTracker.mode'] ?? 'off', milestone: milestone.settings?.['usageTracker.mode'] ?? 'inherit', session: current.state.workspace.sessions[resolved.sessionId]?.settings?.['usageTracker.mode'] ?? 'inherit', effective: resolved.values['usageTracker.mode'], source: resolved.sources['usageTracker.mode'] }, execution: executionPlan(config, current.state, sessionId), observations: current.state.workspace.observations ?? {}, activeMilestoneId: current.state.workspace.activeMilestoneId, milestones: Object.values(current.state.workspace.milestones).map(({ id, name, summary, handoff, thread, parts }) => ({ id, name, summary, handoff, archivedParts: parts.map((part, index) => ({ index, threadId: part.threadId, archivedAt: part.archivedAt })), threadId: id === current.state.workspace.activeMilestoneId ? current.state.partner.thread.threadId : thread?.threadId ?? null })), sessions: current.state.workspace.sessions };
+  return { ...resolved, unfinishedReviews: current.state.operations.filter(op => current.state.workspace.sessions[op.result.relay?.sessionId]?.milestoneId === milestoneId && (op.status === 'queued' || op.status === 'working' || op.request.phase === 'independent' && !op.request.interrupted && !current.state.operations.some(child => child.request.parentOperationId === op.id))).map(op => ({ operationId: op.id, status: op.status, phase: op.request.phase, sessionId: op.result.relay?.sessionId, needsSeal: Boolean(current.state.workspace.seals[op.id] && !current.state.workspace.seals[op.id].reading) })), typedCommands: typedSettingsReference(), models: { claude: await claudeModelSource(current.state.claudeModel?.sessionId === resolved.sessionId ? current.state.claudeModel : null, env), codex: await codexModelSource({ ...config, models: { ...config.models, codex: { ...config.models.codex, model: resolved.values['partners.codex.model'] } } }, env) }, project: root, milestone: { id: milestoneId, name: milestone.name }, tracking: { installation: await discoverTracker(resolved.values, env), project: config.settings?.['usageTracker.mode'] ?? 'off', milestone: milestone.settings?.['usageTracker.mode'] ?? 'inherit', session: current.state.workspace.sessions[resolved.sessionId]?.settings?.['usageTracker.mode'] ?? 'inherit', effective: resolved.values['usageTracker.mode'], source: resolved.sources['usageTracker.mode'] }, execution: executionPlan(config, current.state, sessionId), observations: current.state.workspace.observations ?? {}, activeMilestoneId: current.state.workspace.activeMilestoneId, milestones: Object.values(current.state.workspace.milestones).map(({ id, name, summary, handoff, thread, parts }) => ({ id, name, summary, handoff, archivedParts: parts.map((part, index) => ({ index, threadId: part.threadId, archivedAt: part.archivedAt })), threadId: id === current.state.workspace.activeMilestoneId ? current.state.partner.thread.threadId : thread?.threadId ?? null })), sessions: current.state.workspace.sessions };
 }
 export async function conversationStatus(root, env = process.env, sessionId) {
   const current = await readState(root, env); if (!current.ok) throw new Error(current.health);

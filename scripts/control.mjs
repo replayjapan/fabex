@@ -311,7 +311,7 @@ async function recover(root, args) {
         if (cycle.some((item) => ['queued', 'working'].includes(item.status))) throw new ValidationError('cancel active cycle operations before abandoning the relay');
         for (const item of cycle) {
           if (item.result.relay) item.result.relay.status = 'waived';
-          if (item.request.phase === 'independent') { item.request.interrupted = true; item.request.ownerMessage = null; item.request.previousReply = null; item.request.message = null; }
+          if (item.request.phase === 'independent') item.request.interrupted = true;
         }
         if (state.route === 'recovery-read-only') preserved = restoreOwnerSelectedMode(state);
         state.task.status = state.operations.some((item) => ['queued', 'working'].includes(item.status)) ? 'active' : null;
@@ -336,7 +336,8 @@ async function recover(root, args) {
     }
     let restored = null;
     await mutate(root, 'partner-abandon', (state) => {
-      state.operations = state.operations.filter((item) => item.id !== id);
+      const retained = state.operations.find(item => item.id === id);
+      if (retained) { if (retained.request.phase === 'independent') retained.request.interrupted = true; if (retained.result.relay?.status === 'pending') retained.result.relay.status = 'waived'; }
       const parent = operation.request.parentOperationId && state.operations.find(item => item.id === operation.request.parentOperationId);
       if (parent) parent.request.interrupted = true;
       if (state.route === 'recovery-read-only') restored = restoreOwnerSelectedMode(state);

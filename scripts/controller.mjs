@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { retainedOwnerMessage } from './lib/hook-evidence.mjs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rootFromControlCwd } from './lib/paths.mjs';
@@ -127,7 +128,7 @@ export async function main({ cwd = process.cwd(), argv = process.argv.slice(2), 
     }
     if (command === 'result' && !terminal(result.status)) throw new Error('operation is not complete');
     if (command === 'result') result = { ...result, relayBlock: relayBlock(result) };
-    if (command === 'status') result = { ...boundedStatus(result), observationHealth: result.observationHealth };
+    if (command === 'status') result = { ...boundedStatus(result), observationHealth: result.observationHealth, ...(result.request.phase === 'independent' && result.status === 'queued' ? { ownerMessage: await retainedOwnerMessage(root, result, env) } : {}) };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }

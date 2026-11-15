@@ -10,7 +10,7 @@ import { rootFromHookInput } from './lib/paths.mjs';
 import { readState, updateState } from './lib/state.mjs';
 import { missingRelays, pendingRelays } from './lib/review.mjs';
 import { clearOwnerVisibleReplyEvidence, recordOwnerVisibleReplyEvidence } from './lib/hook-evidence.mjs';
-import { hasBlockingPartnerWork } from './lib/sdk-controller.mjs';
+import { submissionTemplate, hasBlockingPartnerWork } from './lib/sdk-controller.mjs';
 import { ownerDeliveries, deliveryObligations, syncOwnerDeliveries } from './lib/owner-delivery.mjs';
 
 export function stopDecision(input, stateResult, deliveries = []) {
@@ -34,12 +34,14 @@ export function stopDecision(input, stateResult, deliveries = []) {
   const gaps = state.operations.filter(op => op.status === 'completed' && op.request.phase === 'independent'
     && !op.request.interrupted && (!input.session_id || op.result.relay?.sessionId === input.session_id)
     && !state.operations.some(child => child.request.parentOperationId === op.id));
-  const reminder = missing.length || gaps.length ? {
-    key: JSON.stringify({ unread: missing.map(op => op.id).sort(), gaps: gaps.map(op => op.id).sort() }),
-    reason: [missing.length ? `Include the unread Codex answers in full using controller.mjs relay --operation-id <id>: ${missing.map(op => op.id).join(', ')}.` : '',
-      gaps.length ? `Complete the existing Phase 2 review for ${gaps.map(op => op.id).join(', ')} using controller.mjs submit with its reconciliation envelope.` : '',
-      'This recovery reminder is given once for this set of pending answers and reviews. Do not resubmit completed work or ask the owner to repeat instructions.'].filter(Boolean).join(' ')
-  } : null;
+  const unsealed = state.operations.filter(op => op.status === 'queued' && state.workspace?.seals?.[op.id] && !state.workspace.seals[op.id].reading
+    && (!input.session_id || op.result.relay?.sessionId === input.session_id));
+  const items = [
+    ...missing.map(op => ({ key: `unread:${op.id}`, reason: `Include this saved Codex answer in full: controller.mjs relay --operation-id ${op.id}. This reminder will not repeat for this answer.` })),
+    ...gaps.map(op => ({ key: `reconcile:${op.id}`, reason: `Review ${op.id} still needs reconciliation. Submit this shape through controller.mjs submit, replacing placeholder text with your actual assessment: ${submissionTemplate('reconcile', op.id)}. previousReplyStatus belongs only to Phase 1. If refused, correct the named field; do not repeat an unchanged submission. Saved answers and unfinished work remain recorded.` })),
+    ...unsealed.map(op => ({ key: `seal:${op.id}`, reason: `Review ${op.id} is waiting for your independent assessment. Read its original request with controller.mjs status --operation-id ${op.id}, then send your assessment on stdin to controller.mjs seal --operation-id ${op.id}. Do not submit the request again. If this is a new chat, select the existing milestone to resume its saved reviews.` }))
+  ];
+  const reminder = items.length ? { items, key: items.map(item => item.key).join(','), reason: items.map(item => item.reason).join('\n') } : null;
   // The entry point persists the once-only receipt before turning this candidate
   // into a block. Pure decision inspection never consumes that receipt.
   const recovery = reminder ? { reminder } : {};

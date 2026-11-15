@@ -1,5 +1,5 @@
 import { nextClaimableOperation } from './operation-queue.mjs';
-import { validDisposition, persistWorkDisposition, continuationEligibility, continuationSubmissionDigest } from './work-disposition.mjs';
+import { dispositionError, validDisposition, persistWorkDisposition, continuationEligibility, continuationSubmissionDigest } from './work-disposition.mjs';
 import { applyContainedEdits } from '../vendor/modes/contained-edits.mjs';
 import { activitySnapshot, researchRoot, researchAuthorAllowed } from './activity.mjs';
 import { editInstructions, extendSchema, splitEdits, applyEdits } from '../vendor/modes/edits.mjs';
@@ -51,7 +51,7 @@ export function isProcessAlive(pid) {
 export function pruneOperations(operations, terminalLimit = TERMINAL_OPERATION_LIMIT) {
   const pending = operations.filter((operation) => !TERMINAL_STATUSES.has(operation.status));
   const terminal = operations.filter((operation) => TERMINAL_STATUSES.has(operation.status));
-  const protectedIds = new Set(operations.filter((op) => (op.status === 'completed' && op.result.relay?.status === 'pending') || !TERMINAL_STATUSES.has(op.status) || (op.status === 'completed' && op.request.phase === 'independent' && !op.request.interrupted && !operations.some((child) => child.request.parentOperationId === op.id))).map((op) => op.id));
+  const protectedIds = new Set(operations.filter((op) => (op.request.interrupted && op.result.finalResponse) || (op.status === 'completed' && op.result.relay?.status === 'pending') || !TERMINAL_STATUSES.has(op.status) || (op.status === 'completed' && op.request.phase === 'independent' && !op.request.interrupted && !operations.some((child) => child.request.parentOperationId === op.id))).map((op) => op.id));
   while (terminal.length > terminalLimit || Buffer.byteLength(JSON.stringify([...terminal, ...pending])) > 700 * 1024) {
     const removable = terminal.find((op) => !protectedIds.has(op.id) && !op.request.parentOperationId && !operations.some((child) => child.request.parentOperationId === op.id && protectedIds.has(child.id)));
     if (!removable) break;
@@ -171,6 +171,16 @@ export function reconciliationEnvelope(phase1OperationId, ownerMessage, fableRes
   return JSON.stringify({ phase: 'reconcile', phase1OperationId, ownerMessage, fableResponse, ...(workDisposition === undefined ? {} : { workDisposition }) });
 }
 
+export function submissionTemplate(phase, id = '<phase1OperationId>') {
+  return phase === 'reconcile'
+    ? JSON.stringify({ phase: 'reconcile', phase1OperationId: id, fableResponse: '<Claude reconciliation verbatim>', workDisposition: { status: 'remaining', remainingWork: ['<unfinished authorized work>'], reason: '<current outcome>' } })
+    : JSON.stringify({ phase: 'independent', ownerMessage: '<owner message verbatim>', previousReplyStatus: 'recorded' });
+}
+function envelopeFields(parsed, keys) {
+  const missing = keys.filter(key => !Object.hasOwn(parsed, key));
+  const extra = Object.keys(parsed).filter(key => !keys.includes(key));
+  if (missing.length || extra.length) throw new Error(`${parsed.phase} envelope fields: missing [${missing.join(', ')}]; unexpected [${extra.join(', ')}]. Expected: ${submissionTemplate(parsed.phase)}`);
+}
 export function normalizeSubmissionEnvelope(value, participants) {
   if (typeof value === 'string' && value.trim().startsWith('{')) {
     let object;
@@ -214,7 +224,7 @@ export function normalizeSubmissionEnvelope(value, participants) {
       ? ['ownerMessage', 'phase', 'previousReply', 'previousReplyStatus']
       : ['ownerMessage', 'phase', 'previousReplyStatus'];
     if (Object.hasOwn(parsed, 'attachments')) keys.push('attachments');
-    if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 1 envelope has unexpected, missing, or trailing Fable fields');
+    envelopeFields(parsed, keys);
     if (typeof parsed.ownerMessage !== 'string' || !parsed.ownerMessage.trim() && !attachments.length) throw new Error('Phase 1 requires ownerMessage verbatim or at least one image');
     if (!['provided', 'none', 'recorded'].includes(parsed.previousReplyStatus)) throw new Error('Phase 1 requires previousReplyStatus provided, recorded or none');
     if (parsed.previousReplyStatus === 'provided' && (typeof parsed.previousReply !== 'string' || !parsed.previousReply.trim())) throw new Error('Phase 1 requires previousReply when status is provided');
@@ -229,11 +239,12 @@ export function normalizeSubmissionEnvelope(value, participants) {
     const keys = ['fableResponse', 'ownerMessage', 'phase', 'phase1OperationId'];
     if (Object.hasOwn(parsed, 'workDisposition')) {
       keys.push('workDisposition');
-      if (parsed.workDisposition !== null && !validDisposition(parsed.workDisposition)) throw new Error('Phase 2 workDisposition must state remaining, done, blocked or owner-decision with remainingWork and reason');
+      if (parsed.workDisposition !== null && dispositionError(parsed.workDisposition)) throw new Error(`${dispositionError(parsed.workDisposition)}. Expected: ${submissionTemplate('reconcile')}`);
     }
     if (Object.hasOwn(parsed, 'attachments')) keys.push('attachments');
-    if (Object.keys(parsed).sort().join(',') !== keys.sort().join(',')) throw new Error('Phase 2 envelope has unexpected or missing fields');
-    if (typeof parsed.ownerMessage !== 'string' || typeof parsed.fableResponse !== 'string' || !parsed.fableResponse.trim()) throw new Error('Phase 2 requires ownerMessage and fableResponse verbatim');
+    envelopeFields(parsed, keys);
+    if (typeof parsed.ownerMessage !== 'string') throw new Error('Phase 2 ownerMessage must be verbatim text, or omitted to use its stored original');
+    if (typeof parsed.fableResponse !== 'string' || !parsed.fableResponse.trim()) throw new Error('Phase 2 fableResponse must be non-empty verbatim Claude reconciliation text');
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed.phase1OperationId ?? '')) throw new Error('Phase 2 requires a valid phase1OperationId');
     return { phase: 'reconcile', workDisposition: parsed.workDisposition, attachments, ownerMessage: parsed.ownerMessage, fableResponse: parsed.fableResponse, message: null, claudeReplyVerified: 'unavailable', parentOperationId: parsed.phase1OperationId };
   }
@@ -527,7 +538,9 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
   if (!current.state.ownerSelectedMode) throw new Error('partner operation denied: prior owner-selected mode is unknown; type a Fabex mode command');
   if (current.state.participants === 'claude') throw new Error('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
   let envelope = normalizeSubmissionEnvelope(message, current.state.participants);
-  const submissionDigest = textDigest(message);
+  const submissionDigest = envelope.phase === 'reconcile'
+    ? textDigest(JSON.stringify({ phase1OperationId: envelope.parentOperationId, fableResponse: envelope.fableResponse, workDisposition: envelope.workDisposition === null ? null : envelope.workDisposition ? { status: envelope.workDisposition.status, remainingWork: envelope.workDisposition.remainingWork, reason: envelope.workDisposition.reason } : undefined, attachments: envelope.attachments ?? [] }))
+    : textDigest(message);
   const previous = envelope.requestId && current.state.operations.find((operation) => operation.id === envelope.requestId);
   if (previous) {
     if (previous.request.submissionDigest !== submissionDigest) throw new Error('requestId already belongs to a different submission');
@@ -574,7 +587,9 @@ async function submitOnce(root, message, env, { spawnRunner, spawnImpl, deadline
     const parent = current.state.operations.find((operation) => operation.id === envelope.parentOperationId);
     if (!parent || parent.request.phase !== 'independent' || parent.status !== 'completed' || !parent.result.finalResponse) throw new Error('Phase 2 requires a completed Phase 1 with a stored independent reading');
     if (parent.request.ownerMessageDigest !== ownerMessageDigest) throw new Error('Phase 2 ownerMessage does not match its Phase 1 owner message');
-    if (current.state.operations.some((operation) => operation.request.parentOperationId === parent.id)) throw new Error('Phase 1 already has a Phase 2 operation');
+    const children = current.state.operations.filter(operation => operation.request.parentOperationId === parent.id);
+    if (children.some(op => ['queued', 'working'].includes(op.status))) throw new Error('Phase 2 is already queued or working for phase1OperationId; inspect that operation instead of resubmitting');
+    if (children.some(op => op.request.submissionDigest === submissionDigest)) throw new Error('Identical reconciliation already recorded; retrieve its result instead of resubmitting');
     sessionId = parent.result.relay?.sessionId ?? sessionId;
     assertSealed(current.state, parent);
     const sealed = current.state.workspace?.seals[parent.id];

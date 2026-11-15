@@ -27,6 +27,13 @@ changes, keep backups and expect the host's normal permission checks. VS Code's
 Claude Code integration is the primary workflow. Some capabilities depend on the host;
 see [platform limitations](#mechanically-enforced-and-platform-limited-behavior).
 
+### What’s new in 1.14.2
+
+Submission errors identify the actual field and expected phase format. Existing
+milestone selection can resume saved reviews in a fresh chat without changing
+conversation identity or discarding answers. Delivery permissions distinguish
+index-only staging and unstaging from editing application files.
+
 ### What’s new in 1.14.1
 
 Documentation and test-writing permissions follow their assigned writers without
@@ -948,3 +955,56 @@ reload requirements and the last successfully recorded Fabex turn/version.
 macOS supported; Windows experimental. Platform behavior remains subject to Claude Code, the official SDK, and Codex CLI limits.
 
 See [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Resume unfinished reviews in a new chat
+
+After updating Fabex, reload plugins and check `/fabex:diagnose` for version
+1.14.2. Close the old chat before selecting its milestone in a new chat. Type
+`/fabex:milestone <existing-name-or-id>`; let Claude apply the command's supplied
+settings grant. Do not start a fresh Codex conversation or abandon the reviews.
+Selection resumes the current milestone's saved reviews only when no turn is
+working and any queued turns are independent reviews belonging to that milestone.
+Queued reviews retain their existing seals, including when they are waiting for
+earlier reconciliations rather than for an independent assessment.
+Unrelated settings and conversation rotation retain their existing behavior.
+
+Claude reads `node "<installed-fabex>/scripts/control.mjs" milestone` to list
+`unfinishedReviews`. Replace `<installed-fabex>` with the loaded plugin directory.
+For each completed independent review, retrieve its full saved record using
+`node "<installed-fabex>/scripts/controller.mjs" result --operation-id <id>` and
+its owner-facing answer using `relay --operation-id <id>`. Reconcile every
+original request, in order, using this stdin shape (replace all placeholders):
+
+```json
+{"phase":"reconcile","phase1OperationId":"<id>","fableResponse":"<Claude's actual reconciliation>","workDisposition":{"status":"remaining","remainingWork":["<actual unfinished authorized work>"],"reason":"<actual current outcome>"}}
+```
+
+Submit to `node "<installed-fabex>/scripts/controller.mjs" submit` using a quoted
+heredoc. The controller retrieves the original owner message. Do not add
+`previousReplyStatus`: that is an independent-phase field. A null disposition is
+for questions that leave scope unchanged, not a way to clear remaining work.
+Wait for that review and deliver its answer before proceeding to the next.
+An identical submission is rejected with a retrieval instruction; a genuinely
+changed assessment can create a later correction round after the previous turn ends.
+
+An already sealed queued review needs no new assessment: complete the earlier
+reconciliations, then wait for that queued review and reconcile its result.
+For a queued independent review awaiting a seal, `status --operation-id <id>`
+returns its original request without a partner answer. Write your independent
+assessment to stdin of `seal --operation-id <id>`, then use
+`wait --operation-id <id> --timeout 60` and reconcile when complete. A wait timeout
+does not cancel or complete a review. Resume all saved requests; a newer result
+never silently resolves an older one. Explicit abandonment retains the request
+and any answer but is not the resume procedure.
+
+### Excluding a staged file
+
+The assigned Git Delivery executor may run
+`git restore --staged -- <path>` or `git reset HEAD -- <path>` in Work. These change
+the index, not working files. Inspect the remaining staged changes, obtain the
+publication review, and commit normally; Publish Guard does not support partial
+commits. If host permissions refuse `.git/index.lock`, do not send the action to
+another sandboxed agent. Give the owner one exact command with the real absolute
+repository and path: `git -C "<repository>" restore --staged -- "<path>"`. Explain
+that the file stays on disk and is excluded from the next commit. Do not repeat
+approval requests or retry until the owner reports the result.

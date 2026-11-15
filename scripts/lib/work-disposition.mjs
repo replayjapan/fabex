@@ -10,17 +10,26 @@ export const dispositionSchema = {
     reason: { type: 'string' }
   }, required: ['status', 'remainingWork', 'reason']
 };
-export function validDisposition(value) {
-  if (!value || Object.keys(value).sort().join(',') !== 'reason,remainingWork,status'
-    || !dispositionSchema.properties.status.enum.includes(value.status)
-    || typeof value.reason !== 'string' || !value.reason.trim() || Buffer.byteLength(value.reason) > 1024
-    || !Array.isArray(value.remainingWork) || value.remainingWork.length > 16
-    || value.remainingWork.some(item => typeof item !== 'string' || !item.trim() || Buffer.byteLength(item) > 1024)
-    || value.status === 'remaining' && !value.remainingWork.length
-    || value.status === 'done' && value.remainingWork.length) return false;
-  try { [value.reason, ...value.remainingWork].forEach(rejectPayloadLikeText); } catch { return false; }
-  return true;
+export function dispositionError(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'workDisposition must be an object or null';
+  const required = ['status', 'remainingWork', 'reason'];
+  const missing = required.filter(key => !Object.hasOwn(value, key));
+  const extra = Object.keys(value).filter(key => !required.includes(key));
+  if (missing.length || extra.length) return `workDisposition fields: missing [${missing.join(', ')}]; unexpected [${extra.join(', ')}]`;
+  if (!dispositionSchema.properties.status.enum.includes(value.status)) return 'workDisposition.status must be remaining, done, blocked or owner-decision';
+  if (typeof value.reason !== 'string' || !value.reason.trim() || Buffer.byteLength(value.reason) > 1024) return 'workDisposition.reason must be non-empty text of at most 1024 bytes';
+  if (!Array.isArray(value.remainingWork) || value.remainingWork.length > 16) return 'workDisposition.remainingWork must be an array of at most 16 items';
+  for (const [index, item] of value.remainingWork.entries()) {
+    if (typeof item !== 'string' || !item.trim() || Buffer.byteLength(item) > 1024) return `workDisposition.remainingWork[${index}] must be non-empty text of at most 1024 bytes`;
+  }
+  if (value.status === 'remaining' && !value.remainingWork.length) return 'workDisposition.remainingWork must contain work when status is remaining';
+  if (value.status === 'done' && value.remainingWork.length) return 'workDisposition.remainingWork must be empty when status is done';
+  for (const [field, text] of [['reason', value.reason], ...value.remainingWork.map((item, index) => [`remainingWork[${index}]`, item])]) {
+    try { rejectPayloadLikeText(text); } catch { return `workDisposition.${field} must be plain task text, not embedded payloads`; }
+  }
+  return null;
 }
+export function validDisposition(value) { return dispositionError(value) === null; }
 
 export const DISPOSITION_WARNING = 'Work disposition requires reconciliation:';
 export function dispositionProblem(claude, codex, checkpoint = null) {

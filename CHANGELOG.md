@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.14.2
+
+- Explain invalid submission fields with phase-specific examples. Remind once per
+  saved review or unsealed request instead of restarting reminders when a backlog grows.
+- Resume pending reviews through existing milestone selection in a new chat,
+  retaining the original requests, answers, canonical conversation and unfinished
+  work. Prevent duplicate reconciliation; keep interrupted answers during recovery.
+- Permit the assigned delivery executor to stage and unstage paths without
+  granting application-source editing. Keep worktree and publication checks.
+
 ## 1.14.1
 
 - Honor Documentation and Test Writing assignments independently of the current

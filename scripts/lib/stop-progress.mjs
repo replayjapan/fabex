@@ -12,7 +12,7 @@ export function activePartnerStop(state) {
   if (!operation) {
     const selection = queueSelection(state?.operations ?? [], state?.workspace?.seals);
     if (selection.review) return null; // recovery reminder handles this gap once
-    operation = selection.operation ?? state?.operations?.find(op => op.status === 'queued');
+    operation = selection.operation; // Unsealed queued turns need a seal reminder, not an endless wait.
   }
   return operation ? { decision: 'block', reason: `Partner operation ${operation.id} is ${operation.status}. Run controller.mjs wait --operation-id ${operation.id} --timeout 60, then read its result. Keep waiting after a timeout; do not resubmit or repeat unchanged status replies.` } : null;
 }

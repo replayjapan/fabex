@@ -84,6 +84,24 @@ function protectedSimpleCommand(tokens) {
   return null;
 }
 
+// Recognize only literal, path-scoped index operations. Worktree restores and
+// history-changing resets continue through the existing source-write checks.
+export function indexOnlyGitCommand(command, { includeAdd = true } = {}) {
+  const tokens = simpleTokens(command);
+  if (!tokens || tokens[0] !== 'git') return false;
+  let i = 1;
+  while (tokens[i] === '-C') { if (!tokens[i + 1]) return false; i += 2; }
+  const action = tokens[i++], args = tokens.slice(i);
+  const separator = args.indexOf('--');
+  const options = separator < 0 ? args.filter(a => a.startsWith('-')) : args.slice(0, separator);
+  const paths = separator < 0 ? args.filter(a => !a.startsWith('-')) : args.slice(separator + 1);
+  if (!paths.length || paths.some(p => !p)) return false;
+  if (action === 'restore') return options.some(a => ['--staged', '-S'].includes(a))
+    && options.every(a => ['--staged', '-S', '--quiet', '-q'].includes(a));
+  if (action === 'reset') return separator >= 0 && options.filter(a => !['-q', '--quiet'].includes(a)).length <= 1
+    && options.filter(a => !['-q', '--quiet'].includes(a)).every(a => /^[A-Za-z0-9][A-Za-z0-9._/~^{}-]*$/.test(a));
+  return includeAdd && action === 'add' && options.every(a => ['-A', '--all', '-u', '--update', '--verbose', '-v'].includes(a));
+}
 export function protectedGithubOperation(command) {
   if (typeof command !== 'string' || command.length === 0 || command.includes('\0')) return null;
   const tokens = simpleTokens(command);
@@ -496,7 +514,7 @@ export function workCommandDenial(command, root, cwd = root, config = null) {
       const action = args[actionIndex], actionArgs = args.slice(actionIndex + 1);
       if (action === 'branch' && actionArgs.some(arg => ['-d', '-D', '--delete'].includes(arg))) return 'branch deletion requires explicit owner authorization';
       // Match the actual Git action, not words in a quoted commit message.
-      if (['apply', 'checkout', 'restore', 'clean', 'reset'].includes(action)
+      if (!indexOnlyGitCommand(command) && ['apply', 'checkout', 'restore', 'clean', 'reset'].includes(action)
         || action === 'stash' && ['pop', 'apply'].includes(actionArgs[0])) return 'project source authorship (git worktree mutation)';
     }
   }
@@ -522,6 +540,7 @@ function externalCanonicalTarget(target, root) {
 function projectWriteEffect(toolName, input, root, cwd, config) {
   if (WRITE_TOOLS.has(toolName)) return !externalCanonicalTarget(resolve(root, writeTarget(input) ?? '.'), root);
   if (toolName === 'Bash' || typeof input.command === 'string') {
+    if (indexOnlyGitCommand(input.command)) return false;
     const rule = workCommandDenial(input.command, root, cwd, config);
     return Boolean(rule?.startsWith('project source authorship') || rule?.includes('source-writing')
       || /(?:^|[\s;&|])git\s+(?:[^;&|\n]*\s)?(?:merge|rebase|cherry-pick|pull|checkout|restore|reset|clean|apply)(?:\s|$)/.test(input.command));
@@ -726,7 +745,10 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
       return defer();
     } catch (error) { return deny(`mode attachments failed validation: ${error.message}`); }
   }
-  if (toolName === 'Bash' && structuralController?.kind === 'controller-submit' && !controller) return deny('both-participant submit requires an explicit valid Claude reply status');
+  if (toolName === 'Bash' && structuralController?.kind === 'controller-submit' && !controller) {
+    try { normalizeSubmissionEnvelope(structuralController.message, state.participants); }
+    catch (error) { return deny(`Invalid submission: ${error.message}`); }
+  }
   if (toolName === 'Bash' && (controller?.kind === 'controller-submit' || ['checkpoint-replace', 'checkpoint-snapshot'].includes(control?.kind))) {
     if (controller?.kind === 'controller-submit' && state.participants === 'claude') return deny('Claude-only mode denies Codex SDK turns; explicitly switch participants first');
     if (controller?.kind === 'controller-submit' && !state.ownerSelectedMode) return deny('prior owner-selected mode is unknown; type a Fabex mode command');
@@ -793,6 +815,11 @@ export async function classifyToolUse({ toolName, toolInput, state, paths, execu
     }
   }
   if (state.route === 'normal' || activity?.permission.installed && activity.permission.activity === 'work') {
+    if (toolName === 'Bash' && indexOnlyGitCommand(toolInput.command, { includeAdd: false })) {
+      if (state.ownerSelectedMode?.route !== 'normal' || state.modeGrant?.pausedAt) return deny('Index changes require the selected Work activity.');
+      if (bound && (main || isOperationalExecutor(executor)) && profile['roles.gitDelivery.executor'] === 'claude') return defer();
+      return deny(`Index staging/unstaging belongs to the Git Delivery executor (${profile['roles.gitDelivery.executor']}). It does not edit application files. If that executor's host refuses .git/index.lock, provide the owner this exact command once: ${toolInput.command}. It changes only the next commit's staged content; leave the working files unchanged and do not retry through another agent.`);
+    }
     // Pending reviews, missing receipts and interrupted deliveries are not tool
     // permissions. Only a potentially overlapping project write waits for a
     // writable partner operation. Read-only partner reviews do not lock files.

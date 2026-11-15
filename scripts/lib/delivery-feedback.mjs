@@ -27,8 +27,13 @@ export async function stopNoticesOnce(root, sessionId, notices, env = process.en
 export async function applyStopReminder(root, sessionId, decision, env = process.env) {
   const { reminder, ...result } = decision;
   if (!reminder || !sessionId) return result;
-  const first = await stopNoticesOnce(root, sessionId,
-    [{ key: `recovery:${reminder.key}`, message: 'first' }], env);
-  if (!first) return result;
-  return { ...result, decision: 'block', reason: reminder.reason };
+  const items = reminder.items ?? [{ key: reminder.key, reason: reminder.reason }];
+  const reasons = [];
+  for (const item of items) {
+    const first = await stopNoticesOnce(root, sessionId, [{ key: `recovery:${item.key}`, message: 'first' }], env);
+    if (first) reasons.push(item.reason);
+  }
+  if (!reasons.length) return result;
+  return { ...result, decision: 'block', reason: reasons.join('\n') };
+
 }

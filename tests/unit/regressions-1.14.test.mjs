@@ -268,7 +268,7 @@ test('Phase 2 gap receives one recovery prompt even after unrelated bookkeeping 
   const input = stopInput(before);
   const first = await hook(f, input);
   assert.equal(first.decision, 'block');
-  assert.match(first.reason, /existing Phase 2 review/);
+  assert.match(first.reason, /still needs reconciliation/);
   assert.doesNotMatch(first.systemMessage ?? '', /controller\.mjs|Resume|Deliver|Preserve/);
   await updateState(f.root, state => { state.generation++; return state; }, {}, f.env);
   for (const stop_hook_active of [true, false, true]) {
